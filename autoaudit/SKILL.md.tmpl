@@ -1,0 +1,189 @@
+---
+name: autoaudit
+version: 1.0.0
+description: |
+  Post-build verification pipeline — runs security audit (/cso) then code review
+  (/review + /codex) sequentially. Reports findings, auto-fixes obvious issues,
+  flags ambiguous ones. No shipping — just verification.
+  Use when asked to "audit", "autoaudit", "verify the build", "security + review",
+  "check my code", or "is this ready to ship?".
+  Proactively suggest after the user finishes building from a plan, or after /autobuild.
+benefits-from: [autoplan-full, autoplan]
+allowed-tools:
+  - Bash
+  - Read
+  - Write
+  - Edit
+  - Glob
+  - Grep
+  - WebSearch
+  - AskUserQuestion
+---
+
+{{PREAMBLE}}
+
+{{BASE_BRANCH_DETECT}}
+
+{{BENEFITS_FROM}}
+
+# /autoaudit — Post-Build Verification Pipeline
+
+Built something? Let's make sure it's solid before you ship.
+
+/autoaudit runs two verification passes on your code: security audit (CSO) and
+code review (review + codex). It auto-fixes obvious issues, flags ambiguous ones,
+and gives you a clear pass/fail verdict. No shipping — that's your call.
+
+---
+
+## Phase 0: Intake
+
+### Step 1: Read context
+
+```bash
+{{SLUG_SETUP}}
+BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
+echo "Branch: $BRANCH"
+```
+
+- Read CLAUDE.md, git log -10, git diff against the base branch --stat
+- Count the diff size: lines added, files changed
+- Discover the plan file if it exists: `ls -t ~/.gstack/projects/$SLUG/*-plan-*.md 2>/dev/null | head -1`
+
+Output: "Auditing [N] files changed, [M] lines added on branch [branch].
+Starting Phase 1: Security Audit."
+
+---
+
+## Phase 1: Security Audit (/cso)
+
+Load and follow the CSO skill:
+- Read `~/.claude/skills/hstack/cso/SKILL.md`
+- Run the full OWASP Top 10 + STRIDE threat model against the actual code diff
+- Follow all sections at full depth
+
+**Auto-fix rules:**
+- **Critical findings (9-10 confidence):** Auto-fix immediately. These are clear
+  vulnerabilities — SQL injection, XSS, missing auth checks. Log each fix.
+- **High findings (8 confidence):** Auto-fix if the fix is obvious and localized
+  (single file, <10 lines). Otherwise flag for user.
+- **Medium findings (6-7 confidence):** Flag only. Do not auto-fix.
+- **Low findings (<6 confidence):** Suppress. Not worth the noise.
+
+**Required outputs from Phase 1:**
+- Security findings table (finding, severity, confidence, status: fixed/flagged/suppressed)
+- Count of auto-fixes applied
+- Count of issues flagged for user attention
+- Threat model summary (top 3 attack vectors for this code)
+
+After Phase 1, if any auto-fixes were applied:
+```bash
+git add -A && git diff --cached --stat
+```
+Show what was auto-fixed. Do NOT commit yet — let the user review at the end.
+
+---
+
+## Phase 2: Code Review (/review + /codex)
+
+Load and follow the review skill:
+- Read `~/.claude/skills/hstack/review/SKILL.md`
+- Run the full review against the code diff
+- Include codex review if available
+
+**Auto-fix rules:**
+- **Obvious bugs** (null pointer, off-by-one, missing return): Auto-fix. Log each fix.
+- **Style/quality issues** (naming, DRY violations, dead code): Auto-fix if mechanical.
+  Flag if subjective.
+- **Architecture concerns** (wrong abstraction, coupling): Flag only. Never auto-fix
+  architecture — that requires human judgment.
+- **Test gaps**: Flag with specific recommendation (what test to add, what it covers).
+  Do NOT auto-generate tests — the user should decide test strategy.
+
+**Codex review** (if available):
+```bash
+codex exec "Review this diff for bugs, logic errors, security issues, and missed edge cases. Be adversarial." -s read-only --enable web_search_cached
+```
+Timeout: 10 minutes. If codex disagrees with /review on a finding, flag the disagreement.
+
+**Required outputs from Phase 2:**
+- Review findings table (finding, severity, status: fixed/flagged)
+- Codex findings (if available) with agreement/disagreement notes
+- Auto-fixes applied (count + summary)
+- Test gap analysis (what's untested, what tests to add)
+
+After Phase 2, if any auto-fixes were applied:
+```bash
+git add -A && git diff --cached --stat
+```
+
+---
+
+## Phase 3: Audit Report
+
+**Present the final audit report to the user.**
+
+```
+## /autoaudit Report
+
+### Summary
+Branch: [branch] | Files: [N] changed | Lines: [M] added
+Plan: [plan file path or "no plan found"]
+
+### Security Audit (Phase 1)
+- Critical: [N] found, [M] auto-fixed
+- High: [N] found, [M] auto-fixed, [K] flagged
+- Medium: [N] flagged
+- Threat model: [top 3 attack vectors]
+
+### Code Review (Phase 2)
+- Bugs: [N] found, [M] auto-fixed
+- Quality: [N] found, [M] auto-fixed, [K] flagged
+- Architecture: [N] flagged
+- Test gaps: [N] identified
+
+### Codex Review
+[Summary or "unavailable"]
+[Disagreements with /review, if any]
+
+### Auto-Fixes Applied: [total count]
+[List of all auto-fixes with file:line and what was changed]
+
+### Issues For Your Attention: [total count]
+[Each flagged issue with recommendation]
+
+### Verdict
+```
+
+**Verdict logic:**
+- **PASS** — zero critical/high security findings remaining, zero bugs remaining,
+  no architecture concerns. Ready for `/qa` and `/ship`.
+- **PASS WITH NOTES** — no critical issues, but flagged items exist that you should
+  review. Probably fine to ship, but check the flagged items.
+- **NEEDS ATTENTION** — critical or high security findings remain unfixed, or
+  architecture concerns that could cause production issues. Fix before shipping.
+
+Use AskUserQuestion:
+- A) Accept auto-fixes and proceed (stage all fixes)
+- B) Review auto-fixes first (show me the diff)
+- C) Revert auto-fixes (undo all changes)
+- D) Run /qa next (if you have a staging URL)
+
+**Option handling:**
+- A: `git add -A` — fixes are staged, ready for commit. Suggest `/qa <url>` or `/ship`.
+- B: Show full diff of all auto-fixes. Re-present options.
+- C: `git checkout -- .` — revert all auto-fixes. User will fix manually.
+- D: Ask for URL, then run `/qa`.
+
+---
+
+## Important Rules
+
+- **Never ship.** /autoaudit verifies — it does not ship. That's the user's decision.
+- **Never auto-fix architecture.** Wrong abstractions require human judgment. Flag only.
+- **Never auto-generate tests.** Flag gaps with recommendations. The user decides test strategy.
+- **Always show what was auto-fixed.** No silent changes. Every fix is logged and shown.
+- **Security before review.** CSO runs first because security fixes may change the code
+  that /review then analyzes.
+- **Codex disagreements are valuable.** When two AIs disagree, the human needs to see both
+  perspectives. Never suppress a disagreement.

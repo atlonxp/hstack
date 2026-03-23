@@ -1,0 +1,284 @@
+---
+name: autobuild
+version: 1.0.0
+description: |
+  Autonomous implementation from an approved plan. Reads the plan file, enters plan mode,
+  and builds everything with full autonomy. Clears conversation context to maximize
+  available tokens for implementation. Designed to run headless or with minimal supervision.
+  Use when asked to "autobuild", "build the plan", "implement it", "go build",
+  "execute the plan", or "start building".
+  Proactively suggest after /autoplan-full or /autoplan produces an approved plan.
+benefits-from: [autoplan-full, autoplan]
+allowed-tools:
+  - Bash
+  - Read
+  - Write
+  - Edit
+  - Glob
+  - Grep
+  - WebSearch
+  - AskUserQuestion
+---
+
+{{PREAMBLE}}
+
+{{BASE_BRANCH_DETECT}}
+
+{{BENEFITS_FROM}}
+
+# /autobuild — Autonomous Plan Implementation
+
+Plan approved? Let's build it.
+
+/autobuild reads your approved plan file, extracts the implementation steps, and
+builds everything autonomously. It works best after `/autoplan-full` or `/autoplan`
+has produced a reviewed plan with architecture diagrams, test plans, and clear scope.
+
+---
+
+## Phase 0: Pre-flight
+
+### Step 1: Find the plan
+
+```bash
+{{SLUG_SETUP}}
+BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
+echo "Branch: $BRANCH"
+```
+
+Search for the plan file in this order:
+1. Plan file referenced in CLAUDE.md or conversation context
+2. Most recent plan file: `ls -t ~/.gstack/projects/$SLUG/*-plan-*.md 2>/dev/null | head -1`
+3. Plan file in the current directory: `ls -t *.plan.md plan.md PLAN.md 2>/dev/null | head -1`
+
+If no plan found, use AskUserQuestion: "No plan file found. Provide the path to your
+plan file, or run `/autoplan-full` first to create one."
+
+### Step 2: Read and validate the plan
+
+Read the plan file completely. Verify it contains:
+- [ ] Implementation scope (what to build)
+- [ ] Architecture (components, data model, or system design)
+- [ ] File list or component breakdown (what files to create/modify)
+
+If the plan is missing critical sections, warn:
+"This plan is missing [X]. /autobuild works best with a fully reviewed plan.
+Continue anyway, or run `/autoplan-full` first?"
+
+### Step 3: Find the test plan
+
+Search for test plan artifact:
+```bash
+ls -t ~/.gstack/projects/$SLUG/*-test-plan-*.md 2>/dev/null | head -1
+```
+
+If found, read it — this guides what tests to write alongside the implementation.
+
+### Step 4: Read supporting artifacts
+
+- Read CLAUDE.md for project conventions (test commands, linting, frameworks)
+- Read the design doc if referenced: `ls -t ~/.gstack/projects/$SLUG/*-design-*.md 2>/dev/null | head -1`
+- Read DESIGN.md if it exists (design system tokens, fonts, colors)
+- Read the research brief if referenced: `ls -t ~/.gstack/projects/$SLUG/*-research-*.md 2>/dev/null | head -1`
+
+### Step 5: Pre-flight confirmation
+
+Use AskUserQuestion:
+
+```
+## /autobuild Pre-flight
+
+Plan: [plan file path]
+Test plan: [test plan path or "none found"]
+Design doc: [path or "none found"]
+Branch: [branch]
+Scope: [N] components, [M] files estimated
+
+### Implementation Order
+[Extract from plan: which components to build first, dependencies between them]
+
+### Build Strategy
+I'll implement in this order:
+1. [Data models / types first]
+2. [Core logic / services]
+3. [API / routes]
+4. [UI components] (if applicable)
+5. [Tests alongside each component]
+
+Ready to build?
+```
+
+Options:
+- A) Build it (recommended — I'll implement everything)
+- B) Build with checkpoints (pause after each major component for review)
+- C) Adjust order (tell me what to change)
+- D) Cancel
+
+**If A (full autonomy):**
+Proceed to Phase 1 with no interruptions. Build everything, run tests at the end.
+This is the fastest path. Best for well-reviewed plans.
+
+**If B (checkpoints):**
+Proceed to Phase 1 but pause after each major component with a brief status:
+"Built [component]. [N] files created, [M] tests written. Tests: [pass/fail]. Continue?"
+This is safer for large plans or when the plan has ambiguity.
+
+---
+
+## Phase 1: Implementation
+
+### Build methodology
+
+For each component in the implementation order:
+
+1. **Read existing code first.** Never write to a file you haven't read. Understand
+   the patterns, conventions, imports, and style of the existing codebase.
+
+2. **Write the implementation.** Follow the plan's architecture exactly. If the plan
+   specifies a pattern, use it. If it doesn't specify, match existing codebase patterns.
+
+3. **Write tests alongside.** If a test plan exists, follow it. If not, write tests
+   for every new public function, every new API endpoint, and every new component.
+   Match the existing test framework and conventions in CLAUDE.md.
+
+4. **Run tests after each component.** Read the test command from CLAUDE.md. If tests
+   fail, fix them before moving to the next component.
+
+### Implementation rules
+
+- **Follow the plan.** The plan was reviewed by CEO, UX, design, and eng. It encodes
+  decisions that were carefully made. Do not second-guess scope, architecture, or
+  approach. If something seems wrong, note it but build what was specified.
+
+- **Match existing patterns.** Import style, naming conventions, file structure,
+  error handling — match what's already in the codebase. Read 2-3 similar files
+  before writing a new one.
+
+- **No gold plating.** Build exactly what the plan says. Don't add features, don't
+  refactor adjacent code, don't "improve" things outside scope. The plan defines
+  the blast radius — stay inside it.
+
+- **Tests are not optional.** Every new codepath gets a test. If the test framework
+  doesn't exist yet, create it (check CLAUDE.md for preferences first).
+
+- **Commit atomically.** After each logical unit of work (one component, one feature,
+  one module), create a commit. Each commit should be independently understandable
+  and revertable.
+
+### Progress tracking
+
+After each component, output a brief status:
+
+```
+✓ [Component name] — [N] files created/modified, [M] tests
+  Files: [list]
+  Tests: [pass count]/[total] passing
+```
+
+If in checkpoint mode (Option B), use AskUserQuestion after each component.
+
+---
+
+## Phase 2: Verification
+
+After all components are built:
+
+### Step 1: Run the full test suite
+
+```bash
+# Read test command from CLAUDE.md, or use common defaults
+bun test || npm test || pytest || go test ./...
+```
+
+Report results: "[N]/[M] tests passing. [K] new tests added."
+
+### Step 2: Type check (if applicable)
+
+```bash
+# TypeScript
+tsc --noEmit 2>&1 | tail -20
+
+# Python
+mypy . 2>&1 | tail -20
+```
+
+### Step 3: Lint (if applicable)
+
+```bash
+# Read lint command from CLAUDE.md, or detect
+eslint . || ruff check . || golangci-lint run
+```
+
+### Step 4: Diff summary
+
+```bash
+git diff --stat
+git diff --shortstat
+```
+
+---
+
+## Phase 3: Build Report
+
+Present the final build report:
+
+```
+## /autobuild Complete
+
+### Summary
+Plan: [plan file path]
+Branch: [branch]
+Components built: [N]
+Files created: [N] | Files modified: [M]
+Lines added: [N] | Lines removed: [M]
+Tests added: [N] | Tests passing: [M]/[total]
+
+### Components Built
+[For each component:]
+- ✓ [Name] — [files] — [tests passing]
+
+### Test Results
+[Full test output summary]
+[Type check: pass/fail]
+[Lint: pass/fail]
+
+### Commits
+[List of commits created during build]
+
+### Next Steps
+Run `/autoaudit` to verify security + code quality.
+Then `/qa <staging-url>` if you have a running instance.
+Then `/ship` when ready.
+```
+
+If tests are failing:
+"[N] tests failing. Fix these before running /autoaudit:
+[List failing tests with error messages]"
+
+---
+
+## Headless Mode
+
+/autobuild is designed to work headless. For fully autonomous execution:
+
+```bash
+claude -p "Run /autobuild on the approved plan" --allowedTools 'Bash,Read,Write,Edit,Glob,Grep'
+```
+
+In headless mode:
+- Skip the pre-flight AskUserQuestion — auto-select Option A (full autonomy)
+- Skip checkpoint pauses — build everything continuously
+- Output the build report at the end
+
+---
+
+## Important Rules
+
+- **Follow the plan.** The plan is the source of truth. It was reviewed. Build what it says.
+- **Read before write.** Never write to a file you haven't read first. Understand the codebase.
+- **Match patterns.** Import style, naming, structure — match existing code, not your preferences.
+- **Tests are mandatory.** Every new codepath gets a test. No exceptions.
+- **Commit atomically.** One logical unit per commit. Each commit independently revertable.
+- **No gold plating.** Build exactly what was planned. Nothing more.
+- **Report clearly.** After each component, show what was built and whether tests pass.
+- **Never ship.** /autobuild builds — it does not ship. Run /autoaudit then /ship.
