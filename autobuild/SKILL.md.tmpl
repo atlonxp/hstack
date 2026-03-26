@@ -60,6 +60,8 @@ Read the plan file completely. Verify it contains:
 - [ ] Implementation scope (what to build)
 - [ ] Architecture (components, data model, or system design)
 - [ ] File list or component breakdown (what files to create/modify)
+- [ ] Implementation Tasks section (with `- [ ] #N:` checkboxes) — if missing,
+  warn but continue. Tasks are optional but improve tracking.
 
 If the plan is missing critical sections, warn:
 "This plan is missing [X]. /autobuild works best with a fully reviewed plan.
@@ -127,9 +129,23 @@ This is safer for large plans or when the plan has ambiguity.
 
 ## Phase 1: Implementation
 
+### Task tracking
+
+If the plan has an `## Implementation Tasks` section with checkboxes, use it to
+drive the build order and track progress:
+
+1. Read the task list and respect dependency ordering (`depends: #N`)
+2. Build tasks in dependency order — never start a task before its dependencies
+3. After completing each task, check it off in the plan file using Edit:
+   Change `- [ ] #N:` to `- [x] #N:` in the plan file
+4. If a task is blocked by something unexpected, note it and move to the next
+   unblocked task
+
+If no task list exists, follow the implementation order from the plan as before.
+
 ### Build methodology
 
-For each component in the implementation order:
+For each component in the implementation order (or each task if task list exists):
 
 1. **Read existing code first.** Never write to a file you haven't read. Understand
    the patterns, conventions, imports, and style of the existing codebase.
@@ -167,21 +183,75 @@ For each component in the implementation order:
 
 ### Progress tracking
 
-After each component, output a brief status:
+After each component (or task), output a brief status:
 
 ```
 ✓ [Component name] — [N] files created/modified, [M] tests
+  Task: #[N] [checked off in plan file]
   Files: [list]
   Tests: [pass count]/[total] passing
 ```
 
 If in checkpoint mode (Option B), use AskUserQuestion after each component.
 
+If the plan has a task list, also show overall progress:
+```
+Tasks: [completed]/[total] ([percentage]%)
+```
+
+---
+
+## Phase 2.5: Self-Healing Verify Loop
+
+After all components are built but before running the full test suite, run the
+verify loop to catch and fix broken workflows.
+
+### Step 1: Scope the verification
+
+Count how many commits this build session created:
+```bash
+git log --oneline -20
+```
+
+Identify the commits from THIS build session (the ones you just created in Phase 1).
+Use `git diff --stat HEAD~N` where N is the number of build session commits.
+
+### Step 2: Run /investigate-workflow logic
+
+For each file in the build diff:
+1. Trace entry points (routes, handlers, API endpoints, event listeners)
+2. Follow code paths from entry to outcome
+3. Categorize findings: BROKEN, INCOMPLETE, MISSING, ORPHANED, FRAGILE
+
+Record a findings snapshot before applying any fixes.
+
+### Step 3: Auto-fix BROKEN items
+
+BROKEN items are definitively wrong — auto-fix without asking:
+- Read the file, understand intended behavior from context
+- Write the minimal fix — no refactoring
+- Report each fix: what file, what changed, why
+
+### Step 4: Present INCOMPLETE items
+
+INCOMPLETE items may be intentional (deferred scope from the plan). Use AskUserQuestion
+to present them. The user decides which to fix, which to defer.
+
+### Step 5: Re-verify (max 3 iterations)
+
+After fixes, re-investigate the same scope. Check for regressions:
+- Compare new findings against the original snapshot
+- NEW finding not in original set = REGRESSION → STOP, revert last fix, report
+- Zero BROKEN remaining = done
+- Same/fewer findings = continue next iteration
+
+After 3 iterations, report any remaining items and continue to Phase 2.
+
 ---
 
 ## Phase 2: Verification
 
-After all components are built:
+After Phase 2.5 (or after all components if verify loop found nothing):
 
 ### Step 1: Run the full test suite
 
@@ -233,6 +303,11 @@ Files created: [N] | Files modified: [M]
 Lines added: [N] | Lines removed: [M]
 Tests added: [N] | Tests passing: [M]/[total]
 
+### Task Progress
+[If task list exists:]
+Tasks completed: [N]/[total]
+[For each task: #N ✓/✗ — description]
+
 ### Components Built
 [For each component:]
 - ✓ [Name] — [files] — [tests passing]
@@ -244,6 +319,12 @@ Tests added: [N] | Tests passing: [M]/[total]
 
 ### Commits
 [List of commits created during build]
+
+### Verify Loop Results
+[Verify loop verdict: CLEAN/FIXED/NEEDS_ATTENTION/REGRESSION_DETECTED]
+[Auto-fixes applied: N]
+[Items deferred by user: N]
+[Remaining issues: N]
 
 ### Next Steps
 Run `/autoaudit` to verify security + code quality.

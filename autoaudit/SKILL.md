@@ -497,6 +497,15 @@ Plan: [plan file path or "no plan found"]
 ### Issues For Your Attention: [total count]
 [Each flagged issue with recommendation]
 
+### Verify Loop
+[If /verify-loop was run (via /autobuild Phase 2.5 or standalone):]
+- Verdict: [CLEAN/FIXED/NEEDS_ATTENTION]
+- Auto-fixes: [N]
+- Remaining: [N]
+
+[If not run:]
+Consider running `/verify-loop` to check workflow completeness.
+
 ### Verdict
 ```
 

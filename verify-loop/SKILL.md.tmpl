@@ -1,0 +1,256 @@
+---
+name: verify-loop
+preamble-tier: 2
+version: 1.0.0
+description: |
+  Self-healing verification loop. Runs /investigate-workflow logic on built features,
+  auto-fixes BROKEN items, presents INCOMPLETE items to user, re-verifies up to 3
+  iterations, and detects regressions (fix breaks something new -> STOP).
+  Two entry points: automatic via /autobuild Phase 2.5, or standalone via /verify-loop.
+  Use when asked to "verify the build", "check completeness", "verify-loop",
+  "self-heal", or "fix what's broken".
+  Proactively suggest after /autobuild or after a large implementation session.
+benefits-from: [autobuild, investigate-workflow]
+allowed-tools:
+  - Bash
+  - Read
+  - Write
+  - Edit
+  - Glob
+  - Grep
+  - AskUserQuestion
+---
+
+{{PREAMBLE}}
+
+{{INTEL_LOGGING}}
+
+{{BASE_BRANCH_DETECT}}
+
+{{BENEFITS_FROM}}
+
+# /verify-loop — Self-Healing Verification Loop
+
+Built something? Let's make sure every path works — and fix what doesn't.
+
+/verify-loop runs /investigate-workflow logic on your build, auto-fixes BROKEN items,
+presents INCOMPLETE items for your decision, then re-verifies. Max 3 iterations.
+If a fix introduces a regression (new finding not in the original set), it stops
+immediately and reports the regression.
+
+---
+
+## Phase 0: Scope Detection
+
+### Step 1: Determine scope
+
+```bash
+{{SLUG_SETUP}}
+BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
+echo "Branch: $BRANCH"
+```
+
+Determine what to verify:
+
+1. If invoked from /autobuild Phase 2.5: scope is already set — use the files from
+   the build session. Run `git diff --stat HEAD~N` where N is the number of commits
+   from this build session (check git log for commits by the current session).
+
+2. If invoked standalone: detect scope from recent changes.
+   ```bash
+   git diff --stat HEAD~5
+   git log --oneline -10
+   ```
+   Use AskUserQuestion if the scope is ambiguous: "Which area should I verify?
+   A) All recent changes ([N] files)
+   B) Specific directory — tell me which
+   C) Specific feature — describe it"
+
+### Step 2: Collect target files
+
+```bash
+git diff --name-only HEAD~N | head -50
+```
+
+These files define the blast radius for investigation. Only trace workflows that
+touch these files — do not investigate the entire codebase.
+
+---
+
+## Phase 1: Initial Investigation
+
+Run the /investigate-workflow logic on the scoped files. For each file in scope:
+
+1. **Trace entry points** — find routes, handlers, API endpoints, event listeners
+   that touch the changed files
+2. **Follow code paths** — trace from entry to outcome, reading each file in the chain
+3. **Check completeness** — happy path, error paths, edge cases
+4. **Categorize findings** using the severity levels:
+   - **BROKEN** — wired but produces wrong results, crashes, or silently fails
+   - **INCOMPLETE** — starts but doesn't finish (empty handler, TODO function, missing save)
+   - **MISSING** — expected path doesn't exist at all
+   - **ORPHANED** — code exists but nothing triggers it
+   - **FRAGILE** — works now but will break easily
+
+### Snapshot findings
+
+After investigation, record the complete findings list. This snapshot is used for
+regression detection in later iterations.
+
+```
+FINDINGS SNAPSHOT (Iteration 0)
+================================
+BROKEN:
+  1. [description] — [file:line]
+  2. ...
+INCOMPLETE:
+  1. [description] — [file:line]
+  2. ...
+MISSING: ...
+ORPHANED: ...
+FRAGILE: ...
+================================
+Total: [N] findings
+```
+
+---
+
+## Phase 2: Fix Loop (max 3 iterations)
+
+### For each iteration (1 through 3):
+
+#### Step 2A: Auto-fix BROKEN items only
+
+BROKEN items are definitively wrong — auto-fix them without asking. For each BROKEN finding:
+
+1. Read the file at the reported location
+2. Understand the intended behavior from surrounding code and the workflow trace
+3. Write the minimal fix — no refactoring, no gold plating
+4. Run relevant tests if the project has them
+
+Report each fix:
+```
+FIX #[N]: [description]
+  File: [file:line]
+  Change: [what was changed and why]
+  Tests: [pass/fail or "no tests"]
+```
+
+#### Step 2B: Present INCOMPLETE items to user
+
+INCOMPLETE items may be intentional (deferred scope). Present them via AskUserQuestion:
+
+```
+## Verification: INCOMPLETE Items Found
+
+[N] items appear incomplete — they may be intentional deferrals or genuine gaps.
+
+[For each INCOMPLETE item:]
+[N]. [description] — [file:line]
+    Impact: [what the user experiences]
+
+RECOMMENDATION: Review these — some may be intentional. Choose A to fix all.
+
+A) Fix all INCOMPLETE items
+B) Fix specific items — tell me which numbers
+C) Skip all — these are intentional deferrals
+```
+
+If the user chooses to fix some/all, apply fixes the same way as BROKEN items.
+
+#### Step 2C: Re-investigate (regression detection)
+
+After fixes are applied, re-run the investigation on the same scope.
+
+**Regression detection algorithm:**
+1. Compare new findings against the Iteration 0 snapshot
+2. A finding is NEW if it was not present in any previous snapshot
+3. If ANY new finding appears that was not in the original set:
+
+```
+REGRESSION DETECTED — STOPPING
+================================
+Fix for: [which BROKEN item was being fixed]
+Caused:  [new finding description] — [file:line]
+================================
+The fix introduced a new problem. Reverting the last fix and stopping.
+Review manually.
+```
+
+**STOP the loop immediately.** Revert the last fix (`git checkout -- [file]`).
+Present the regression to the user. Do not attempt to fix the regression.
+
+#### Step 2D: Check if done
+
+If re-investigation finds:
+- Zero BROKEN items remaining → exit the loop (success)
+- Same or fewer findings → continue to next iteration
+- New findings → STOP (regression, handled in Step 2C)
+
+If iteration 3 completes and BROKEN items remain:
+
+```
+VERIFICATION CAPPED — 3 iterations reached
+==========================================
+Remaining BROKEN: [N]
+[List each with file:line]
+==========================================
+These need manual attention. The loop auto-fixed [M] items across 3 iterations.
+```
+
+---
+
+## Phase 3: Verification Report
+
+Present the final report:
+
+```
+VERIFY-LOOP REPORT
+════════════════════════════════════════════════════════════════
+Scope:           [N] files from [branch] build session
+Iterations:      [N] of 3
+════════════════════════════════════════════════════════════════
+
+AUTO-FIXED ([N] items)
+──────────────────────
+[For each fix:]
+  [N]. [description] — [file:line]
+
+USER-DEFERRED ([N] items)
+─────────────────────────
+[INCOMPLETE items the user chose to skip]
+
+REMAINING ([N] items)
+─────────────────────
+[Any BROKEN/INCOMPLETE items still open after 3 iterations]
+
+INFORMATIONAL
+─────────────
+[MISSING, ORPHANED, FRAGILE items — reported but not auto-fixed]
+
+════════════════════════════════════════════════════════════════
+VERDICT: [CLEAN | FIXED | NEEDS_ATTENTION | REGRESSION_DETECTED]
+════════════════════════════════════════════════════════════════
+```
+
+Verdict logic:
+- **CLEAN** — zero findings from the start. Everything works.
+- **FIXED** — all BROKEN items resolved, no regressions.
+- **NEEDS_ATTENTION** — BROKEN items remain after 3 iterations.
+- **REGRESSION_DETECTED** — a fix caused a new problem. Manual review needed.
+
+---
+
+## Important Rules
+
+- **BROKEN only for auto-fix.** Never auto-fix INCOMPLETE, MISSING, ORPHANED, or FRAGILE.
+  INCOMPLETE items may be intentional. Present them to the user.
+- **Max 3 iterations.** Not configurable. Prevents infinite loops.
+- **Regression = STOP.** If a fix introduces a new finding, stop immediately. Do not
+  try to fix the regression — that's a human decision.
+- **Scope to build session files.** Only investigate files changed in the build session.
+  Do not expand scope to the entire codebase.
+- **Minimal fixes.** Fix the specific issue. No refactoring, no cleanup, no improvements.
+- **Evidence for every finding.** Every finding must have a file:line reference.
+- **Snapshot before fixing.** Always record the findings snapshot before applying fixes.
+  This is the baseline for regression detection.
