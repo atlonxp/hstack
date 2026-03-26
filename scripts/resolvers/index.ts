@@ -8,6 +8,7 @@ import type { TemplateContext } from './types';
 // Domain modules
 import { generatePreamble } from './preamble';
 import { generateTestFailureTriage } from './preamble';
+import { generateIntelligenceLogging } from './preamble';
 import { generateCommandReference, generateSnapshotFlags, generateBrowseSetup } from './browse';
 import { generateDesignMethodology, generateDesignHardRules, generateDesignOutsideVoices, generateDesignReviewLite, generateDesignSketch } from './design';
 import { generateTestBootstrap, generateTestCoverageAuditPlan, generateTestCoverageAuditShip, generateTestCoverageAuditReview } from './testing';
@@ -44,4 +45,5 @@ export const RESOLVERS: Record<string, (ctx: TemplateContext) => string> = {
   PLAN_COMPLETION_AUDIT_SHIP: generatePlanCompletionAuditShip,
   PLAN_COMPLETION_AUDIT_REVIEW: generatePlanCompletionAuditReview,
   PLAN_VERIFICATION_EXEC: generatePlanVerificationExec,
+  INTEL_LOGGING: generateIntelligenceLogging,
 };

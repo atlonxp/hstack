@@ -305,6 +305,30 @@ If \`_CONTRIB\` is \`true\`: you are in **contributor mode**. At the end of each
 Slug: lowercase hyphens, max 60 chars. Skip if exists. Max 3/session. File inline, don't stop.`;
 }
 
+export function generateIntelligenceLogging(ctx: TemplateContext): string {
+  return `## Intelligence Logging
+
+When this skill produces findings (security issues, broken workflows, code quality
+problems, missing coverage, etc.), log each significant finding to the project
+intelligence file. This builds cross-session memory that \`/context\` reads.
+
+**When to log:** After producing any finding with a severity level (BROKEN, INCOMPLETE,
+MISSING, ORPHANED, FRAGILE, CRITICAL, HIGH, MEDIUM) or a significant discovery.
+
+**How to log:** Run in the background (never block the user):
+
+\`\`\`bash
+${ctx.paths.binDir}/gstack-intel-append '{"ts":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'","skill":"${ctx.skillName}","event":"finding","severity":"SEVERITY","area":"AREA","file":"FILE_PATH","commit":"'$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")'"}' &
+\`\`\`
+
+Replace SEVERITY, AREA (short label like "auth", "billing", "api"), and FILE_PATH
+with actual values. Only log findings with concrete file references — skip vague
+observations without evidence.
+
+**Do not log:** informational messages, successful checks with no findings, or
+findings below MEDIUM severity. Keep the signal-to-noise ratio high.`;
+}
+
 function generateCompletionStatus(): string {
   return `## Completion Status Protocol
 

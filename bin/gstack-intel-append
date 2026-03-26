@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# gstack-intel-append — Append an intelligence entry to the project's intel file.
+# Usage: gstack-intel-append <json-entry>
+# Writes to ~/.gstack/projects/{slug}/intelligence.jsonl
+# Entry format: {"ts":"...","skill":"...","event":"finding","severity":"BROKEN","area":"auth","file":"src/auth.ts","commit":"abc123"}
+set -euo pipefail
+
+ENTRY="${1:-}"
+
+if [ -z "$ENTRY" ]; then
+  echo "Usage: gstack-intel-append '<json-entry>'" >&2
+  exit 1
+fi
+
+# Detect project slug
+SLUG=""
+if command -v gstack-slug >/dev/null 2>&1; then
+  eval "$(gstack-slug 2>/dev/null)" || true
+fi
+
+# Fallback: derive slug from git remote or directory name
+if [ -z "$SLUG" ]; then
+  REMOTE=$(git remote get-url origin 2>/dev/null || true)
+  if [ -n "$REMOTE" ]; then
+    SLUG=$(basename "$REMOTE" .git | tr '[:upper:]' '[:lower:]' | tr ' ' '-')
+  else
+    SLUG=$(basename "$(pwd)" | tr '[:upper:]' '[:lower:]' | tr ' ' '-')
+  fi
+fi
+
+INTEL_DIR="$HOME/.gstack/projects/$SLUG"
+INTEL_FILE="$INTEL_DIR/intelligence.jsonl"
+
+mkdir -p "$INTEL_DIR"
+echo "$ENTRY" >> "$INTEL_FILE"
