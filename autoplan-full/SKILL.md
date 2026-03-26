@@ -663,6 +663,43 @@ proceed to the gate with a warning.
 
 ---
 
+## Phase 6.5: Generate Implementation Tasks
+
+After all reviews are complete and before the final gate, generate a task checklist
+that /autobuild will use to track progress.
+
+### Task format
+
+Add an `## Implementation Tasks` section to the plan file using Edit:
+
+```markdown
+## Implementation Tasks
+
+- [ ] #1: [task description] ([target files/dirs])
+- [ ] #2: [task description] (depends: #1) ([target files/dirs])
+- [ ] #3: [task description] (depends: #1, #2) ([target files/dirs])
+```
+
+### How to generate tasks
+
+1. Extract from the plan's file list / component breakdown
+2. One task per logical unit of work (a component, a module, a data model)
+3. Include dependencies between tasks where ordering matters
+4. Include target files/directories so /autobuild knows what each task touches
+5. Keep tasks granular — decompose large components into sub-tasks rather than
+   using a partial `[~]` state. Each task is either done or not done.
+
+### Task ordering rules
+
+- Data models and types come first (foundation)
+- Core logic/services depend on data models
+- API/routes depend on services
+- UI components depend on API
+- Tests accompany each component (not a separate task)
+- Infrastructure/config tasks go first if they unblock other tasks
+
+---
+
 ## Phase 7: Final Approval Gate
 
 **STOP here and present the final state to the user.**
