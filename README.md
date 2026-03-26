@@ -18,6 +18,12 @@ I forked [Garry Tan's gstack](https://github.com/garrytan/gstack) — his open s
 
 - **`/autoaudit`** — Post-build verification. Runs security audit (CSO) then code review (review + codex). Auto-fixes obvious issues, flags ambiguous ones. Clear pass/fail verdict. No shipping — that's your call.
 
+- **`/verify-loop`** — Self-healing verification loop. After building, traces every code path, auto-fixes BROKEN items, presents INCOMPLETE items for your decision. Max 3 iterations with regression detection — if a fix breaks something new, it stops immediately.
+
+- **`/context`** — Project intelligence briefing. Reads cross-session memory from findings logged by review, CSO, and investigate skills. Shows hotspot files, recurring patterns, and trends. Run at session start to get up to speed.
+
+- **`/check-ci`**, **`/check-deps`**, **`/check-issues`** — One-shot status checks. CI status via `gh`/`glab`, dependency audit via `npm audit`/`pip audit`/etc., issue triage with priority categorization. No daemons — run when you need them.
+
 **hstack is gstack + a CTO's lens.** Same foundation. Same MIT license. All the upstream specialists plus five new ones that make the team complete. Built on the shoulders of a giant — credit where it's due.
 
 Fork it. Improve it. Make it yours.
@@ -30,8 +36,8 @@ Fork it. Improve it. Make it yours.
 ## Quick start
 
 1. Install hstack (30 seconds — see below)
-2. Run `/autoplan-full` — describe your idea, get a fully reviewed plan
-3. Run `/autobuild` — implement the plan
+2. Run `/autoplan-full` — describe your idea, get a fully reviewed plan (now with task checkboxes)
+3. Run `/autobuild` — implement the plan (now with self-healing verify loop)
 4. Run `/autoaudit` — verify security + code quality
 5. Run `/ship` — when you're ready
 
@@ -45,11 +51,11 @@ Or go manual: `/office-hours` → `/discover` → `/plan-ceo-review` → `/plan-
 
 Open Claude Code and paste this. Claude does the rest.
 
-> Install hstack: run **`git clone https://github.com/atlonxp/hstack.git ~/.claude/skills/hstack && cd ~/.claude/skills/hstack && ./setup`** then add an "hstack" section to CLAUDE.md that says to use the /browse skill from hstack for all web browsing, never use mcp\_\_claude-in-chrome\_\_\* tools, and lists the available skills: /office-hours, /discover, /plan-ceo-review, /plan-eng-review, /plan-design-review, /plan-ux-review, /design-consultation, /review, /ship, /land-and-deploy, /canary, /benchmark, /browse, /qa, /qa-only, /design-review, /setup-browser-cookies, /setup-deploy, /retro, /investigate, /document-release, /codex, /cso, /autoplan, /autoplan-full, /autobuild, /autoaudit, /careful, /freeze, /guard, /unfreeze, /gstack-upgrade. Then ask the user if they also want to add hstack to the current project so teammates get it.
+> Install hstack: run **`git clone https://github.com/atlonxp/hstack.git ~/.claude/skills/hstack && cd ~/.claude/skills/hstack && ./setup`** then add an "hstack" section to CLAUDE.md that says to use the /browse skill from hstack for all web browsing, never use mcp\_\_claude-in-chrome\_\_\* tools, and lists the available skills: /office-hours, /discover, /plan-ceo-review, /plan-eng-review, /plan-design-review, /plan-ux-review, /design-consultation, /review, /ship, /land-and-deploy, /canary, /benchmark, /browse, /qa, /qa-only, /design-review, /setup-browser-cookies, /setup-deploy, /retro, /investigate, /document-release, /codex, /cso, /autoplan, /autoplan-full, /autobuild, /autoaudit, /verify-loop, /context, /check-ci, /check-deps, /check-issues, /careful, /freeze, /guard, /unfreeze, /gstack-upgrade. Then ask the user if they also want to add hstack to the current project so teammates get it.
 
 ### Step 2: Add to your repo so teammates get it (optional)
 
-> Add hstack to this project: run **`cp -Rf ~/.claude/skills/hstack .claude/skills/hstack && rm -rf .claude/skills/hstack/.git && cd .claude/skills/hstack && ./setup`** then add an "hstack" section to this project's CLAUDE.md that says to use the /browse skill from hstack for all web browsing, never use mcp\_\_claude-in-chrome\_\_\* tools, lists the available skills: /office-hours, /discover, /plan-ceo-review, /plan-eng-review, /plan-design-review, /plan-ux-review, /design-consultation, /review, /ship, /land-and-deploy, /canary, /benchmark, /browse, /qa, /qa-only, /design-review, /setup-browser-cookies, /setup-deploy, /retro, /investigate, /document-release, /codex, /cso, /careful, /freeze, /guard, /unfreeze, /gstack-upgrade, and tells Claude that if hstack skills aren't working, run `cd .claude/skills/hstack && ./setup` to build the binary and register skills.
+> Add hstack to this project: run **`cp -Rf ~/.claude/skills/hstack .claude/skills/hstack && rm -rf .claude/skills/hstack/.git && cd .claude/skills/hstack && ./setup`** then add an "hstack" section to this project's CLAUDE.md that says to use the /browse skill from hstack for all web browsing, never use mcp\_\_claude-in-chrome\_\_\* tools, lists the available skills: /office-hours, /discover, /plan-ceo-review, /plan-eng-review, /plan-design-review, /plan-ux-review, /design-consultation, /review, /ship, /land-and-deploy, /canary, /benchmark, /browse, /qa, /qa-only, /design-review, /setup-browser-cookies, /setup-deploy, /retro, /investigate, /document-release, /codex, /cso, /verify-loop, /context, /check-ci, /check-deps, /check-issues, /careful, /freeze, /guard, /unfreeze, /gstack-upgrade, and tells Claude that if hstack skills aren't working, run `cd .claude/skills/hstack && ./setup` to build the binary and register skills.
 
 Real files get committed to your repo (not a submodule), so `git clone` just works. Everything lives inside `.claude/`. Nothing touches your PATH or runs in the background.
 
@@ -238,6 +244,11 @@ Claude: [per-person breakdowns, shipping streaks, test health trends]
 | Test authenticated pages | `/setup-browser-cookies` → `/qa` |
 | Protect against destructive commands | `/careful` or `/guard` (= careful + freeze) |
 | Lock edits to one directory | `/freeze` (undo with `/unfreeze`) |
+| Verify build completeness | `/verify-loop` |
+| Get project context at session start | `/context` |
+| Check CI status | `/check-ci` |
+| Audit dependencies | `/check-deps` |
+| Triage open issues | `/check-issues` |
 | Upgrade hstack | `/gstack-upgrade` |
 
 ## The sprint
@@ -264,8 +275,9 @@ hstack is a process, not a collection of tools. The skills run in the order a sp
 Shortcuts:
   /autoplan-full  = office-hours → discover → CEO → UX → design → eng (idea to plan)
   /autoplan       = CEO → design → eng (existing plan to reviewed plan)
-  /autobuild      = plan → implemented code
+  /autobuild      = plan → implemented code (includes verify loop)
   /autoaudit      = CSO + review (verify after build)
+  /verify-loop    = post-build self-healing (standalone or via /autobuild)
 ```
 
 | Skill | Your specialist | What they do |
@@ -280,6 +292,11 @@ Shortcuts:
 | `/autoplan-full` | **Full CTO Pipeline** | Idea to fully reviewed plan. Runs office-hours → discover → CEO → UX → design → eng. Interactive for framing, auto-decided for reviews. Two gates: confirm framing, approve final plan. |
 | `/autobuild` | **Autonomous Builder** | Plan to implemented code. Reads the approved plan, builds component by component, writes tests alongside. Optional checkpoints between components. |
 | `/autoaudit` | **Verification Pipeline** | Post-build security + quality check. Runs CSO then review + codex. Auto-fixes obvious issues, flags ambiguous ones. Pass/fail verdict without shipping. |
+| `/verify-loop` | **Build Inspector** | Self-healing verification loop. Traces code paths, auto-fixes BROKEN items, presents INCOMPLETE items. Max 3 iterations with regression detection. |
+| `/context` | **Project Memory** | Cross-session intelligence briefing. Reads findings from all skills, shows hotspots, recurring patterns, and trends. |
+| `/check-ci` | **CI Monitor** | One-shot CI status check via `gh`/`glab`. Reports pass/fail with failure details. |
+| `/check-deps` | **Dependency Auditor** | One-shot dependency security audit. Detects package manager, reports vulnerabilities by severity. |
+| `/check-issues` | **Issue Triager** | One-shot issue triage. Categorizes by priority, suggests what to work on next. |
 | `/design-consultation` | **Design Partner** | Build a complete design system from scratch. Researches the landscape, proposes creative risks, generates realistic product mockups. |
 | `/review` | **Staff Engineer** | Find the bugs that pass CI but blow up in production. Auto-fixes the obvious ones. Flags completeness gaps. |
 | `/cso` | **Chief Security Officer** | OWASP Top 10 + STRIDE threat model. Zero-noise: 17 false positive exclusions, 8/10+ confidence gate. Each finding includes a concrete exploit scenario. |
@@ -352,7 +369,7 @@ Free, MIT licensed, open source. No premium tier, no waitlist.
 
 I open sourced how I build software. You can fork it and make it your own.
 
-> **Upstream:** hstack is derived from [garrytan/gstack](https://github.com/garrytan/gstack) with `/plan-ux-review`, `/discover`, `/autoplan-full`, `/autobuild`, and `/autoaudit` added.
+> **Upstream:** hstack is derived from [garrytan/gstack](https://github.com/garrytan/gstack) with `/plan-ux-review`, `/discover`, `/autoplan-full`, `/autobuild`, `/autoaudit`, `/verify-loop`, `/context`, `/check-ci`, `/check-deps`, and `/check-issues` added.
 > Pull from upstream regularly to stay current. Contributions welcome.
 
 ## Docs
@@ -401,7 +418,8 @@ Available skills: /office-hours, /discover, /plan-ceo-review, /plan-eng-review,
 /plan-design-review, /plan-ux-review, /design-consultation, /review, /ship,
 /land-and-deploy, /canary, /benchmark, /browse, /qa, /qa-only, /design-review,
 /setup-browser-cookies, /setup-deploy, /retro, /investigate, /document-release,
-/codex, /cso, /autoplan, /autoplan-full, /autobuild, /autoaudit, /careful, /freeze, /guard, /unfreeze, /gstack-upgrade.
+/codex, /cso, /autoplan, /autoplan-full, /autobuild, /autoaudit, /verify-loop, /context,
+/check-ci, /check-deps, /check-issues, /careful, /freeze, /guard, /unfreeze, /gstack-upgrade.
 ```
 
 ## License
