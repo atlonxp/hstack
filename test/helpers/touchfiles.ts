@@ -148,7 +148,7 @@ export const E2E_TOUCHFILES: Record<string, string[]> = {
   'verify-loop-workflow': ['verify-loop/**', 'autobuild/**', 'investigate-workflow/**'],
 
   // Context / Intelligence
-  'context-briefing': ['context/**', 'bin/gstack-intel-append', 'scripts/resolvers/preamble.ts'],
+  'intel-briefing': ['intel/**', 'bin/gstack-intel-append', 'scripts/resolvers/preamble.ts'],
 
   // Check skills
   'check-ci-workflow': ['check-ci/**'],
@@ -277,7 +277,7 @@ export const E2E_TIERS: Record<string, 'gate' | 'periodic'> = {
   'verify-loop-workflow': 'periodic',
 
   // Context / Intelligence — periodic (LLM briefing)
-  'context-briefing': 'periodic',
+  'intel-briefing': 'periodic',
 
   // Check skills — gate (deterministic CLI checks)
   'check-ci-workflow': 'gate',

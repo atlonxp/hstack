@@ -1,5 +1,5 @@
 ---
-name: context
+name: intel
 preamble-tier: 1
 version: 1.0.0
 description: |
@@ -7,8 +7,8 @@ description: |
   compacts stale entries, and presents a briefing of recurring patterns, recent findings,
   and known hotspots. Run at session start for full context, or anytime to check what
   gstack has learned about this project.
-  Use when asked to "show context", "what do you know", "project briefing",
-  "session context", or "intelligence report".
+  Use when asked to "show intel", "what do you know", "project briefing",
+  "intelligence report", or "project intel".
   Proactively suggest at session start if intelligence data exists.
 allowed-tools:
   - Bash
@@ -48,7 +48,7 @@ _SESSION_ID="$$-$(date +%s)"
 echo "TELEMETRY: ${_TEL:-off}"
 echo "TEL_PROMPTED: $_TEL_PROMPTED"
 mkdir -p ~/.gstack/analytics
-echo '{"skill":"context","ts":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'","repo":"'$(basename "$(git rev-parse --show-toplevel 2>/dev/null)" 2>/dev/null || echo "unknown")'"}'  >> ~/.gstack/analytics/skill-usage.jsonl 2>/dev/null || true
+echo '{"skill":"intel","ts":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'","repo":"'$(basename "$(git rev-parse --show-toplevel 2>/dev/null)" 2>/dev/null || echo "unknown")'"}'  >> ~/.gstack/analytics/skill-usage.jsonl 2>/dev/null || true
 # zsh-compatible: use find instead of glob to avoid NOMATCH error
 for _PF in $(find ~/.gstack/analytics -maxdepth 1 -name '.pending-*' 2>/dev/null); do [ -f "$_PF" ] && ~/.claude/skills/gstack/bin/gstack-telemetry-log --event-type skill_run --skill _pending_finalize --outcome unknown --session-id "$_SESSION_ID" 2>/dev/null || true; break; done
 ```
@@ -234,11 +234,11 @@ Then write a `## GSTACK REVIEW REPORT` section to the end of the plan file:
 file you are allowed to edit in plan mode. The plan file review report is part of the
 plan's living status.
 
-# /context — Project Intelligence Briefing
+# /intel — Project Intelligence Briefing
 
 What has gstack learned about this project across sessions?
 
-/context reads the persistent intelligence file (`intelligence.jsonl`) and presents
+/intel reads the persistent intelligence file (`intelligence.jsonl`) and presents
 a briefing: recurring patterns, recent findings, known hotspots, and cross-session
 trends. Run it at the start of a session to get up to speed.
 

@@ -1,5 +1,5 @@
 ---
-name: context
+name: intel
 preamble-tier: 1
 version: 1.0.0
 description: |
@@ -7,8 +7,8 @@ description: |
   compacts stale entries, and presents a briefing of recurring patterns, recent findings,
   and known hotspots. Run at session start for full context, or anytime to check what
   gstack has learned about this project.
-  Use when asked to "show context", "what do you know", "project briefing",
-  "session context", or "intelligence report".
+  Use when asked to "show intel", "what do you know", "project briefing",
+  "intelligence report", or "project intel".
   Proactively suggest at session start if intelligence data exists.
 allowed-tools:
   - Bash
@@ -20,11 +20,11 @@ allowed-tools:
 
 {{PREAMBLE}}
 
-# /context — Project Intelligence Briefing
+# /intel — Project Intelligence Briefing
 
 What has gstack learned about this project across sessions?
 
-/context reads the persistent intelligence file (`intelligence.jsonl`) and presents
+/intel reads the persistent intelligence file (`intelligence.jsonl`) and presents
 a briefing: recurring patterns, recent findings, known hotspots, and cross-session
 trends. Run it at the start of a session to get up to speed.
 
