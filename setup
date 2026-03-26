@@ -203,6 +203,15 @@ link_claude_skill_dirs() {
   local gstack_dir="$1"
   local skills_dir="$2"
   local linked=()
+  # Detect the directory name as installed under skills_dir (e.g., "gstack" or "hstack")
+  local install_dirname="gstack"
+  for candidate in "$skills_dir"/*/; do
+    if [ -L "$candidate" ] && [ "$(readlink "$candidate")" = "$gstack_dir" ] || \
+       [ "$(cd "$candidate" 2>/dev/null && pwd -P)" = "$(cd "$gstack_dir" 2>/dev/null && pwd -P)" ]; then
+      install_dirname="$(basename "$candidate")"
+      break
+    fi
+  done
   for skill_dir in "$gstack_dir"/*/; do
     if [ -f "$skill_dir/SKILL.md" ]; then
       skill_name="$(basename "$skill_dir")"
@@ -211,7 +220,7 @@ link_claude_skill_dirs() {
       target="$skills_dir/$skill_name"
       # Create or update symlink; skip if a real file/directory exists
       if [ -L "$target" ] || [ ! -e "$target" ]; then
-        ln -snf "gstack/$skill_name" "$target"
+        ln -snf "$install_dirname/$skill_name" "$target"
         linked+=("$skill_name")
       fi
     fi
