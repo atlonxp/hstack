@@ -1,0 +1,103 @@
+---
+name: check-ci
+preamble-tier: 1
+version: 1.0.0
+description: |
+  One-shot CI status check. Queries GitHub Actions (or GitLab CI) for recent
+  workflow runs, reports failures, and suggests fixes. No daemon — run manually
+  when you want to know if CI is green.
+  Use when asked to "check ci", "ci status", "are builds passing", "check-ci",
+  or "what's failing in CI".
+allowed-tools:
+  - Bash
+  - Read
+  - Grep
+  - AskUserQuestion
+---
+
+{{PREAMBLE}}
+
+# /check-ci — CI Status Check
+
+Quick check: is CI green?
+
+/check-ci queries your CI system for recent workflow runs and reports what's
+passing, what's failing, and what needs attention. One-shot — no daemon, no
+background monitoring.
+
+---
+
+## Step 1: Detect CI system
+
+```bash
+# Check for GitHub Actions
+gh run list --limit 5 --json status,conclusion,name,headBranch,createdAt 2>/dev/null && echo "PLATFORM: github" || true
+
+# Check for GitLab CI
+glab ci list --per-page 5 2>/dev/null && echo "PLATFORM: gitlab" || true
+```
+
+If neither CLI is available: "No CI CLI detected. Install `gh` (GitHub) or `glab`
+(GitLab) to use /check-ci."
+
+---
+
+## Step 2: Get recent runs
+
+### GitHub Actions
+```bash
+gh run list --limit 10 --json status,conclusion,name,headBranch,createdAt,databaseId,event
+```
+
+### GitLab CI
+```bash
+glab ci list --per-page 10
+```
+
+---
+
+## Step 3: Report
+
+```
+CI STATUS REPORT
+════════════════════════════════════════
+  Run                  Branch        Status      When
+  Build & Test         main          ✓ pass      2h ago
+  Build & Test         feat/auth     ✗ FAIL      30m ago
+  Deploy Preview       feat/auth     ✓ pass      25m ago
+  Lint                 main          ✓ pass      3h ago
+════════════════════════════════════════
+Passing: [N]  |  Failing: [M]  |  In progress: [K]
+```
+
+### For each failing run:
+
+```bash
+# GitHub: get failure details
+gh run view <run-id> --log-failed 2>/dev/null | tail -30
+```
+
+Show the failure reason (test name, error message, step that failed).
+
+---
+
+## Step 4: Suggest actions
+
+If failures exist, use AskUserQuestion:
+
+```
+[N] CI runs failing. Most recent failure on [branch]:
+[failure summary]
+
+A) View full failure log for [run]
+B) Check if failure is related to current branch changes
+C) Just the report — I'll handle it
+```
+
+---
+
+## Important Rules
+
+- **One-shot only.** Run once, report, done. No background monitoring.
+- **Never modify CI config.** Report only — don't edit .github/workflows or .gitlab-ci.yml.
+- **Branch context.** Show the current branch's runs first, then other branches.

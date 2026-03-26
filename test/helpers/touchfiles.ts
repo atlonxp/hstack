@@ -144,6 +144,17 @@ export const E2E_TOUCHFILES: Record<string, string[]> = {
   // Autoplan
   'autoplan-core':  ['autoplan/**', 'plan-ceo-review/**', 'plan-eng-review/**', 'plan-design-review/**'],
 
+  // Verify loop
+  'verify-loop-workflow': ['verify-loop/**', 'autobuild/**', 'investigate-workflow/**'],
+
+  // Context / Intelligence
+  'context-briefing': ['context/**', 'bin/gstack-intel-append', 'scripts/resolvers/preamble.ts'],
+
+  // Check skills
+  'check-ci-workflow': ['check-ci/**'],
+  'check-deps-workflow': ['check-deps/**'],
+  'check-issues-workflow': ['check-issues/**'],
+
   // Skill routing — journey-stage tests (depend on ALL skill descriptions)
   'journey-ideation':       ['*/SKILL.md.tmpl', 'SKILL.md.tmpl', 'scripts/gen-skill-docs.ts'],
   'journey-plan-eng':       ['*/SKILL.md.tmpl', 'SKILL.md.tmpl', 'scripts/gen-skill-docs.ts'],
@@ -261,6 +272,17 @@ export const E2E_TIERS: Record<string, 'gate' | 'periodic'> = {
   'canary-workflow': 'gate',
   'benchmark-workflow': 'gate',
   'setup-deploy-workflow': 'gate',
+
+  // Verify loop — periodic (LLM-driven workflow investigation)
+  'verify-loop-workflow': 'periodic',
+
+  // Context / Intelligence — periodic (LLM briefing)
+  'context-briefing': 'periodic',
+
+  // Check skills — gate (deterministic CLI checks)
+  'check-ci-workflow': 'gate',
+  'check-deps-workflow': 'gate',
+  'check-issues-workflow': 'gate',
 
   // Autoplan — periodic (not yet implemented)
   'autoplan-core': 'periodic',

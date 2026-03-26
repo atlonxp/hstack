@@ -252,6 +252,11 @@ user's workflow stage:
 - Prod safety → /careful or /guard
 - Scoped edits → /freeze or /unfreeze
 - Upgrades → /gstack-upgrade
+- Verify build → /verify-loop
+- Project context → /context
+- CI status → /check-ci
+- Dependency audit → /check-deps
+- Issue triage → /check-issues
 
 If the user opts out of suggestions, run `gstack-config set proactive false`.
 If they opt back in, run `gstack-config set proactive true`.

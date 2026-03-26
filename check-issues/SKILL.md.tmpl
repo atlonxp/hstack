@@ -1,0 +1,123 @@
+---
+name: check-issues
+preamble-tier: 1
+version: 1.0.0
+description: |
+  One-shot issue triage. Queries GitHub Issues (or GitLab) for open issues,
+  categorizes by priority, and suggests which to tackle next. No daemon — run
+  manually when you want to see what needs attention.
+  Use when asked to "check issues", "triage issues", "check-issues",
+  "what's open", "issue backlog", or "what should I work on next".
+allowed-tools:
+  - Bash
+  - Read
+  - Grep
+  - AskUserQuestion
+---
+
+{{PREAMBLE}}
+
+# /check-issues — Issue Triage
+
+What needs your attention?
+
+/check-issues queries your issue tracker for open issues, categorizes them by
+priority and type, and suggests what to tackle next based on your current branch
+and recent work.
+
+---
+
+## Step 1: Detect platform and get issues
+
+```bash
+# GitHub
+gh issue list --state open --limit 25 --json number,title,labels,assignees,createdAt,updatedAt,author 2>/dev/null && echo "PLATFORM: github" || true
+
+# GitLab
+glab issue list --per-page 25 2>/dev/null && echo "PLATFORM: gitlab" || true
+```
+
+If neither CLI is available: "No issue tracker CLI detected. Install `gh` (GitHub)
+or `glab` (GitLab) to use /check-issues."
+
+---
+
+## Step 2: Categorize issues
+
+Group issues by:
+
+1. **Priority** — based on labels (P0/critical, P1/high, P2/medium, P3/low) or age
+2. **Type** — bug, feature, enhancement, chore, question
+3. **Assignee** — assigned to you, assigned to others, unassigned
+
+If no priority labels exist, infer from keywords:
+- "crash", "broken", "production", "urgent" → P0
+- "bug", "error", "regression" → P1
+- "feature", "enhancement", "improvement" → P2
+- "docs", "chore", "cleanup" → P3
+
+---
+
+## Step 3: Report
+
+```
+ISSUE TRIAGE REPORT
+════════════════════════════════════════════════════════════
+Repository: [owner/repo]
+Open issues: [N] total
+════════════════════════════════════════════════════════════
+
+BY PRIORITY
+───────────
+  P0 (Critical):  [N] issues
+  P1 (High):      [N] issues
+  P2 (Medium):    [N] issues
+  P3 (Low):       [N] issues
+
+ASSIGNED TO YOU ([N])
+─────────────────────
+  #[num] [title]  [priority]  [age]
+  ...
+
+UNASSIGNED ([N])
+────────────────
+  #[num] [title]  [priority]  [age]
+  ...
+
+STALE (no update in 30+ days) ([N])
+────────────────────────────────────
+  #[num] [title]  [last updated]  [assignee or "unassigned"]
+  ...
+
+════════════════════════════════════════════════════════════
+```
+
+---
+
+## Step 4: Suggest next action
+
+Use AskUserQuestion:
+
+```
+[N] open issues. [M] assigned to you, [K] unassigned.
+[Highlight top priority item if P0/P1 exists]
+
+A) Start working on #[top priority issue] — I'll create a branch and investigate
+B) Show me details on a specific issue — tell me the number
+C) Assign unassigned P0/P1 issues to me
+D) Just the report — I'll decide what to do
+```
+
+If A: create a feature branch and read the issue details to understand the scope.
+If B: `gh issue view <number>` and show full details.
+If C: assign using `gh issue edit <number> --add-assignee @me`.
+
+---
+
+## Important Rules
+
+- **One-shot only.** Run once, report, done. No background monitoring.
+- **Never close issues.** Report and triage only — closing is a human decision.
+- **Respect existing labels.** Don't re-categorize issues that already have priority labels.
+- **Current branch context.** If the current branch name matches an issue number,
+  highlight that issue as "currently working on".
