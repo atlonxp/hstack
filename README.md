@@ -24,7 +24,7 @@ I forked [Garry Tan's gstack](https://github.com/garrytan/gstack) — his open s
 
 - **`/check-ci`**, **`/check-deps`**, **`/check-issues`** — One-shot status checks. CI status via `gh`/`glab`, dependency audit via `npm audit`/`pip audit`/etc., issue triage with priority categorization. No daemons — run when you need them.
 
-**hstack is gstack + a CTO's lens.** Same foundation. Same MIT license. All the upstream specialists plus five new ones that make the team complete. Built on the shoulders of a giant — credit where it's due.
+**hstack is gstack + a CTO's lens.** Same foundation. Same MIT license. All the upstream specialists plus the ones that make the team complete. Built on the shoulders of a giant — credit where it's due.
 
 Fork it. Improve it. Make it yours.
 
@@ -51,13 +51,18 @@ Or go manual: `/office-hours` → `/discover` → `/plan-ceo-review` → `/plan-
 
 Open Claude Code and paste this. Claude does the rest.
 
-> Install hstack: run **`git clone https://github.com/atlonxp/hstack.git ~/.claude/skills/hstack && cd ~/.claude/skills/hstack && ./setup`** then add an "hstack" section to CLAUDE.md that says to use the /browse skill from hstack for all web browsing, never use mcp\_\_claude-in-chrome\_\_\* tools, and lists the available skills: /office-hours, /discover, /plan-ceo-review, /plan-eng-review, /plan-design-review, /plan-ux-review, /design-consultation, /review, /ship, /land-and-deploy, /canary, /benchmark, /browse, /qa, /qa-only, /design-review, /setup-browser-cookies, /setup-deploy, /retro, /investigate, /document-release, /codex, /cso, /autoplan, /autoplan-full, /autobuild, /autoaudit, /verify-loop, /intel, /check-ci, /check-deps, /check-issues, /careful, /freeze, /guard, /unfreeze, /gstack-upgrade. Then ask the user if they also want to add hstack to the current project so teammates get it.
+> Install hstack: run **`git clone --single-branch --depth 1 https://github.com/atlonxp/hstack.git ~/.claude/skills/hstack && cd ~/.claude/skills/hstack && ./setup`** then add an "hstack" section to CLAUDE.md that says to use the /browse skill from hstack for all web browsing, never use mcp\_\_claude-in-chrome\_\_\* tools, and lists the available skills: /office-hours, /discover, /plan-ceo-review, /plan-eng-review, /plan-design-review, /plan-ux-review, /design-consultation, /design-shotgun, /design-html, /review, /ship, /land-and-deploy, /canary, /benchmark, /browse, /connect-chrome, /qa, /qa-only, /design-review, /setup-browser-cookies, /setup-deploy, /retro, /investigate, /document-release, /codex, /cso, /autoplan, /autoplan-full, /autobuild, /autoaudit, /verify-loop, /intel, /check-ci, /check-deps, /check-issues, /learn, /careful, /freeze, /guard, /unfreeze, /gstack-upgrade. Then ask the user if they also want to add hstack to the current project so teammates get it.
 
 ### Step 2: Add to your repo so teammates get it (optional)
 
-> Add hstack to this project: run **`cp -Rf ~/.claude/skills/hstack .claude/skills/hstack && rm -rf .claude/skills/hstack/.git && cd .claude/skills/hstack && ./setup`** then add an "hstack" section to this project's CLAUDE.md that says to use the /browse skill from hstack for all web browsing, never use mcp\_\_claude-in-chrome\_\_\* tools, lists the available skills: /office-hours, /discover, /plan-ceo-review, /plan-eng-review, /plan-design-review, /plan-ux-review, /design-consultation, /review, /ship, /land-and-deploy, /canary, /benchmark, /browse, /qa, /qa-only, /design-review, /setup-browser-cookies, /setup-deploy, /retro, /investigate, /document-release, /codex, /cso, /verify-loop, /intel, /check-ci, /check-deps, /check-issues, /careful, /freeze, /guard, /unfreeze, /gstack-upgrade, and tells Claude that if hstack skills aren't working, run `cd .claude/skills/hstack && ./setup` to build the binary and register skills.
+> Add hstack to this project: run **`cp -Rf ~/.claude/skills/hstack .claude/skills/hstack && rm -rf .claude/skills/hstack/.git && cd .claude/skills/hstack && ./setup`** then add an "hstack" section to this project's CLAUDE.md that says to use the /browse skill from hstack for all web browsing, never use mcp\_\_claude-in-chrome\_\_\* tools, lists the available skills: /office-hours, /discover, /plan-ceo-review, /plan-eng-review, /plan-design-review, /plan-ux-review, /design-consultation, /design-shotgun, /design-html, /review, /ship, /land-and-deploy, /canary, /benchmark, /browse, /connect-chrome, /qa, /qa-only, /design-review, /setup-browser-cookies, /setup-deploy, /retro, /investigate, /document-release, /codex, /cso, /autoplan, /autoplan-full, /autobuild, /autoaudit, /verify-loop, /intel, /check-ci, /check-deps, /check-issues, /learn, /careful, /freeze, /guard, /unfreeze, /gstack-upgrade, and tells Claude that if hstack skills aren't working, run `cd .claude/skills/hstack && ./setup` to build the binary and register skills.
 
 Real files get committed to your repo (not a submodule), so `git clone` just works. Everything lives inside `.claude/`. Nothing touches your PATH or runs in the background.
+
+> **Contributing or need full history?** The commands above use `--depth 1` for a fast install. If you plan to contribute or need full git history, do a full clone instead:
+> ```bash
+> git clone https://github.com/atlonxp/hstack.git ~/.claude/skills/hstack
+> ```
 
 ### Codex, Gemini CLI, or Cursor
 
@@ -66,23 +71,42 @@ hstack works on any agent that supports the [SKILL.md standard](https://github.c
 Install to one repo:
 
 ```bash
-git clone https://github.com/atlonxp/hstack.git .agents/skills/hstack
+git clone --single-branch --depth 1 https://github.com/atlonxp/hstack.git .agents/skills/hstack
 cd .agents/skills/hstack && ./setup --host codex
 ```
+
+When setup runs from `.agents/skills/hstack`, it installs the generated Codex skills next to it in the same repo and does not write to `~/.codex/skills`.
 
 Install once for your user account:
 
 ```bash
-git clone https://github.com/atlonxp/hstack.git ~/hstack
+git clone --single-branch --depth 1 https://github.com/atlonxp/hstack.git ~/hstack
 cd ~/hstack && ./setup --host codex
 ```
+
+`setup --host codex` creates the runtime root at `~/.codex/skills/hstack` and
+links the generated Codex skills at the top level. This avoids duplicate skill
+discovery from the source repo checkout.
 
 Or let setup auto-detect which agents you have installed:
 
 ```bash
-git clone https://github.com/atlonxp/hstack.git ~/hstack
+git clone --single-branch --depth 1 https://github.com/atlonxp/hstack.git ~/hstack
 cd ~/hstack && ./setup --host auto
 ```
+
+For Codex-compatible hosts, setup now supports both repo-local installs from `.agents/skills/hstack` and user-global installs from `~/.codex/skills/hstack`. All skills work across all supported agents. Hook-based safety skills (careful, freeze, guard) use inline safety advisory prose on non-Claude hosts.
+
+### Factory Droid
+
+hstack works with [Factory Droid](https://factory.ai). Skills install to `.factory/skills/` and are discovered automatically. Sensitive skills (ship, land-and-deploy, guard) use `disable-model-invocation: true` so Droids don't auto-invoke them.
+
+```bash
+git clone --single-branch --depth 1 https://github.com/atlonxp/hstack.git ~/hstack
+cd ~/hstack && ./setup --host factory
+```
+
+Skills install to `~/.factory/skills/hstack-*/`. Restart `droid` to rescan skills, then type `/qa` to get started.
 
 ## Zero to MVP — the full journey
 
@@ -141,7 +165,19 @@ You:    /autoplan-full         → runs office-hours → discover → CEO → UX
                                   two gates: confirm framing, approve final plan
 ```
 
-### Phase 4: Build — approve the plan and let Claude write the code
+### Phase 4: Design — explore visual directions before you build
+
+```
+You:    /design-shotgun        → generates multiple AI design variants
+                                  opens comparison board in your browser
+                                  iterate until you approve a direction
+
+You:    /design-html           → takes approved mockup and generates production HTML
+                                  text reflows on resize, heights adjust to content
+                                  framework detection for React/Svelte/Vue
+```
+
+### Phase 5: Build — approve the plan and let Claude write the code
 
 ```
 You:    /autobuild             → reads the plan, builds everything autonomously
@@ -151,7 +187,7 @@ Claude: [implements component by component, tests alongside each one]
 
 Or manually: "Approve plan. Exit plan mode." and let Claude build.
 
-### Phase 5: Review + Secure — verify what was built
+### Phase 6: Review + Secure — verify what was built
 
 ```
 You:    /autoaudit             → runs CSO + review in one command
@@ -174,7 +210,7 @@ Claude: [OWASP Top 10 + STRIDE threat model]
 You:    /codex                 → optional: independent second opinion from another AI
 ```
 
-### Phase 6: Test — open a real browser and find what humans find
+### Phase 7: Test — open a real browser and find what humans find
 
 ```
 You:    /qa https://staging.myapp.com
@@ -187,7 +223,7 @@ Claude: [baselines page load times, Core Web Vitals, resource sizes]
         [flags: hero image is 2.4MB unoptimized → compressed to 180KB]
 ```
 
-### Phase 7: Ship — one command from "ready" to "PR created"
+### Phase 8: Ship — one command from "ready" to "PR created"
 
 ```
 You:    /ship
@@ -195,7 +231,7 @@ Claude: Syncs main, runs tests (42 → 51, +9 new), audits coverage,
         pushes branch, opens PR. → github.com/you/app/pull/42
 ```
 
-### Phase 8: Deploy + Verify — from "approved" to "verified in production"
+### Phase 9: Deploy + Verify — from "approved" to "verified in production"
 
 ```
 You:    /land-and-deploy
@@ -206,7 +242,7 @@ Claude: [monitors for 15 minutes — console errors, perf regressions, page fail
         All clear. No regressions detected.
 ```
 
-### Phase 9: Reflect — update docs and learn from the sprint
+### Phase 10: Reflect — update docs and learn from the sprint
 
 ```
 You:    /document-release
@@ -218,7 +254,7 @@ Claude: [per-person breakdowns, shipping streaks, test health trends]
         [growth opportunities, what went well, what to improve]
 ```
 
-**That's the full cycle.** Idea → research → plan → build → review → secure → test → ship → deploy → verify → document → reflect. One person. One tool. Production-ready MVP.
+**That's the full cycle.** Idea → research → plan → design → build → review → secure → test → ship → deploy → verify → document → reflect. One person. One tool. Production-ready MVP.
 
 ## Which skill do I use?
 
@@ -228,9 +264,10 @@ Claude: [per-person breakdowns, shipping streaks, test health trends]
 | Start a new project or feature (manual) | `/office-hours` → `/discover` → plan reviews → build |
 | Get a fully reviewed plan fast | `/autoplan-full` (idea → plan) or `/autoplan` (plan → reviewed plan) |
 | Review each plan step with full control | `/plan-ceo-review` → `/plan-design-review` → `/plan-ux-review` → `/plan-eng-review` |
+| Explore visual design directions | `/design-shotgun` → `/design-html` |
+| Build a design system from scratch | `/design-consultation` |
 | Build from an approved plan | `/autobuild` |
 | Verify code after building | `/autoaudit` (CSO + review in one command) |
-| Build a design system from scratch | `/design-consultation` |
 | Review code before shipping | `/review` (+ `/codex` for second opinion) |
 | Audit security | `/cso` |
 | Find and fix bugs on a live site | `/qa` (or `/qa-only` for report without fixes) |
@@ -241,11 +278,13 @@ Claude: [per-person breakdowns, shipping streaks, test health trends]
 | Update docs after shipping | `/document-release` |
 | Run a team retrospective | `/retro` (or `/retro global` for cross-project) |
 | Browse a site with real eyes | `/browse` |
+| Control Chrome with live side panel | `/connect-chrome` |
 | Test authenticated pages | `/setup-browser-cookies` → `/qa` |
 | Protect against destructive commands | `/careful` or `/guard` (= careful + freeze) |
 | Lock edits to one directory | `/freeze` (undo with `/unfreeze`) |
 | Verify build completeness | `/verify-loop` |
 | Get project intelligence briefing | `/intel` |
+| Review what gstack learned | `/learn` |
 | Check CI status | `/check-ci` |
 | Audit dependencies | `/check-deps` |
 | Triage open issues | `/check-issues` |
@@ -255,22 +294,22 @@ Claude: [per-person breakdowns, shipping streaks, test health trends]
 
 hstack is a process, not a collection of tools. The skills run in the order a sprint runs:
 
-**Think → Discover → Plan → Build → Review → Secure → Test → Ship → Deploy → Reflect**
+**Think → Discover → Plan → Design → Build → Review → Secure → Test → Ship → Deploy → Reflect**
 
 ```
 /office-hours ──→ /discover ──→ /plan-ceo-review ──→ /plan-ux-review
                                                             │
     ┌───────────────────────────────────────────────────────┘
     ▼
-/plan-design-review ──→ /plan-eng-review ──→ [build] ──→ /review ──→ /cso
+/plan-design-review ──→ /plan-eng-review ──→ /design-shotgun ──→ /design-html
                                                                        │
     ┌──────────────────────────────────────────────────────────────────┘
     ▼
-/qa ──→ /benchmark ──→ /ship ──→ /land-and-deploy ──→ /canary
-                                                          │
-    ┌─────────────────────────────────────────────────────┘
+[build] ──→ /review ──→ /cso ──→ /qa ──→ /benchmark ──→ /ship
+                                                            │
+    ┌───────────────────────────────────────────────────────┘
     ▼
-/document-release ──→ /retro
+/land-and-deploy ──→ /canary ──→ /document-release ──→ /retro
 
 Shortcuts:
   /autoplan-full  = office-hours → discover → CEO → UX → design → eng (idea to plan)
@@ -290,19 +329,22 @@ Shortcuts:
 | `/plan-eng-review` | **Eng Manager** | Lock in architecture, data flow, diagrams, edge cases, and tests. Forces hidden assumptions into the open. |
 | `/autoplan` | **Review Pipeline** | One command, fully reviewed plan. Runs CEO → design → eng review automatically with encoded decision principles. Surfaces only taste decisions for your approval. |
 | `/autoplan-full` | **Full CTO Pipeline** | Idea to fully reviewed plan. Runs office-hours → discover → CEO → UX → design → eng. Interactive for framing, auto-decided for reviews. Two gates: confirm framing, approve final plan. |
+| `/design-consultation` | **Design Partner** | Build a complete design system from scratch. Researches the landscape, proposes creative risks, generates realistic product mockups. |
+| `/design-shotgun` | **Design Explorer** | Generate multiple AI design variants, open a comparison board in your browser, and iterate until you approve a direction. Taste memory biases toward your preferences. |
+| `/design-html` | **Design Engineer** | Takes an approved mockup from `/design-shotgun` and generates production-quality HTML with Pretext for computed text layout. Text reflows on resize, heights adjust to content. Smart API routing picks the right Pretext patterns per design type. Framework detection for React/Svelte/Vue. |
 | `/autobuild` | **Autonomous Builder** | Plan to implemented code. Reads the approved plan, builds component by component, writes tests alongside. Optional checkpoints between components. |
 | `/autoaudit` | **Verification Pipeline** | Post-build security + quality check. Runs CSO then review + codex. Auto-fixes obvious issues, flags ambiguous ones. Pass/fail verdict without shipping. |
 | `/verify-loop` | **Build Inspector** | Self-healing verification loop. Traces code paths, auto-fixes BROKEN items, presents INCOMPLETE items. Max 3 iterations with regression detection. |
 | `/intel` | **Project Memory** | Cross-session intelligence briefing. Reads findings from all skills, shows hotspots, recurring patterns, and trends. |
+| `/learn` | **Memory Manager** | Manage what hstack learned across sessions. Review, search, prune, and export project-specific patterns, pitfalls, and preferences. Learnings compound so hstack gets smarter on your codebase over time. |
 | `/check-ci` | **CI Monitor** | One-shot CI status check via `gh`/`glab`. Reports pass/fail with failure details. |
 | `/check-deps` | **Dependency Auditor** | One-shot dependency security audit. Detects package manager, reports vulnerabilities by severity. |
 | `/check-issues` | **Issue Triager** | One-shot issue triage. Categorizes by priority, suggests what to work on next. |
-| `/design-consultation` | **Design Partner** | Build a complete design system from scratch. Researches the landscape, proposes creative risks, generates realistic product mockups. |
-| `/review` | **Staff Engineer** | Find the bugs that pass CI but blow up in production. Auto-fixes the obvious ones. Flags completeness gaps. |
-| `/cso` | **Chief Security Officer** | OWASP Top 10 + STRIDE threat model. Zero-noise: 17 false positive exclusions, 8/10+ confidence gate. Each finding includes a concrete exploit scenario. |
-| `/codex` | **Second Opinion** | Independent code review from OpenAI Codex CLI. Three modes: review (pass/fail gate), adversarial challenge, and open consultation. |
-| `/investigate` | **Debugger** | Systematic root-cause debugging. Iron Law: no fixes without investigation. Traces data flow, tests hypotheses, stops after 3 failed fixes. |
 | `/design-review` | **Designer Who Codes** | Same audit as /plan-design-review, then fixes what it finds. Atomic commits, before/after screenshots. |
+| `/review` | **Staff Engineer** | Find the bugs that pass CI but blow up in production. Auto-fixes the obvious ones. Flags completeness gaps. |
+| `/cso` | **Chief Security Officer** | OWASP Top 10 + STRIDE threat model. Zero-noise: 17 false positive exclusions, 8/10+ confidence gate, independent finding verification. Each finding includes a concrete exploit scenario. |
+| `/codex` | **Second Opinion** | Independent code review from OpenAI Codex CLI. Three modes: review (pass/fail gate), adversarial challenge, and open consultation. Cross-model analysis when both `/review` and `/codex` have run. |
+| `/investigate` | **Debugger** | Systematic root-cause debugging. Iron Law: no fixes without investigation. Traces data flow, tests hypotheses, stops after 3 failed fixes. |
 | `/qa` | **QA Lead** | Test your app, find bugs, fix them with atomic commits, re-verify. Auto-generates regression tests for every fix. |
 | `/qa-only` | **QA Reporter** | Same methodology as /qa but report only. Pure bug report without code changes. |
 | `/benchmark` | **Performance Engineer** | Baseline page load times, Core Web Vitals, and resource sizes. Compare before/after on every PR. |
@@ -322,6 +364,7 @@ Shortcuts:
 | `/freeze` | **Edit Lock** — restrict file edits to one directory. Prevents accidental changes outside scope while debugging. |
 | `/guard` | **Full Safety** — `/careful` + `/freeze` in one command. Maximum safety for prod work. |
 | `/unfreeze` | **Unlock** — remove the `/freeze` boundary. |
+| `/connect-chrome` | **Chrome Controller** — launch Chrome with the Side Panel extension. Watch every action live, inspect CSS on any element, clean up pages, and take screenshots. Each tab gets its own agent. |
 | `/setup-deploy` | **Deploy Configurator** — one-time setup for `/land-and-deploy`. Detects your platform, production URL, and deploy commands. |
 | `/gstack-upgrade` | **Self-Updater** — upgrade to latest. Detects global vs vendored install, syncs both, shows what changed. |
 
@@ -331,17 +374,17 @@ Shortcuts:
 
 hstack works well with one sprint. It gets interesting with ten running at once.
 
-**Design is at the heart.** `/design-consultation` doesn't just pick fonts. It researches what's out there in your space, proposes safe choices AND creative risks, generates realistic mockups of your actual product, and writes `DESIGN.md` — and then `/design-review` and `/plan-eng-review` read what you chose. Design decisions flow through the whole system.
+**Design is at the heart.** `/design-consultation` builds your design system from scratch, researches the space, proposes creative risks, and writes `DESIGN.md`. `/design-shotgun` generates multiple visual variants and opens a comparison board so you can pick a direction. `/design-html` takes that approved mockup and generates production-quality HTML with Pretext, where text actually reflows on resize instead of breaking with hardcoded heights. Then `/design-review` and `/plan-eng-review` read what you chose. Design decisions flow through the whole system.
 
 **`/qa` was a massive unlock.** It let me go from 6 to 12 parallel workers. Claude Code saying *"I SEE THE ISSUE"* and then actually fixing it, generating a regression test, and verifying the fix — that changed how I work. The agent has eyes now.
 
-**Smart review routing.** Just like at a well-run startup: CEO doesn't have to look at infra bug fixes, design review isn't needed for backend changes. gstack tracks what reviews are run, figures out what's appropriate, and just does the smart thing. The Review Readiness Dashboard tells you where you stand before you ship.
+**Smart review routing.** Just like at a well-run startup: CEO doesn't have to look at infra bug fixes, design review isn't needed for backend changes. hstack tracks what reviews are run, figures out what's appropriate, and just does the smart thing. The Review Readiness Dashboard tells you where you stand before you ship.
 
 **Test everything.** `/ship` bootstraps test frameworks from scratch if your project doesn't have one. Every `/ship` run produces a coverage audit. Every `/qa` bug fix generates a regression test. 100% test coverage is the goal — tests make vibe coding safe instead of yolo coding.
 
 **`/document-release` is the engineer you never had.** It reads every doc file in your project, cross-references the diff, and updates everything that drifted. README, ARCHITECTURE, CONTRIBUTING, CLAUDE.md, TODOS — all kept current automatically. And now `/ship` auto-invokes it — docs stay current without an extra command.
 
-**Real browser mode.** `$B connect` launches your actual Chrome as a headed window controlled by Playwright. You watch Claude click, fill, and navigate in real time — same window, same screen. A subtle green shimmer at the top edge tells you which Chrome window gstack controls. All existing browse commands work unchanged. `$B disconnect` returns to headless. A Chrome extension Side Panel shows a live activity feed of every command and a chat sidebar where you can direct Claude. This is co-presence — Claude isn't remote-controlling a hidden browser, it's sitting next to you in the same cockpit.
+**Real browser mode.** `$B connect` launches your actual Chrome as a headed window controlled by Playwright. You watch Claude click, fill, and navigate in real time — same window, same screen. A subtle green shimmer at the top edge tells you which Chrome window hstack controls. All existing browse commands work unchanged. `$B disconnect` returns to headless. A Chrome extension Side Panel shows a live activity feed of every command and a chat sidebar where you can direct Claude. This is co-presence — Claude isn't remote-controlling a hidden browser, it's sitting next to you in the same cockpit.
 
 **Sidebar agent — your AI browser assistant.** Type natural language instructions in the Chrome side panel and a child Claude instance executes them. "Navigate to the settings page and screenshot it." "Fill out this form with test data." "Go through every item in this list and extract the prices." Each task gets up to 5 minutes. The sidebar agent runs in an isolated session, so it won't interfere with your main Claude Code window. It's like having a second pair of hands in the browser.
 
@@ -353,11 +396,11 @@ hstack works well with one sprint. It gets interesting with ten running at once.
 
 **Safety guardrails on demand.** Say "be careful" and `/careful` warns before any destructive command — rm -rf, DROP TABLE, force-push, git reset --hard. `/freeze` locks edits to one directory while debugging so Claude can't accidentally "fix" unrelated code. `/guard` activates both. `/investigate` auto-freezes to the module being investigated.
 
-**Proactive skill suggestions.** gstack notices what stage you're in — brainstorming, reviewing, debugging, testing — and suggests the right skill. Don't like it? Say "stop suggesting" and it remembers across sessions.
+**Proactive skill suggestions.** hstack notices what stage you're in — brainstorming, reviewing, debugging, testing — and suggests the right skill. Don't like it? Say "stop suggesting" and it remembers across sessions.
 
 ## 10-15 parallel sprints
 
-gstack is powerful with one sprint. It is transformative with ten running at once.
+hstack is powerful with one sprint. It is transformative with ten running at once.
 
 [Conductor](https://conductor.build) runs multiple Claude Code sessions in parallel — each in its own isolated workspace. One session running `/office-hours` on a new idea, another doing `/review` on a PR, a third implementing a feature, a fourth running `/qa` on staging, and six more on other branches. All at the same time. I regularly run 10-15 parallel sprints — that's the practical max right now.
 
@@ -405,9 +448,13 @@ Data is stored in [Supabase](https://supabase.com) (open source Firebase alterna
 
 **Stale install?** Run `/gstack-upgrade` — or set `auto_upgrade: true` in `~/.gstack/config.yaml`
 
-**Codex says "Skipped loading skill(s) due to invalid SKILL.md"?** Your Codex skill descriptions are stale. Fix: `cd ~/.codex/skills/gstack && git pull && ./setup --host codex` — or for repo-local installs: `cd "$(readlink -f .agents/skills/gstack)" && git pull && ./setup --host codex`
+**Want shorter commands?** `cd ~/.claude/skills/hstack && ./setup --no-prefix` — switches from `/hstack-qa` to `/qa`. Your choice is remembered for future upgrades.
 
-**Windows users:** gstack works on Windows 11 via Git Bash or WSL. Node.js is required in addition to Bun — Bun has a known bug with Playwright's pipe transport on Windows ([bun#4253](https://github.com/oven-sh/bun/issues/4253)). The browse server automatically falls back to Node.js. Make sure both `bun` and `node` are on your PATH.
+**Want namespaced commands?** `cd ~/.claude/skills/hstack && ./setup --prefix` — switches from `/qa` to `/hstack-qa`. Useful if you run other skill packs alongside hstack.
+
+**Codex says "Skipped loading skill(s) due to invalid SKILL.md"?** Your Codex skill descriptions are stale. Fix: `cd ~/.codex/skills/hstack && git pull && ./setup --host codex` — or for repo-local installs: `cd "$(readlink -f .agents/skills/hstack)" && git pull && ./setup --host codex`
+
+**Windows users:** hstack works on Windows 11 via Git Bash or WSL. Node.js is required in addition to Bun — Bun has a known bug with Playwright's pipe transport on Windows ([bun#4253](https://github.com/oven-sh/bun/issues/4253)). The browse server automatically falls back to Node.js. Make sure both `bun` and `node` are on your PATH.
 
 **Claude says it can't see the skills?** Make sure your project's `CLAUDE.md` has an hstack section. Add this:
 
@@ -415,11 +462,12 @@ Data is stored in [Supabase](https://supabase.com) (open source Firebase alterna
 ## hstack
 Use /browse from hstack for all web browsing. Never use mcp__claude-in-chrome__* tools.
 Available skills: /office-hours, /discover, /plan-ceo-review, /plan-eng-review,
-/plan-design-review, /plan-ux-review, /design-consultation, /review, /ship,
-/land-and-deploy, /canary, /benchmark, /browse, /qa, /qa-only, /design-review,
-/setup-browser-cookies, /setup-deploy, /retro, /investigate, /document-release,
-/codex, /cso, /autoplan, /autoplan-full, /autobuild, /autoaudit, /verify-loop, /context,
-/check-ci, /check-deps, /check-issues, /careful, /freeze, /guard, /unfreeze, /gstack-upgrade.
+/plan-design-review, /plan-ux-review, /design-consultation, /design-shotgun, /design-html,
+/review, /ship, /land-and-deploy, /canary, /benchmark, /browse, /connect-chrome, /qa,
+/qa-only, /design-review, /setup-browser-cookies, /setup-deploy, /retro, /investigate,
+/document-release, /codex, /cso, /autoplan, /autoplan-full, /autobuild, /autoaudit,
+/verify-loop, /intel, /check-ci, /check-deps, /check-issues, /learn, /careful, /freeze,
+/guard, /unfreeze, /gstack-upgrade.
 ```
 
 ## License
