@@ -412,7 +412,7 @@ plan's living status.
 
 When this skill produces findings (security issues, broken workflows, code quality
 problems, missing coverage, etc.), log each significant finding to the project
-intelligence file. This builds cross-session memory that `/context` reads.
+intelligence file. This builds cross-session memory that `/intel` reads.
 
 **When to log:** After producing any finding with a severity level (BROKEN, INCOMPLETE,
 MISSING, ORPHANED, FRAGILE, CRITICAL, HIGH, MEDIUM) or a significant discovery.
@@ -420,7 +420,7 @@ MISSING, ORPHANED, FRAGILE, CRITICAL, HIGH, MEDIUM) or a significant discovery.
 **How to log:** Run in the background (never block the user):
 
 ```bash
-~/.claude/skills/gstack/bin/gstack-intel-append '{"ts":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'","skill":"cso","event":"finding","severity":"SEVERITY","area":"AREA","file":"FILE_PATH","commit":"'$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")'"}' &
+~/.claude/skills/gstack/bin/gstack-intel-append '{"ts":"'\$(date -u +%Y-%m-%dT%H:%M:%SZ)'","skill":"cso","event":"finding","severity":"SEVERITY","area":"AREA","file":"FILE_PATH","commit":"'\$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")'"}' &
 ```
 
 Replace SEVERITY, AREA (short label like "auth", "billing", "api"), and FILE_PATH
