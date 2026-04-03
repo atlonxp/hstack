@@ -133,6 +133,13 @@ const CLEANUP_SELECTORS = {
   ],
 };
 
+// Configurable command timeout via BROWSE_CMD_TIMEOUT env var (ms).
+// Default: undefined (uses per-command defaults). Set to e.g. 1000 for local testing.
+const CMD_TIMEOUT = process.env.BROWSE_CMD_TIMEOUT ? parseInt(process.env.BROWSE_CMD_TIMEOUT, 10) : undefined;
+const NAV_TIMEOUT = CMD_TIMEOUT ?? 15000;   // goto, back, forward, reload
+const ACTION_TIMEOUT = CMD_TIMEOUT ?? 5000; // click, fill, select, hover, scroll
+const IDLE_SETTLE = CMD_TIMEOUT ? Math.min(CMD_TIMEOUT, 2000) : 2000; // networkidle settle
+
 export async function handleWriteCommand(
   command: string,
   args: string[],
@@ -149,26 +156,26 @@ export async function handleWriteCommand(
       const url = args[0];
       if (!url) throw new Error('Usage: browse goto <url>');
       await validateNavigationUrl(url);
-      const response = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 15000 });
+      const response = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT });
       const status = response?.status() || 'unknown';
       return `Navigated to ${url} (${status})`;
     }
 
     case 'back': {
       if (inFrame) throw new Error('Cannot use back inside a frame. Run \'frame main\' first.');
-      await page.goBack({ waitUntil: 'domcontentloaded', timeout: 15000 });
+      await page.goBack({ waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT });
       return `Back → ${page.url()}`;
     }
 
     case 'forward': {
       if (inFrame) throw new Error('Cannot use forward inside a frame. Run \'frame main\' first.');
-      await page.goForward({ waitUntil: 'domcontentloaded', timeout: 15000 });
+      await page.goForward({ waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT });
       return `Forward → ${page.url()}`;
     }
 
     case 'reload': {
       if (inFrame) throw new Error('Cannot use reload inside a frame. Run \'frame main\' first.');
-      await page.reload({ waitUntil: 'domcontentloaded', timeout: 15000 });
+      await page.reload({ waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT });
       return `Reloaded ${page.url()}`;
     }
 
@@ -189,7 +196,7 @@ export async function handleWriteCommand(
             return { value: option.value, text: option.text };
           });
           if (optionInfo) {
-            await resolved.locator.locator('xpath=ancestor::select').selectOption(optionInfo.value, { timeout: 5000 });
+            await resolved.locator.locator('xpath=ancestor::select').selectOption(optionInfo.value, { timeout: ACTION_TIMEOUT });
             return `Selected "${optionInfo.text}" (auto-routed from click on <option>) → now at ${page.url()}`;
           }
           // Real <option> with no parent <select> or custom [role=option] — fall through to normal click
@@ -199,9 +206,9 @@ export async function handleWriteCommand(
       const resolved = await bm.resolveRef(selector);
       try {
         if ('locator' in resolved) {
-          await resolved.locator.click({ timeout: 5000 });
+          await resolved.locator.click({ timeout: ACTION_TIMEOUT });
         } else {
-          await target.locator(resolved.selector).click({ timeout: 5000 });
+          await target.locator(resolved.selector).click({ timeout: ACTION_TIMEOUT });
         }
       } catch (err: any) {
         // Enhanced error guidance: clicking <option> elements always fails (not visible / timeout)
@@ -218,7 +225,7 @@ export async function handleWriteCommand(
         throw err;
       }
       // Wait for network to settle (catches XHR/fetch triggered by clicks)
-      await page.waitForLoadState('networkidle', { timeout: 2000 }).catch(() => {});
+      await page.waitForLoadState('networkidle', { timeout: IDLE_SETTLE }).catch(() => {});
       return `Clicked ${selector} → now at ${page.url()}`;
     }
 
@@ -228,12 +235,12 @@ export async function handleWriteCommand(
       if (!selector || !value) throw new Error('Usage: browse fill <selector> <value>');
       const resolved = await bm.resolveRef(selector);
       if ('locator' in resolved) {
-        await resolved.locator.fill(value, { timeout: 5000 });
+        await resolved.locator.fill(value, { timeout: ACTION_TIMEOUT });
       } else {
-        await target.locator(resolved.selector).fill(value, { timeout: 5000 });
+        await target.locator(resolved.selector).fill(value, { timeout: ACTION_TIMEOUT });
       }
       // Wait for network to settle (form validation XHRs)
-      await page.waitForLoadState('networkidle', { timeout: 2000 }).catch(() => {});
+      await page.waitForLoadState('networkidle', { timeout: IDLE_SETTLE }).catch(() => {});
       return `Filled ${selector}`;
     }
 
@@ -243,12 +250,12 @@ export async function handleWriteCommand(
       if (!selector || !value) throw new Error('Usage: browse select <selector> <value>');
       const resolved = await bm.resolveRef(selector);
       if ('locator' in resolved) {
-        await resolved.locator.selectOption(value, { timeout: 5000 });
+        await resolved.locator.selectOption(value, { timeout: ACTION_TIMEOUT });
       } else {
-        await target.locator(resolved.selector).selectOption(value, { timeout: 5000 });
+        await target.locator(resolved.selector).selectOption(value, { timeout: ACTION_TIMEOUT });
       }
       // Wait for network to settle (dropdown-triggered requests)
-      await page.waitForLoadState('networkidle', { timeout: 2000 }).catch(() => {});
+      await page.waitForLoadState('networkidle', { timeout: IDLE_SETTLE }).catch(() => {});
       return `Selected "${value}" in ${selector}`;
     }
 
@@ -257,9 +264,9 @@ export async function handleWriteCommand(
       if (!selector) throw new Error('Usage: browse hover <selector>');
       const resolved = await bm.resolveRef(selector);
       if ('locator' in resolved) {
-        await resolved.locator.hover({ timeout: 5000 });
+        await resolved.locator.hover({ timeout: ACTION_TIMEOUT });
       } else {
-        await target.locator(resolved.selector).hover({ timeout: 5000 });
+        await target.locator(resolved.selector).hover({ timeout: ACTION_TIMEOUT });
       }
       return `Hovered ${selector}`;
     }
@@ -283,9 +290,9 @@ export async function handleWriteCommand(
       if (selector) {
         const resolved = await bm.resolveRef(selector);
         if ('locator' in resolved) {
-          await resolved.locator.scrollIntoViewIfNeeded({ timeout: 5000 });
+          await resolved.locator.scrollIntoViewIfNeeded({ timeout: ACTION_TIMEOUT });
         } else {
-          await target.locator(resolved.selector).scrollIntoViewIfNeeded({ timeout: 5000 });
+          await target.locator(resolved.selector).scrollIntoViewIfNeeded({ timeout: ACTION_TIMEOUT });
         }
         return `Scrolled ${selector} into view`;
       }
@@ -297,7 +304,7 @@ export async function handleWriteCommand(
       const selector = args[0];
       if (!selector) throw new Error('Usage: browse wait <selector|--networkidle|--load|--domcontentloaded>');
       if (selector === '--networkidle') {
-        const timeout = args[1] ? parseInt(args[1], 10) : 15000;
+        const timeout = args[1] ? parseInt(args[1], 10) : NAV_TIMEOUT;
         await page.waitForLoadState('networkidle', { timeout });
         return 'Network idle';
       }
@@ -309,7 +316,7 @@ export async function handleWriteCommand(
         await page.waitForLoadState('domcontentloaded');
         return 'DOM content loaded';
       }
-      const timeout = args[1] ? parseInt(args[1], 10) : 15000;
+      const timeout = args[1] ? parseInt(args[1], 10) : NAV_TIMEOUT;
       const resolved = await bm.resolveRef(selector);
       if ('locator' in resolved) {
         await resolved.locator.waitFor({ state: 'visible', timeout });
