@@ -1,0 +1,395 @@
+---
+name: auto-ux-audit
+preamble-tier: 4
+version: 1.0.0
+description: |
+  Single-persona UX audit with auto-fix. Runs /ux-audit for one specified persona,
+  then fixes all friction points, dead ends, and UX gaps found in the source code.
+  Each fix gets an atomic commit and browser re-verification. Use when asked to
+  "fix the UX for admins", "auto ux audit", "audit and fix persona workflow",
+  or "fix the new user experience". For report-only mode, use /ux-audit.
+  For all personas at once, use /auto-ux-audit-full. (gstack)
+allowed-tools:
+  - Bash
+  - Read
+  - Write
+  - Edit
+  - Glob
+  - Grep
+  - AskUserQuestion
+  - WebSearch
+---
+
+{{PREAMBLE}}
+
+{{INTEL_LOGGING}}
+
+{{BASE_BRANCH_DETECT}}
+
+# /auto-ux-audit: Single-Persona UX Audit + Auto-Fix
+
+You are a UX engineer. You simulate a specific persona's workflows on a live app,
+find every friction point, then fix each one in source code with atomic commits and
+browser re-verification.
+
+This is `/ux-audit` + `/qa`'s fix loop combined into one skill, scoped to a single persona.
+
+## How This Differs
+
+| Skill | Scope | Fixes code? | Browser? |
+|-------|-------|-------------|----------|
+| `/ux-audit` | All personas | No — report only | Yes |
+| `/qa` | Bugs, errors | Yes | Yes |
+| **`/auto-ux-audit`** | **One persona** | **Yes** | **Yes** |
+| `/auto-ux-audit-full` | All personas | Yes | Yes |
+
+## Setup
+
+**Parse the user's request for these parameters:**
+
+| Parameter | Default | Override example |
+|-----------|---------|-----------------|
+| Target URL | (auto-detect or required) | `http://localhost:3000` |
+| Persona | (required — ask if not specified) | `--persona "admin"`, `as a new user` |
+| Auth | None | `Sign in as admin@test.com` |
+| Scope | Full workflow | `Focus on the onboarding flow` |
+| Tier | Standard | `--quick` (critical friction only), `--exhaustive` (all friction) |
+| Output dir | `.gstack/ux-audit/` | `Output to /tmp/ux` |
+
+**Tiers determine which friction points get fixed:**
+- **Quick:** Fix critical friction only (score 0 — dead ends, blocked workflows)
+- **Standard:** + poor friction (score 0-1) (default)
+- **Exhaustive:** + minor friction (score 0-2, everything below excellent)
+
+**If no persona specified**, use AskUserQuestion:
+
+"Which persona should I simulate and fix UX for? Describe the role and how they
+authenticate. Example: 'Admin (admin@test.com / pass123) who manages users and settings.'
+
+A) Let me describe the persona
+B) Auto-discover personas from the app, then I'll pick one"
+
+RECOMMENDATION: Choose A — you know your users best.
+
+**STOP.** Do NOT proceed until persona is confirmed.
+
+**Find the browse binary:**
+
+{{BROWSE_SETUP}}
+
+**Set 1-second timeout (local testing):**
+
+```bash
+export BROWSE_CMD_TIMEOUT=1000
+$B goto <target-url>
+```
+
+If this fails, the app is not running. Ask the user.
+
+**Check for clean working tree:**
+
+```bash
+git status --porcelain
+```
+
+If dirty, use AskUserQuestion:
+
+"Your working tree has uncommitted changes. /auto-ux-audit needs a clean tree so
+each UX fix gets its own atomic commit."
+
+- A) Commit my changes first
+- B) Stash my changes
+- C) Abort
+
+RECOMMENDATION: Choose A.
+
+**STOP.** Wait for user choice.
+
+**Create output directories:**
+
+```bash
+UX_DIR=".gstack/ux-audit"
+mkdir -p "$UX_DIR/screenshots" "$UX_DIR/journeys"
+```
+
+---
+
+{{LEARNINGS_SEARCH}}
+
+## Phase 1: Persona Setup
+
+Build or load the persona definition:
+
+```
+PERSONA:
+  ID: P1
+  Role: {role name}
+  Goal: {what they're trying to accomplish}
+  Auth: {credentials or "none"}
+  Entry point: {starting URL}
+  Frequency: {daily / weekly / first-time / occasional}
+  Permissions: {what they can do}
+```
+
+If `.gstack/ux-audit/personas.md` exists from a prior `/ux-audit` run, offer to
+reuse the matching persona instead of re-defining.
+
+---
+
+## Phase 2: Workflow Discovery & Scripting
+
+Define 2-4 critical workflows for this persona. Derive from:
+
+1. The persona's stated goal
+2. The app's navigation structure (browse and inspect)
+3. Common sense for the role
+
+```bash
+# Authenticate as the persona
+$B goto <login-url>
+$B snapshot -i
+# Fill login form...
+$B screenshot "$UX_DIR/screenshots/P1-auth.png"
+
+# Explore what this persona can access
+$B snapshot -i
+$B links
+```
+
+Script each workflow:
+
+```
+WORKFLOW: P1-W1 "{persona} {action}"
+PRIORITY: Critical / Important / Edge
+STEPS:
+  1. {action}
+  2. {action}
+  ...
+SUCCESS: {what confirms the workflow completed}
+```
+
+Write to `.gstack/ux-audit/journeys/P1-workflows.md`.
+
+---
+
+## Phase 3: Execute & Score
+
+Execute each workflow step-by-step, scoring every step on 5 UX dimensions:
+
+| Dimension | Question | Score 0-3 |
+|-----------|----------|-----------|
+| **Findability** | Can the persona find the action? | 0=hidden, 3=obvious |
+| **Clarity** | Is it clear what to do? | 0=confusing, 3=self-evident |
+| **Feedback** | Does the app confirm what happened? | 0=silent, 3=clear confirmation |
+| **Recovery** | Can the persona recover from mistakes? | 0=stuck, 3=easy undo |
+| **Speed** | Is the interaction responsive? | 0=broken/timeout, 3=instant |
+
+For each step:
+
+```bash
+$B snapshot -i
+$B screenshot "$UX_DIR/screenshots/P1-W1-step-N-before.png"
+# Perform action...
+$B snapshot -D
+$B screenshot "$UX_DIR/screenshots/P1-W1-step-N-after.png"
+$B console --errors
+```
+
+**Record every friction point** (any dimension scoring 0-1):
+
+```
+FRICTION: P1-W1-F1
+Step: N — {description}
+Dimension: {which} (score: N)
+What happened: {what the persona experiences}
+Expected: {what should happen}
+Impact: CRITICAL / HIGH / MEDIUM / LOW
+Fixable: YES / NO (third-party, infrastructure)
+Screenshot: {filename}
+```
+
+Record baseline scores before any fixes.
+
+---
+
+## Phase 4: Triage
+
+Sort all friction points by impact, then filter by tier:
+
+- **Quick:** Fix CRITICAL only (score 0 — dead ends)
+- **Standard:** Fix CRITICAL + HIGH (score 0-1) (default)
+- **Exhaustive:** Fix CRITICAL + HIGH + MEDIUM (score 0-2)
+
+Mark friction that cannot be fixed from source code as "deferred" regardless of tier:
+- Third-party widget issues
+- Infrastructure/hosting constraints
+- Requires product decision (ambiguous UX choice)
+
+For product decisions, use AskUserQuestion with specific options before deferring.
+
+---
+
+## Phase 5: Fix Loop
+
+For each fixable friction point, in impact order:
+
+### 5a. Locate source
+
+```bash
+# Find the component/page responsible for the friction
+# Grep for route definitions, component names, text content
+```
+
+Trace from the URL/page where friction was found → route handler → component/template → styles.
+
+### 5b. Understand the UX intent
+
+Before fixing, understand WHY the friction exists:
+- Is it a missing feature? → implement it
+- Is it a poor layout/hierarchy? → restructure
+- Is it a missing feedback mechanism? → add confirmation/toast/status
+- Is it a navigation problem? → add links/buttons/breadcrumbs
+- Is it a missing empty state? → add placeholder content
+- Is it a confusing label/copy? → rewrite
+
+### 5c. Fix
+
+Make the **minimal fix** that resolves the friction for this persona:
+- Improve findability: add visible buttons, better labels, breadcrumbs
+- Improve clarity: better copy, visual hierarchy, placeholder text
+- Improve feedback: add success/error messages, loading states, confirmations
+- Improve recovery: add undo, cancel, back navigation, error messages with actions
+- Improve speed: fix broken interactions (if timeout at 1s, it's genuinely broken)
+
+Do NOT refactor surrounding code. Do NOT add features beyond what the friction requires.
+
+### 5d. Commit
+
+```bash
+git add <only-changed-files>
+git commit -m "ux(P1): FRICTION-NNN — short description"
+```
+
+One commit per fix. Never bundle multiple fixes.
+Message format: `ux({persona-id}): FRICTION-NNN — {what improved}`
+
+### 5e. Re-verify in browser
+
+Navigate back to the affected page AS THE SAME PERSONA and re-test the step:
+
+```bash
+$B goto <affected-url>
+$B snapshot -i
+$B screenshot "$UX_DIR/screenshots/P1-W1-F1-after.png"
+$B snapshot -D
+$B console --errors
+```
+
+Re-score all 5 dimensions for this step. Record the improvement.
+
+### 5f. Classify
+
+- **verified**: re-test confirms friction is resolved, score improved
+- **best-effort**: fix applied but couldn't fully verify
+- **reverted**: fix made things worse → `git revert HEAD` → mark as "deferred"
+- **partial**: friction reduced but not eliminated (e.g., score went from 0 to 2)
+
+### 5g. Self-Regulation
+
+Every 5 fixes (or after any revert), compute WTF-likelihood:
+
+```
+WTF-LIKELIHOOD:
+  Start at 0%
+  Each revert:                +15%
+  Each fix touching >3 files: +5%
+  After fix 15:               +1% per additional fix
+  All remaining LOW impact:   +10%
+  Touching unrelated files:   +20%
+```
+
+**If WTF > 20%:** STOP. Show progress so far. Ask whether to continue.
+
+**Hard cap: 30 fixes.** UX fixes have higher blast radius than bug fixes — stop sooner.
+
+---
+
+## Phase 6: Final Verification
+
+After all fixes, re-run the full persona workflow end-to-end:
+
+```bash
+# Re-authenticate as persona
+# Re-execute each workflow step
+# Re-score all dimensions
+# Screenshot the final state
+```
+
+Compute final persona score and compare with baseline.
+
+**If final score is WORSE than baseline:** WARN prominently — something regressed.
+
+---
+
+## Phase 7: Report
+
+Write the report to `.gstack/ux-audit/auto-ux-audit-{persona}-{YYYY-MM-DD}.md`:
+
+```markdown
+# Auto UX Audit Report — {Persona Name}
+Date: {date}
+Target: {url}
+Persona: {role} — {goal}
+Tier: {quick/standard/exhaustive}
+
+## Summary
+- Friction points found: {N}
+- Fixes applied: {M} (verified: X, best-effort: Y, reverted: Z, partial: W)
+- Deferred: {D}
+- UX score: {baseline}% → {final}% (+{delta}%)
+
+## Friction Points Fixed
+| ID | Step | Dimension | Before | After | Status | Commit |
+|----|------|-----------|--------|-------|--------|--------|
+| F1 | Login form | Clarity | 1 | 3 | verified | abc123 |
+| F2 | ... | ... | ... | ... | ... | ... |
+
+## Deferred Friction
+{friction points not fixed, with reasons}
+
+## Before/After Screenshots
+{paired screenshots for each fix}
+
+## Workflow Scores
+| Workflow | Baseline | Final | Delta |
+|----------|----------|-------|-------|
+| P1-W1 | 45% | 82% | +37% |
+| ... | ... | ... | ... |
+```
+
+**PR Summary:** Include one-liner:
+> "UX audit (admin): found N friction points, fixed M, UX score X% → Y%."
+
+---
+
+## Phase 8: TODOS.md Update
+
+If the repo has a `TODOS.md`:
+
+1. **Deferred friction** → add as TODOs with persona, dimension, and impact
+2. **Fixed friction in TODOS.md** → annotate with "Fixed by /auto-ux-audit on {branch}, {date}"
+
+---
+
+{{LEARNINGS_LOG}}
+
+## Rules (auto-ux-audit-specific)
+
+1. **One persona per run.** For all personas, use `/auto-ux-audit-full`.
+2. **Clean working tree required.** Commit/stash before starting.
+3. **One commit per fix.** Never bundle multiple friction fixes.
+4. **Think as the persona.** Every fix should make sense from their perspective.
+5. **Revert on regression.** If a fix makes the workflow worse, revert immediately.
+6. **Self-regulate.** Follow the WTF-likelihood heuristic. UX fixes are higher risk.
+7. **`BROWSE_CMD_TIMEOUT=1000` always.** Local testing, 1s timeout. No exceptions.
+8. **Product decisions need user input.** If a friction fix requires choosing between UX approaches (e.g., modal vs inline, redirect vs toast), use AskUserQuestion.

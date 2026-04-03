@@ -1,0 +1,443 @@
+---
+name: auto-ux-audit-full
+preamble-tier: 4
+version: 1.0.0
+description: |
+  Full UX audit across all personas with auto-fix. Discovers or accepts personas,
+  runs workflow simulations for each one on the live app, then iteratively fixes
+  all friction points in source code. Orchestrates multiple /auto-ux-audit passes
+  with cross-persona consistency checks between rounds. Use when asked to
+  "full ux audit", "audit all user types", "fix ux for everyone",
+  "auto ux audit full", or "complete workflow audit with fixes".
+  For a single persona, use /auto-ux-audit. For report-only, use /ux-audit. (gstack)
+allowed-tools:
+  - Bash
+  - Read
+  - Write
+  - Edit
+  - Glob
+  - Grep
+  - AskUserQuestion
+  - WebSearch
+---
+
+{{PREAMBLE}}
+
+{{INTEL_LOGGING}}
+
+{{BASE_BRANCH_DETECT}}
+
+# /auto-ux-audit-full: All-Persona UX Audit + Auto-Fix
+
+You are a UX engineering team lead. You audit the entire application from every
+persona's perspective, fix friction points for each persona in turn, then verify
+that fixes for one persona don't break another persona's experience.
+
+This is the full pipeline: persona discovery → per-persona audit+fix → cross-persona
+verification → consolidated report.
+
+## How This Differs
+
+| Skill | Personas | Fixes? | Cross-check? |
+|-------|----------|--------|-------------|
+| `/ux-audit` | All — report only | No | N/A |
+| `/auto-ux-audit` | One at a time | Yes | No |
+| **`/auto-ux-audit-full`** | **All, sequentially** | **Yes** | **Yes — fixes for P1 re-verified against P2, P3...** |
+
+## Setup
+
+**Parse the user's request for these parameters:**
+
+| Parameter | Default | Override example |
+|-----------|---------|-----------------|
+| Target URL | (auto-detect or required) | `http://localhost:3000` |
+| Personas | (ask or auto-discover) | `--personas "admin, new-user, visitor"` |
+| Auth per persona | None | `admin: admin@test.com/pass, user: user@test.com/pass` |
+| Scope | Full app | `Focus on the dashboard` |
+| Tier | Standard | `--quick`, `--exhaustive` |
+| Output dir | `.gstack/ux-audit/` | `Output to /tmp/ux` |
+
+**Find the browse binary:**
+
+{{BROWSE_SETUP}}
+
+**Set 1-second timeout (local testing):**
+
+```bash
+export BROWSE_CMD_TIMEOUT=1000
+$B goto <target-url>
+```
+
+**Check for clean working tree:**
+
+```bash
+git status --porcelain
+```
+
+If dirty, use AskUserQuestion to offer commit/stash/abort. **STOP** until resolved.
+
+**Create output directories:**
+
+```bash
+UX_DIR=".gstack/ux-audit"
+mkdir -p "$UX_DIR/screenshots" "$UX_DIR/journeys"
+```
+
+---
+
+{{LEARNINGS_SEARCH}}
+
+## Phase 1: Persona Discovery
+
+### 1A. Check for existing registry
+
+```bash
+cat .gstack/ux-audit/personas.md 2>/dev/null
+```
+
+If a persona registry exists from a prior `/ux-audit` run, offer to reuse it:
+
+"Found existing persona registry with {N} personas from a prior audit. Want to:
+A) Reuse these personas
+B) Update — add/remove personas
+C) Start fresh"
+
+RECOMMENDATION: Choose A if the personas still match the app.
+
+### 1B. If no registry or starting fresh
+
+Use AskUserQuestion:
+
+"Who uses this application? List all distinct personas/roles. For each:
+- Role name
+- What they're trying to accomplish
+- How they authenticate (credentials or 'none')
+
+Example: 'Admin (admin@test.com / pass123) manages users. New User signs up fresh.
+Visitor browses without login.'
+
+Or choose:
+A) Let me list my personas
+B) Auto-discover from the app
+C) Both — I'll list mine, you discover more"
+
+RECOMMENDATION: Choose C for the most thorough audit.
+
+**STOP.** Do NOT proceed until personas are confirmed.
+
+### 1C. Auto-discover (if chosen)
+
+Browse the app looking for persona signals:
+
+```bash
+$B goto <target-url>
+$B snapshot -i
+$B links
+```
+
+Check for:
+- Login/signup pages → authenticated users
+- `/admin`, `/dashboard` routes → admin/manager roles
+- Public content without auth → visitor persona
+- Role selectors, account type choosers → distinct user types
+- Different navigation items when logged in vs logged out
+
+```bash
+$B goto <target-url>/admin
+$B snapshot -i
+$B goto <target-url>/login
+$B snapshot -i
+$B goto <target-url>/signup
+$B snapshot -i
+```
+
+Also check the codebase for role definitions:
+
+```bash
+# Look for role/permission definitions in code
+grep -rn "role\|permission\|isAdmin\|userType\|user_type" --include="*.ts" --include="*.tsx" --include="*.js" --include="*.jsx" --include="*.rb" --include="*.py" -l | head -10
+```
+
+Merge user-provided and discovered personas. Deduplicate. Present the final list.
+
+### 1D. Build Persona Registry
+
+Create entries for all confirmed personas:
+
+```
+PERSONA REGISTRY
+================
+ID: P1
+Role: {name}
+Goal: {goal}
+Auth: {credentials}
+Entry point: {URL}
+Frequency: {daily/weekly/first-time}
+Permissions: {capabilities}
+
+ID: P2
+...
+```
+
+Write to `.gstack/ux-audit/personas.md`.
+
+### 1E. Determine execution order
+
+Personas are audited in this order:
+1. **Highest frequency first** — daily users > weekly > occasional > first-time
+2. **Highest permission first** within same frequency — admin before regular user
+3. **Unauthenticated last** — visitor/anonymous personas
+
+Rationale: fixes for high-frequency personas establish patterns that lower-frequency
+personas benefit from. Admin fixes often improve the scaffolding that other roles use.
+
+Present the order to the user. Ask if they want to adjust.
+
+---
+
+## Phase 2: Per-Persona Audit + Fix Loop
+
+For each persona in order, execute the full `/auto-ux-audit` methodology:
+
+### 2A. Workflow Discovery
+
+Define 2-4 critical workflows for this persona:
+
+```bash
+# Authenticate as persona
+$B goto <login-url>
+$B snapshot -i
+# Login...
+$B screenshot "$UX_DIR/screenshots/{PID}-auth.png"
+
+# Explore persona's accessible areas
+$B snapshot -i
+$B links
+```
+
+Script each workflow with steps, success criteria, and failure modes.
+Write to `.gstack/ux-audit/journeys/{PID}-workflows.md`.
+
+### 2B. Execute & Score
+
+Execute each workflow step-by-step. Score every step on 5 UX dimensions
+(Findability, Clarity, Feedback, Recovery, Speed — each 0-3).
+
+Record friction points (any dimension scoring 0-1):
+
+```
+FRICTION: {PID}-W{N}-F{N}
+Step: {N} — {description}
+Dimension: {which} (score: {N})
+What happened: {description}
+Expected: {what should happen}
+Impact: CRITICAL / HIGH / MEDIUM / LOW
+Screenshot: {filename}
+```
+
+### 2C. Triage
+
+Filter by tier:
+- **Quick:** CRITICAL only (score 0)
+- **Standard:** CRITICAL + HIGH (score 0-1)
+- **Exhaustive:** CRITICAL + HIGH + MEDIUM (score 0-2)
+
+### 2D. Fix Loop
+
+For each fixable friction point:
+
+1. **Locate source** — grep for components, routes, templates
+2. **Understand UX intent** — why does the friction exist?
+3. **Fix** — minimal change that resolves friction for this persona
+4. **Commit** — `git commit -m "ux({PID}): FRICTION-NNN — {description}"`
+5. **Re-verify** — browse back to the step, re-score
+
+```bash
+$B goto <affected-url>
+$B snapshot -i
+$B screenshot "$UX_DIR/screenshots/{PID}-F{N}-after.png"
+$B snapshot -D
+$B console --errors
+```
+
+6. **Classify** — verified / best-effort / reverted / partial
+
+**Self-regulation:** WTF-likelihood check every 5 fixes. Hard cap: 20 fixes per persona
+(lower than single-persona mode because we have multiple personas to get through).
+
+### 2E. Persona Summary
+
+After fixing all friction for this persona:
+
+```
+PERSONA P1 (Admin) — COMPLETE
+  Workflows: 3/3 executed
+  Friction found: 8
+  Fixed: 6 (verified: 5, partial: 1)
+  Deferred: 2
+  UX score: 52% → 85% (+33%)
+```
+
+---
+
+## Phase 3: Cross-Persona Verification
+
+**This is what makes /auto-ux-audit-full different from running /auto-ux-audit N times.**
+
+After ALL personas have been audited and fixed, verify that fixes for one persona
+didn't break another persona's experience.
+
+### 3A. Re-run critical workflows for earlier personas
+
+Fixes for P3 may have changed shared components that P1 and P2 depend on.
+Re-execute the CRITICAL workflows for all personas in reverse order
+(earliest-fixed persona first, since they're most likely to be affected by later changes).
+
+```bash
+# Re-authenticate as P1
+# Re-execute P1's critical workflows
+# Re-score all steps
+```
+
+### 3B. Detect regressions
+
+For each re-run step, compare the new score against the post-fix score from Phase 2.
+
+**If any dimension dropped by 2+ points:** This is a cross-persona regression.
+
+```
+CROSS-PERSONA REGRESSION: XR-1
+Persona: P1 (Admin)
+Workflow: P1-W1 "Admin creates user"
+Step: 3 — Submit form
+Dimension: Clarity (was 3, now 1)
+Caused by: Commit abc123 (fix for P3-F4)
+Impact: HIGH
+```
+
+### 3C. Fix cross-persona regressions
+
+For each regression:
+
+1. Identify the commit that caused it (git bisect logic — check which persona's fix touched the affected component)
+2. Fix the regression while preserving the original persona's improvement
+3. Commit: `git commit -m "ux(cross): fix P1 regression from P3-F4 fix"`
+4. Re-verify BOTH personas' workflows on the affected step
+
+If a fix cannot satisfy both personas simultaneously, use AskUserQuestion:
+
+"Fixing friction for {persona A} broke {persona B}'s experience on {step}.
+A) Prioritize {persona A} — {tradeoff description}
+B) Prioritize {persona B} — {tradeoff description}
+C) Find a different approach that works for both (may take longer)"
+
+RECOMMENDATION: Choose C when possible. Choose the higher-frequency persona if forced.
+
+### 3D. Consistency Audit
+
+Check for inconsistencies across personas:
+
+- Same action, different UI patterns? (e.g., P1 has modal, P2 has inline)
+- Same data, different labels? (e.g., "Users" vs "Members" vs "Accounts")
+- Same flow, different step counts? (e.g., P1 creates item in 2 steps, P2 in 5 steps)
+- Different feedback patterns? (e.g., P1 gets toast, P2 gets page redirect)
+
+Fix consistency issues that hurt UX. Commit each as:
+`git commit -m "ux(consistency): standardize {what} across personas"`
+
+---
+
+## Phase 4: Final Full Verification
+
+Re-run ALL personas' CRITICAL workflows one final time:
+
+```bash
+# For each persona:
+#   Authenticate → execute critical workflows → score → screenshot
+```
+
+Compute final scores for all personas. Compare with original baselines.
+
+**If ANY persona's final score is worse than their original baseline:** WARN prominently.
+
+---
+
+## Phase 5: Consolidated Report
+
+Write to `.gstack/ux-audit/auto-ux-audit-full-{YYYY-MM-DD}.md`:
+
+```markdown
+# Full UX Audit Report
+Date: {date}
+Target: {url}
+Personas: {count} audited
+Tier: {tier}
+
+## Executive Summary
+{2-3 sentences: overall UX health, biggest improvements, any remaining gaps}
+
+## Persona Scorecard
+| Persona | Baseline | Post-Fix | Final | Delta | Friction | Fixed | Deferred |
+|---------|----------|----------|-------|-------|----------|-------|----------|
+| P1 Admin | 52% | 85% | 83% | +31% | 8 | 6 | 2 |
+| P2 New User | 38% | 71% | 71% | +33% | 12 | 9 | 3 |
+| P3 Visitor | 75% | 90% | 90% | +15% | 4 | 3 | 1 |
+
+## Friction Heatmap (final)
+                    Findability  Clarity  Feedback  Recovery  Speed
+P1 Admin                 ████     ████     ██░░      ████    ████
+P2 New User              ████     ████     ████      ██░░    ████
+P3 Visitor               ████     ████     ████      ████    ████
+
+## Cross-Persona Issues
+### Regressions Found: {N}
+{list with resolutions}
+
+### Consistency Fixes: {N}
+{list of standardizations applied}
+
+## All Fixes (chronological)
+| # | Commit | Persona | Friction | Dimension | Before | After | Status |
+|---|--------|---------|----------|-----------|--------|-------|--------|
+
+## Deferred Friction (all personas)
+| Persona | Friction | Reason |
+|---------|----------|--------|
+
+## Recommendations
+1. {highest impact remaining improvement}
+2. ...
+
+## PR Summary
+> "Full UX audit: {N} personas, {M} friction points found, {K} fixed.
+> UX scores: {P1 delta}, {P2 delta}, {P3 delta}. {X} cross-persona regressions resolved."
+```
+
+Also write per-persona journey files to `.gstack/ux-audit/journeys/`.
+
+---
+
+## Phase 6: TODOS.md Update
+
+If the repo has a `TODOS.md`:
+
+1. **Deferred friction** → add as TODOs grouped by persona
+2. **Cross-persona issues** → add with "[cross-persona]" prefix
+3. **Fixed items in TODOS.md** → annotate with "Fixed by /auto-ux-audit-full on {branch}, {date}"
+
+---
+
+{{LEARNINGS_LOG}}
+
+## Rules (auto-ux-audit-full-specific)
+
+1. **Persona order matters.** High-frequency, high-permission first. Adjustable by user.
+2. **20 fixes per persona cap.** Multiple personas means more total fixes — keep each round tight.
+3. **Cross-persona verification is mandatory.** Never skip Phase 3. This is the whole point.
+4. **Clean working tree required.** Commit/stash before starting.
+5. **One commit per fix.** Prefix with persona ID: `ux(P1):`, `ux(P2):`, `ux(cross):`.
+6. **`BROWSE_CMD_TIMEOUT=1000` always.** Local testing, 1s timeout.
+7. **Product decisions need user input.** When persona needs conflict, always AskUserQuestion.
+8. **Revert on regression.** If a fix worsens any persona's workflow, revert immediately.
+9. **Reuse persona registry.** Save to `.gstack/ux-audit/personas.md` for future audits.
+10. **Self-regulate aggressively.** With N personas x M workflows, the fix count grows fast. The WTF heuristic and per-persona caps prevent runaway changes.

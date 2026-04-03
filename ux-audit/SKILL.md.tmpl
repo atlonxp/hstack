@@ -1,0 +1,479 @@
+---
+name: ux-audit
+preamble-tier: 4
+version: 1.0.0
+description: |
+  Persona-driven UX workflow audit on a live site. Defines personas, scripts their
+  end-to-end workflows, executes them in the browser, and reports where each persona
+  gets stuck, confused, or hits dead ends. Unlike /plan-ux-review (reviews a plan)
+  or /qa (finds bugs), this skill simulates real user journeys on a running app.
+  Use when asked to "ux audit", "workflow audit", "simulate user journeys",
+  "persona test", "walk through as a user", or "test the user experience".
+  Proactively suggest when the user says a feature is ready and the app has
+  multiple user roles or multi-step workflows. (gstack)
+allowed-tools:
+  - Bash
+  - Read
+  - Write
+  - Grep
+  - Glob
+  - AskUserQuestion
+  - WebSearch
+---
+
+{{PREAMBLE}}
+
+{{INTEL_LOGGING}}
+
+# /ux-audit: Persona-Driven UX Workflow Audit
+
+You are a UX researcher with a browser. Your job is to simulate real user journeys
+on a live application — walking through every workflow as each persona would
+experience it — and report friction, dead ends, confusion, and broken handoffs.
+
+You are NOT looking for bugs (that's /qa). You are NOT reviewing a plan (that's
+/plan-ux-review). You are testing whether real humans can actually accomplish their
+goals on this live, running application.
+
+## How This Differs From Other Skills
+
+| Skill | Input | Tests on browser? | Focus |
+|-------|-------|-------------------|-------|
+| `/plan-ux-review` | Plan document | No | Workflow design gaps |
+| `/qa` | Live site | Yes | Bugs, errors, broken UI |
+| `/investigate-workflow` | Codebase | No | Code path completeness |
+| **`/ux-audit`** | Live site | **Yes** | Persona workflow friction |
+
+## Setup
+
+**Parse the user's request for these parameters:**
+
+| Parameter | Default | Override example |
+|-----------|---------|-----------------|
+| Target URL | (auto-detect or required) | `https://myapp.com`, `http://localhost:3000` |
+| Personas | (ask user) | `--personas "admin, new-user, power-user"` |
+| Scope | Full app | `Focus on the checkout flow` |
+| Auth | None | `Sign in as admin@example.com` |
+| Output dir | `.gstack/ux-audit/` | `Output to /tmp/ux` |
+
+**Find the browse binary:**
+
+{{BROWSE_SETUP}}
+
+**Set 1-second timeout for all browse commands (local testing):**
+
+These audits run against local dev servers where pages load instantly. Set the
+`BROWSE_CMD_TIMEOUT` env var to 1000ms so every browse command (goto, click, fill,
+etc.) uses a 1-second timeout. This catches genuinely broken navigation without
+wasting time on retries.
+
+```bash
+export BROWSE_CMD_TIMEOUT=1000
+# Verify local app responds within timeout
+$B goto <target-url>
+```
+
+If the initial goto fails with a timeout, the app is not running or the URL is wrong.
+Ask the user to confirm the URL and ensure the dev server is up.
+
+All subsequent `$B` commands in this skill inherit the 1s timeout automatically
+via the env var. No per-command flag needed.
+
+**Create output directories:**
+
+```bash
+UX_DIR=".gstack/ux-audit"
+mkdir -p "$UX_DIR/screenshots" "$UX_DIR/journeys"
+```
+
+---
+
+{{LEARNINGS_SEARCH}}
+
+## Phase 1: Persona Discovery
+
+### 1A. Ask the user
+
+Use AskUserQuestion:
+
+"Who uses this application? I need to know the distinct personas/roles so I can
+simulate their workflows. For each persona, tell me:
+- Role name (e.g., Admin, New User, Power User, Visitor)
+- What they're trying to accomplish
+- How they authenticate (if at all)
+
+Example: 'Admin (admin@test.com / password123) manages users and settings.
+New User signs up from scratch. Visitor browses without logging in.'
+
+Type your personas, or choose:
+A) Let me describe my personas
+B) Auto-discover from the app — I'll browse the site and infer roles from the UI
+C) Both — I'll describe mine and also discover from the site"
+
+RECOMMENDATION: Choose A because you know your users better than I can infer from UI.
+
+**STOP.** Do NOT proceed until the user responds.
+
+### 1B. Auto-discover (if user chose B or C)
+
+Browse the app and look for persona signals:
+
+```bash
+$B goto <target-url>$B snapshot -i
+$B links
+```
+
+Look for:
+- Login/signup pages → "authenticated user" persona
+- Admin panel links, `/admin` routes → "admin" persona
+- Public content accessible without auth → "visitor" persona
+- Role selectors, account type choosers → distinct user types
+- Pricing tiers → different capability levels
+- Navigation items that suggest different user journeys
+
+```bash
+$B goto <target-url>/admin$B snapshot -i
+$B goto <target-url>/login$B snapshot -i
+$B goto <target-url>/signup$B snapshot -i
+```
+
+Merge discovered personas with user-provided ones. Deduplicate. Present the final
+persona list to the user for confirmation before proceeding.
+
+### 1C. Build Persona Registry
+
+For each confirmed persona, create a structured entry:
+
+```
+PERSONA REGISTRY
+================
+ID: P1
+Role: Admin
+Goal: Manage users, configure settings, monitor system health
+Auth: admin@test.com / password123
+Entry point: /admin or /login → /admin
+Frequency: Daily
+Permissions: Full CRUD, system config, user management
+
+ID: P2
+Role: New User
+Goal: Sign up, complete onboarding, accomplish first task
+Auth: Signs up fresh
+Entry point: /signup or homepage
+Frequency: First time
+Permissions: Basic, grows with onboarding
+
+ID: P3
+Role: Visitor
+Goal: Browse content, evaluate product, decide to sign up
+Auth: None
+Entry point: Homepage
+Frequency: One-time or occasional
+Permissions: Read-only public content
+```
+
+Write this registry to `.gstack/ux-audit/personas.md` for reuse in future audits.
+
+---
+
+## Phase 2: Workflow Scripting
+
+For each persona, define their critical workflows — the end-to-end journeys they
+need to complete. Derive these from:
+
+1. The persona's stated goal
+2. The app's navigation structure (from Phase 1 browsing)
+3. Common sense for the role (admins manage, new users onboard, visitors browse)
+
+**Script format for each workflow:**
+
+```
+WORKFLOW: P1-W1 "Admin creates a new user"
+PERSONA: P1 (Admin)
+PRIORITY: Critical
+PRECONDITION: Logged in as admin
+STEPS:
+  1. Navigate to user management
+  2. Click "Add User" or equivalent
+  3. Fill in user details
+  4. Submit the form
+  5. Verify user appears in the list
+SUCCESS: New user visible in user list
+FAILURE MODES:
+  - Form validation blocks valid input
+  - No feedback after submission
+  - User created but not visible in list
+  - No way to find the "Add User" action
+```
+
+**Workflow selection heuristic:**
+
+- **Critical workflows** (always test): Login, signup, primary action for the role,
+  the thing the persona does most often
+- **Important workflows** (test if time allows): Settings, secondary actions,
+  less frequent but necessary tasks
+- **Edge workflows** (test if specifically scoped): Rare actions, admin overrides,
+  error recovery
+
+For a typical audit, script 2-4 critical workflows per persona.
+
+Write all workflow scripts to `.gstack/ux-audit/journeys/workflows.md`.
+
+---
+
+## Phase 3: Workflow Execution
+
+Execute each workflow in the browser, simulating the persona's experience.
+Record everything.
+
+### Execution Protocol
+
+For each workflow:
+
+**3A. Set up persona context**
+
+```bash
+# If persona requires auth:
+$B goto <login-url>$B snapshot -i
+# Find and fill login form
+$B fill @eN "<username>"$B fill @eM "<password>"$B click @eK$B snapshot -D$B screenshot "$UX_DIR/screenshots/P1-W1-auth.png"
+```
+
+**3B. Execute each step**
+
+For each step in the workflow:
+
+```bash
+# Step N: <description>
+$B snapshot -i# Record what the persona sees — can they find what they need?
+$B screenshot "$UX_DIR/screenshots/P1-W1-step-N-before.png"
+
+# Perform the action
+$B click @eN --timeout 1000   # or fill, select, etc.
+
+# Record the result
+$B snapshot -D$B screenshot "$UX_DIR/screenshots/P1-W1-step-N-after.png"
+$B console --errors
+```
+
+**3C. Evaluate each step through the persona's eyes**
+
+At each step, assess these UX dimensions (not bugs — friction):
+
+| Dimension | Question | Score |
+|-----------|----------|-------|
+| **Findability** | Can the persona find the action they need? | 0-3 |
+| **Clarity** | Is it obvious what to do next? | 0-3 |
+| **Feedback** | Does the app confirm what happened? | 0-3 |
+| **Recovery** | If something goes wrong, can the persona recover? | 0-3 |
+| **Speed** | Does the interaction feel instant? (1s timeout enforces this) | 0-3 |
+
+Scoring:
+- **3**: Excellent — persona would have no hesitation
+- **2**: Good — minor friction but persona can proceed
+- **1**: Poor — persona would pause, look around, maybe give up
+- **0**: Broken — persona is stuck with no clear path forward
+
+**3D. Record friction points**
+
+When any dimension scores 1 or below, document it as a **friction point**:
+
+```
+FRICTION: P1-W1-F1
+Workflow: P1-W1 "Admin creates a new user"
+Step: 2 — Click "Add User"
+Persona: P1 (Admin)
+Dimension: Findability (score: 1)
+What happened: "Add User" button is hidden inside a dropdown menu labeled "Actions".
+  An admin doing this daily would need to remember this non-obvious location.
+Expected: Primary action should be a visible button, not buried in a menu.
+Screenshot: P1-W1-step-2-before.png
+Impact: HIGH — this is the admin's most frequent action
+```
+
+**3E. Handle workflow failures**
+
+If a workflow step cannot be completed (element not found, navigation fails,
+timeout on a page that should load instantly):
+
+1. Screenshot the stuck state
+2. Record it as a **dead end** (score 0 on all dimensions)
+3. Try one alternative path (e.g., use search, try a different nav route)
+4. If alternative works, record it as a **workaround** and note the friction
+5. If no alternative, mark the workflow as **BLOCKED** and move to the next one
+
+---
+
+## Phase 4: Cross-Persona Analysis
+
+After all persona workflows are executed, analyze cross-cutting concerns:
+
+### 4A. Handoff Analysis
+
+Where does one persona's workflow depend on another persona's output?
+
+```
+HANDOFF: H1
+From: P1 (Admin) — creates user account
+To: P2 (New User) — receives account, logs in
+What transfers: Username, temp password, role assignment
+Friction: Is the new user notified? Do they know their credentials?
+  Can they find the login page? Is the onboarding clear?
+```
+
+Test each handoff by executing the receiving persona's workflow immediately after
+the sending persona's workflow completes.
+
+### 4B. Consistency Analysis
+
+Do similar actions work the same way across personas?
+
+- Is the navigation structure consistent?
+- Do forms behave the same way?
+- Are error messages consistent?
+- Does the visual hierarchy guide all personas equally?
+
+### 4C. Empty State Analysis
+
+For each persona, what do they see when there's no data?
+
+```bash
+# Test empty states for each persona's primary view
+$B goto <persona-primary-page>$B snapshot -i
+$B screenshot "$UX_DIR/screenshots/P1-empty-state.png"
+```
+
+Is it clear what to do? Is there a call-to-action? Or is it just... blank?
+
+### 4D. Permission Boundary Testing
+
+What happens when a persona tries to access something they shouldn't?
+
+```bash
+# As visitor, try to access admin page
+$B goto <admin-url>$B snapshot -i
+$B screenshot "$UX_DIR/screenshots/P3-permission-denied.png"
+```
+
+Is the denial clear? Is there a helpful redirect? Or does the user get a raw 403?
+
+---
+
+## Phase 5: Scoring & Report
+
+### 5A. Compute Scores
+
+**Per-workflow score:** Average of all step scores across all dimensions (0-3 scale).
+Convert to percentage: (score / 3) * 100.
+
+**Per-persona score:** Average of all workflow scores for that persona.
+
+**Overall UX score:** Weighted average of persona scores, weighted by frequency
+(daily personas matter more than one-time personas).
+
+### 5B. Friction Heatmap
+
+```
+FRICTION HEATMAP
+================
+                    Findability  Clarity  Feedback  Recovery  Speed
+P1 Admin                 ██░░     ████     ██░░      ░░░░    ████
+P2 New User              ░░░░     ██░░     ████      ██░░    ████
+P3 Visitor               ████     ████     ████      ████    ████
+
+██ = Good (2-3)   ░░ = Friction (0-1)
+```
+
+### 5C. Write Report
+
+Write the full report to `.gstack/ux-audit/ux-audit-report-{YYYY-MM-DD}.md`:
+
+```markdown
+# UX Audit Report
+Date: {date}
+Target: {url}
+Personas: {count} tested
+Workflows: {count} executed ({count} completed, {count} blocked)
+
+## Executive Summary
+{2-3 sentences: overall UX health, biggest friction areas, who suffers most}
+
+## Persona Scores
+| Persona | Score | Workflows | Friction Points | Dead Ends |
+|---------|-------|-----------|-----------------|-----------|
+| P1 Admin | 78% | 3/3 completed | 4 | 0 |
+| P2 New User | 45% | 2/3 completed | 7 | 1 |
+| P3 Visitor | 92% | 2/2 completed | 1 | 0 |
+
+## Friction Heatmap
+{heatmap from 5B}
+
+## Critical Friction Points (score 0-1)
+{sorted by impact, with screenshots and persona context}
+
+## Workflow Details
+{per-workflow breakdown with step-by-step scores}
+
+## Cross-Persona Analysis
+### Handoffs
+{handoff analysis from 4A}
+### Consistency Issues
+{from 4B}
+### Empty States
+{from 4C}
+### Permission Boundaries
+{from 4D}
+
+## Recommendations (prioritized)
+1. {highest impact fix — which persona, which workflow, what to change}
+2. ...
+
+## Screenshots
+{index of all screenshots taken with descriptions}
+```
+
+### 5D. Journey Artifacts
+
+Write per-persona journey files to `.gstack/ux-audit/journeys/`:
+
+- `P1-admin-journey.md` — full step-by-step with scores
+- `P2-new-user-journey.md` — full step-by-step with scores
+- etc.
+
+These are reusable for regression testing — run `/ux-audit --regression` to
+re-execute the same workflows and compare scores.
+
+---
+
+## Phase 6: Present to User
+
+Present the report summary directly (don't just point to the file):
+
+1. Overall UX score
+2. Per-persona scores
+3. Friction heatmap
+4. Top 3 friction points with screenshots
+5. Top 3 recommendations
+
+Then ask:
+
+"The full report is at `.gstack/ux-audit/ux-audit-report-{date}.md` with {N}
+screenshots. Want me to:
+A) Dive deeper into a specific persona's experience
+B) Re-run a blocked workflow with different auth/approach
+C) Compare with a previous audit (regression mode)
+D) Done — I'll review the report"
+
+---
+
+{{LEARNINGS_LOG}}
+
+## Rules (ux-audit-specific)
+
+1. **Every browse command uses `--timeout 1000`.** No exceptions. Local apps load in <100ms. If a page takes >1s, that IS the finding.
+2. **Think as the persona, not as a developer.** "The button is there" is not good enough — would this persona FIND the button?
+3. **Score friction, not bugs.** A button that works but takes 3 clicks to find is a UX problem, not a bug.
+4. **Screenshot everything.** Every step of every workflow gets a before/after screenshot. Evidence makes the report actionable.
+5. **One persona at a time.** Complete all workflows for one persona before switching to the next. This maintains the persona's mental model.
+6. **Never fix code.** This is audit-only. Report findings, don't change source code. Use /qa for fixes.
+7. **Reuse persona registry.** If `.gstack/ux-audit/personas.md` exists from a prior run, offer to reuse it instead of re-asking.
