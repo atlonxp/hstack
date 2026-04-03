@@ -1,5 +1,57 @@
 # Changelog
 
+## [0.15.2.1] - 2026-04-02 — Setup Runs Migrations
+
+`git pull && ./setup` now applies version migrations automatically. Previously, migrations only ran during `/gstack-upgrade`, so users who updated via git pull never got state fixes (like the skill directory restructure from v0.15.1.0). Now `./setup` tracks the last version it ran at and applies any pending migrations on every run.
+
+### Fixed
+
+- **Setup runs pending migrations.** `./setup` now checks `~/.gstack/.last-setup-version` and runs any migration scripts newer than that version. No more broken skill directories after `git pull`.
+- **Space-safe migration loop.** Uses `while read` instead of `for` loop to handle paths with spaces correctly.
+- **Fresh installs skip migrations.** New installs write the version marker without running historical migrations that don't apply to them.
+- **Future migration guard.** Migrations for versions newer than the current VERSION are skipped, preventing premature execution from development branches.
+- **Missing VERSION guard.** If the VERSION file is absent, the version marker isn't written, preventing permanent migration poisoning.
+
+## [0.15.2.0] - 2026-04-02 — Voice-Friendly Skill Triggers
+
+Say "run a security check" instead of remembering `/cso`. Skills now have voice-friendly trigger phrases that work with AquaVoice, Whisper, and other speech-to-text tools. No more fighting with acronyms that get transcribed wrong ("CSO" -> "CEO" -> wrong skill).
+
+### Added
+
+- **Voice triggers for 10 skills.** Each skill gets natural-language aliases baked into its description. "see-so", "security review", "tech review", "code x", "speed test" and more. The right skill activates even when speech-to-text mangles the command name.
+- **`voice-triggers:` YAML field in templates.** Structured authoring: add aliases to any `.tmpl` frontmatter, `gen-skill-docs` folds them into the description during generation. Clean source, clean output.
+- **Voice input section in README.** New users know skills work with voice from day one.
+- **`voice-triggers` documented in CONTRIBUTING.md.** Frontmatter contract updated so contributors know the field exists.
+
+## [0.15.1.0] - 2026-04-01 — Design Without Shotgun
+
+You can now run `/design-html` without having to run `/design-shotgun` first. The skill detects what design context exists (CEO plans, design review artifacts, approved mockups) and asks how you want to proceed. Start from a plan, a description, or a provided PNG, not just an approved mockup.
+
+### Changed
+
+- **`/design-html` works from any starting point.** Three routing modes: (A) approved mockup from /design-shotgun, (B) CEO plan and/or design variants without formal approval, (C) clean slate with just a description. Each mode asks the right questions and proceeds accordingly.
+- **AskUserQuestion for missing context.** Instead of blocking with "no approved design found," the skill now offers choices: run the planning skills first, provide a PNG, or just describe what you want and design live.
+
+### Fixed
+
+- **Skills now discovered as top-level names.** Setup creates real directories with SKILL.md symlinks inside instead of directory symlinks. This fixes Claude auto-prefixing skill names with `gstack-` when using `--no-prefix` mode. `/qa` is now just `/qa`, not `/gstack-qa`.
+
+## [0.15.0.0] - 2026-04-01 — Session Intelligence
+
+Your AI sessions now remember what happened. Plans, reviews, checkpoints, and health scores survive context compaction and compound across sessions. Every skill writes a timeline event, and the preamble reads recent artifacts on startup so the agent knows where you left off.
+
+### Added
+
+- **Session timeline.** Every skill auto-logs start/complete events to `timeline.jsonl`. Local-only, never sent anywhere, always on regardless of telemetry setting. /retro can now show "this week: 3 /review, 2 /ship across 3 branches."
+- **Context recovery.** After compaction or session start, the preamble lists your recent CEO plans, checkpoints, and reviews. The agent reads the most recent one to recover decisions and progress without asking you to repeat yourself.
+- **Cross-session injection.** On session start, the preamble prints your last skill run on this branch and your latest checkpoint. You see "Last session: /review (success)" before typing anything.
+- **Predictive skill suggestion.** If your last 3 sessions on a branch follow a pattern (review, ship, review), gstack suggests what you probably want next.
+- **Welcome back message.** Sessions synthesize a one-paragraph briefing: branch name, last skill, checkpoint status, health score.
+- **`/checkpoint` skill.** Save and resume working state snapshots. Captures git state, decisions made, remaining work. Supports cross-branch listing for Conductor workspace handoff between agents.
+- **`/health` skill.** Code quality scorekeeper. Wraps your project's tools (tsc, biome, knip, shellcheck, tests), computes a composite 0-10 score, tracks trends over time. When the score drops, it tells you exactly what changed and where to fix it.
+- **Timeline binaries.** `bin/gstack-timeline-log` and `bin/gstack-timeline-read` for append-only JSONL timeline storage.
+- **Routing rules.** /checkpoint and /health added to the skill routing injection.
+
 ## [0.14.6.0] - 2026-03-31 — Recursive Self-Improvement
 
 gstack now learns from its own mistakes. Every skill session captures operational failures (CLI errors, wrong approaches, project quirks) and surfaces them in future sessions. No setup needed, just works.

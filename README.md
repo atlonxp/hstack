@@ -141,7 +141,7 @@ The UX audit skills use a **5-dimension friction scoring system** (Findability, 
 
 Open Claude Code and paste this. Claude does the rest.
 
-> Install hstack: run **`git clone --single-branch --depth 1 https://github.com/atlonxp/hstack.git ~/.claude/skills/hstack && cd ~/.claude/skills/hstack && ./setup`** then add an "hstack" section to CLAUDE.md that says to use the /browse skill from hstack for all web browsing, never use mcp\_\_claude-in-chrome\_\_\* tools, and lists the available skills: /office-hours, /discover, /plan-ceo-review, /plan-eng-review, /plan-design-review, /plan-ux-review, /design-consultation, /design-shotgun, /design-html, /review, /ship, /land-and-deploy, /canary, /benchmark, /browse, /connect-chrome, /qa, /qa-only, /design-review, /setup-browser-cookies, /setup-deploy, /retro, /investigate, /document-release, /codex, /cso, /autoplan, /autoplan-full, /autobuild, /autoaudit, /verify-loop, /intel, /check-ci, /check-deps, /check-issues, /learn, /ux-audit, /auto-ux-audit, /auto-ux-audit-full, /careful, /freeze, /guard, /unfreeze, /gstack-upgrade. Then ask the user if they also want to add hstack to the current project so teammates get it.
+> Install hstack: run **`git clone --single-branch --depth 1 https://github.com/atlonxp/hstack.git ~/.claude/skills/hstack && cd ~/.claude/skills/hstack && ./setup`** then add an "hstack" section to CLAUDE.md that says to use the /browse skill from hstack for all web browsing, never use mcp\_\_claude-in-chrome\_\_\* tools, and lists the available skills: /office-hours, /discover, /plan-ceo-review, /plan-eng-review, /plan-design-review, /plan-ux-review, /design-consultation, /design-shotgun, /design-html, /review, /ship, /land-and-deploy, /canary, /benchmark, /browse, /connect-chrome, /qa, /qa-only, /design-review, /setup-browser-cookies, /setup-deploy, /retro, /investigate, /document-release, /codex, /cso, /autoplan, /autoplan-full, /autobuild, /autoaudit, /verify-loop, /intel, /check-ci, /check-deps, /check-issues, /learn, /ux-audit, /auto-ux-audit, /auto-ux-audit-full, /checkpoint, /health, /careful, /freeze, /guard, /unfreeze, /gstack-upgrade. Then ask the user if they also want to add hstack to the current project so teammates get it.
 
 ### Step 2: Add to your repo so teammates get it (optional)
 
@@ -197,6 +197,12 @@ cd ~/hstack && ./setup --host factory
 ```
 
 Skills install to `~/.factory/skills/hstack-*/`. Restart `droid` to rescan skills, then type `/qa` to get started.
+
+### Voice input (AquaVoice, Whisper, etc.)
+
+hstack skills have voice-friendly trigger phrases. Say what you want naturally —
+"run a security check", "test the website", "do an engineering review", "audit the UX" — and the
+right skill activates. You don't need to remember slash command names or acronyms.
 
 ## Zero to MVP — the full journey
 
@@ -384,6 +390,8 @@ Claude: [per-person breakdowns, shipping streaks, test health trends]
 | Verify build completeness | `/verify-loop` |
 | Get project intelligence briefing | `/intel` |
 | Review what gstack learned | `/learn` |
+| Save/resume working state | `/checkpoint` |
+| Code quality dashboard | `/health` |
 | Check CI status | `/check-ci` |
 | Audit dependencies | `/check-deps` |
 | Triage open issues | `/check-issues` |
@@ -433,7 +441,7 @@ Shortcuts:
 | `/autoplan-full` | **Full CTO Pipeline** | Idea to fully reviewed plan. Runs office-hours → discover → CEO → UX → design → eng. Interactive for framing, auto-decided for reviews. Two gates: confirm framing, approve final plan. |
 | `/design-consultation` | **Design Partner** | Build a complete design system from scratch. Researches the landscape, proposes creative risks, generates realistic product mockups. |
 | `/design-shotgun` | **Design Explorer** | Generate multiple AI design variants, open a comparison board in your browser, and iterate until you approve a direction. Taste memory biases toward your preferences. |
-| `/design-html` | **Design Engineer** | Takes an approved mockup from `/design-shotgun` and generates production-quality HTML with Pretext for computed text layout. Text reflows on resize, heights adjust to content. Smart API routing picks the right Pretext patterns per design type. Framework detection for React/Svelte/Vue. |
+| `/design-html` | **Design Engineer** | Generates production-quality HTML with Pretext for computed text layout. Works with approved mockups, CEO plans, design reviews, or from scratch. Text reflows on resize, heights adjust to content. Smart API routing picks the right Pretext patterns per design type. Framework detection for React/Svelte/Vue. |
 | `/autobuild` | **Autonomous Builder** | Plan to implemented code. Reads the approved plan, builds component by component, writes tests alongside. Optional checkpoints between components. |
 | `/autoaudit` | **Verification Pipeline** | Post-build security + quality check. Runs CSO then review + codex. Auto-fixes obvious issues, flags ambiguous ones. Pass/fail verdict without shipping. |
 | `/verify-loop` | **Build Inspector** | Self-healing verification loop. Traces code paths, auto-fixes BROKEN items, presents INCOMPLETE items. Max 3 iterations with regression detection. |
@@ -471,6 +479,8 @@ Shortcuts:
 | `/unfreeze` | **Unlock** — remove the `/freeze` boundary. |
 | `/connect-chrome` | **Chrome Controller** — launch Chrome with the Side Panel extension. Watch every action live, inspect CSS on any element, clean up pages, and take screenshots. Each tab gets its own agent. |
 | `/setup-deploy` | **Deploy Configurator** — one-time setup for `/land-and-deploy`. Detects your platform, production URL, and deploy commands. |
+| `/checkpoint` | **State Saver** — save and resume working state. Captures git state, decisions, and remaining work so you can pick up where you left off. |
+| `/health` | **Quality Dashboard** — wraps type checker, linter, test runner, dead code detector. Weighted composite 0-10 score with trend tracking. |
 | `/gstack-upgrade` | **Self-Updater** — upgrade to latest. Detects global vs vendored install, syncs both, shows what changed. |
 
 **[Deep dives with examples and philosophy for every skill →](docs/skills.md)**
@@ -572,7 +582,7 @@ Available skills: /office-hours, /discover, /plan-ceo-review, /plan-eng-review,
 /qa-only, /design-review, /setup-browser-cookies, /setup-deploy, /retro, /investigate,
 /document-release, /codex, /cso, /autoplan, /autoplan-full, /autobuild, /autoaudit,
 /verify-loop, /intel, /check-ci, /check-deps, /check-issues, /learn, /ux-audit,
-/auto-ux-audit, /auto-ux-audit-full, /careful, /freeze, /guard, /unfreeze, /gstack-upgrade.
+/auto-ux-audit, /auto-ux-audit-full, /checkpoint, /health, /careful, /freeze, /guard, /unfreeze, /gstack-upgrade.
 ```
 
 ## License
