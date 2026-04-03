@@ -8,6 +8,12 @@ I forked [Garry Tan's gstack](https://github.com/garrytan/gstack) — his open s
 
 **What hstack adds on top of gstack:**
 
+- **`/ux-audit`** — Persona-driven UX workflow audit on a live site. Defines personas, scripts their end-to-end workflows, executes them in the browser, and reports where each persona gets stuck, confused, or hits dead ends. Scores every step on 5 UX dimensions (Findability, Clarity, Feedback, Recovery, Speed). Friction heatmap across all personas. 1-second Playwright timeout for local dev speed.
+
+- **`/auto-ux-audit`** — Single-persona UX audit with auto-fix. Runs `/ux-audit` for one specified persona, then fixes every friction point in source code with atomic commits and browser re-verification. Like `/qa` but for UX friction instead of bugs.
+
+- **`/auto-ux-audit-full`** — Full UX audit across all personas with auto-fix. Discovers or accepts personas, audits each one sequentially, fixes friction, then runs **cross-persona verification** — ensures fixes for one persona don't break another's experience. The skill that doesn't exist anywhere else.
+
 - **`/plan-ux-review`** — UX researcher-mode plan review. Maps multi-persona workflows, handoff points, business process state machines, and permission divergence. Seven passes, each rated 0-10. Catches the gaps that single-user reviews miss: what happens when the approver is on vacation? What does the admin see vs the end user? Where do workflows break between personas?
 
 - **`/discover`** — CTO-mode technology & product intelligence. Scans competitors, scouts emerging tech, finds market gaps, delivers build-vs-buy analysis with Wardley mapping. Not a report generator — a visionary CTO who synthesizes and recommends with conviction. Every recommendation includes a 30-minute proof-of-concept plan.
@@ -39,9 +45,93 @@ Fork it. Improve it. Make it yours.
 2. Run `/autoplan-full` — describe your idea, get a fully reviewed plan (now with task checkboxes)
 3. Run `/autobuild` — implement the plan (now with self-healing verify loop)
 4. Run `/autoaudit` — verify security + code quality
-5. Run `/ship` — when you're ready
+5. Run `/auto-ux-audit-full` — simulate every persona's workflow, fix friction
+6. Run `/ship` — when you're ready
 
-Or go manual: `/office-hours` → `/discover` → `/plan-ceo-review` → `/plan-ux-review` → `/plan-design-review` → `/plan-eng-review` → build → `/review` → `/cso` → `/qa` → `/ship`.
+Or go manual: `/office-hours` → `/discover` → `/plan-ceo-review` → `/plan-ux-review` → `/plan-design-review` → `/plan-eng-review` → build → `/review` → `/cso` → `/qa` → `/auto-ux-audit-full` → `/ship`.
+
+## How hstack works
+
+hstack extends gstack with **persona-aware UX intelligence** — the layer between "does it work?" (QA) and "can real humans accomplish their goals?" (UX audit). This is what makes hstack a CTO's tool, not just an engineer's tool.
+
+```mermaid
+graph TB
+    subgraph gstack["gstack (upstream)"]
+        direction TB
+        OH["/office-hours"] --> Plan
+        subgraph Plan["Plan"]
+            CEO["/plan-ceo-review"]
+            Design["/plan-design-review"]
+            Eng["/plan-eng-review"]
+        end
+        Plan --> Build["/autobuild"]
+        Build --> Review["/review + /cso"]
+        Review --> QA["/qa — bug testing"]
+        QA --> Ship["/ship"]
+        Ship --> Deploy["/land-and-deploy"]
+    end
+
+    subgraph hstack_adds["hstack adds"]
+        direction TB
+        Discover["/discover — CTO intelligence"]
+        UXPlan["/plan-ux-review — persona workflow design"]
+        UXAudit["/ux-audit — persona simulation (report)"]
+        AutoUX["/auto-ux-audit — single persona fix"]
+        AutoUXFull["/auto-ux-audit-full — all personas + cross-check"]
+        AutoPlan["/autoplan-full — idea to reviewed plan"]
+        Intel["/intel — cross-session memory"]
+    end
+
+    OH -.-> Discover
+    Discover -.-> CEO
+    CEO -.-> UXPlan
+    UXPlan -.-> Design
+    QA -.-> UXAudit
+    UXAudit -.-> AutoUX
+    AutoUX -.-> AutoUXFull
+    AutoUXFull -.-> Ship
+
+    style gstack fill:#f5f5f5,stroke:#999
+    style hstack_adds fill:#e8f4e8,stroke:#4a9
+```
+
+### The UX audit pipeline
+
+gstack answers "does it work?" — hstack also answers "can each persona accomplish their goal?"
+
+```mermaid
+flowchart LR
+    subgraph Report["Report Only"]
+        A["/ux-audit"] -->|"all personas<br/>friction scores<br/>heatmap"| R["UX Report"]
+    end
+
+    subgraph Fix["Audit + Fix"]
+        B["/auto-ux-audit"] -->|"one persona<br/>fix friction<br/>re-verify"| F1["Fixed Code"]
+        C["/auto-ux-audit-full"] -->|"all personas<br/>fix + cross-check<br/>regression detect"| F2["Fixed Code"]
+    end
+
+    R -.->|"findings feed into"| B
+    F1 -.->|"per-persona, compose into"| C
+
+    style Report fill:#fff3e0,stroke:#e65100
+    style Fix fill:#e8f5e9,stroke:#2e7d32
+```
+
+### What makes this different
+
+| Capability | gstack | hstack |
+|-----------|--------|--------|
+| Bug testing on live site | `/qa` | `/qa` |
+| UX plan review (pre-build) | - | `/plan-ux-review` |
+| Persona simulation on live site | - | `/ux-audit` |
+| Auto-fix UX friction per persona | - | `/auto-ux-audit` |
+| Cross-persona regression detection | - | `/auto-ux-audit-full` |
+| Technology landscape intelligence | - | `/discover` |
+| Full CTO planning pipeline | - | `/autoplan-full` |
+| Cross-session project memory | - | `/intel` |
+| Configurable Playwright timeout | - | `BROWSE_CMD_TIMEOUT` env var |
+
+The UX audit skills use a **5-dimension friction scoring system** (Findability, Clarity, Feedback, Recovery, Speed) evaluated at every step of every workflow for every persona. This isn't "does the button work" — it's "would a first-time user find the button, understand what it does, see confirmation after clicking it, and recover if they clicked the wrong one?"
 
 ## Install — 30 seconds
 
@@ -51,11 +141,11 @@ Or go manual: `/office-hours` → `/discover` → `/plan-ceo-review` → `/plan-
 
 Open Claude Code and paste this. Claude does the rest.
 
-> Install hstack: run **`git clone --single-branch --depth 1 https://github.com/atlonxp/hstack.git ~/.claude/skills/hstack && cd ~/.claude/skills/hstack && ./setup`** then add an "hstack" section to CLAUDE.md that says to use the /browse skill from hstack for all web browsing, never use mcp\_\_claude-in-chrome\_\_\* tools, and lists the available skills: /office-hours, /discover, /plan-ceo-review, /plan-eng-review, /plan-design-review, /plan-ux-review, /design-consultation, /design-shotgun, /design-html, /review, /ship, /land-and-deploy, /canary, /benchmark, /browse, /connect-chrome, /qa, /qa-only, /design-review, /setup-browser-cookies, /setup-deploy, /retro, /investigate, /document-release, /codex, /cso, /autoplan, /autoplan-full, /autobuild, /autoaudit, /verify-loop, /intel, /check-ci, /check-deps, /check-issues, /learn, /careful, /freeze, /guard, /unfreeze, /gstack-upgrade. Then ask the user if they also want to add hstack to the current project so teammates get it.
+> Install hstack: run **`git clone --single-branch --depth 1 https://github.com/atlonxp/hstack.git ~/.claude/skills/hstack && cd ~/.claude/skills/hstack && ./setup`** then add an "hstack" section to CLAUDE.md that says to use the /browse skill from hstack for all web browsing, never use mcp\_\_claude-in-chrome\_\_\* tools, and lists the available skills: /office-hours, /discover, /plan-ceo-review, /plan-eng-review, /plan-design-review, /plan-ux-review, /design-consultation, /design-shotgun, /design-html, /review, /ship, /land-and-deploy, /canary, /benchmark, /browse, /connect-chrome, /qa, /qa-only, /design-review, /setup-browser-cookies, /setup-deploy, /retro, /investigate, /document-release, /codex, /cso, /autoplan, /autoplan-full, /autobuild, /autoaudit, /verify-loop, /intel, /check-ci, /check-deps, /check-issues, /learn, /ux-audit, /auto-ux-audit, /auto-ux-audit-full, /careful, /freeze, /guard, /unfreeze, /gstack-upgrade. Then ask the user if they also want to add hstack to the current project so teammates get it.
 
 ### Step 2: Add to your repo so teammates get it (optional)
 
-> Add hstack to this project: run **`cp -Rf ~/.claude/skills/hstack .claude/skills/hstack && rm -rf .claude/skills/hstack/.git && cd .claude/skills/hstack && ./setup`** then add an "hstack" section to this project's CLAUDE.md that says to use the /browse skill from hstack for all web browsing, never use mcp\_\_claude-in-chrome\_\_\* tools, lists the available skills: /office-hours, /discover, /plan-ceo-review, /plan-eng-review, /plan-design-review, /plan-ux-review, /design-consultation, /design-shotgun, /design-html, /review, /ship, /land-and-deploy, /canary, /benchmark, /browse, /connect-chrome, /qa, /qa-only, /design-review, /setup-browser-cookies, /setup-deploy, /retro, /investigate, /document-release, /codex, /cso, /autoplan, /autoplan-full, /autobuild, /autoaudit, /verify-loop, /intel, /check-ci, /check-deps, /check-issues, /learn, /careful, /freeze, /guard, /unfreeze, /gstack-upgrade, and tells Claude that if hstack skills aren't working, run `cd .claude/skills/hstack && ./setup` to build the binary and register skills.
+> Add hstack to this project: run **`cp -Rf ~/.claude/skills/hstack .claude/skills/hstack && rm -rf .claude/skills/hstack/.git && cd .claude/skills/hstack && ./setup`** then add an "hstack" section to this project's CLAUDE.md that says to use the /browse skill from hstack for all web browsing, never use mcp\_\_claude-in-chrome\_\_\* tools, lists the available skills: /office-hours, /discover, /plan-ceo-review, /plan-eng-review, /plan-design-review, /plan-ux-review, /design-consultation, /design-shotgun, /design-html, /review, /ship, /land-and-deploy, /canary, /benchmark, /browse, /connect-chrome, /qa, /qa-only, /design-review, /setup-browser-cookies, /setup-deploy, /retro, /investigate, /document-release, /codex, /cso, /autoplan, /autoplan-full, /autobuild, /autoaudit, /verify-loop, /intel, /check-ci, /check-deps, /check-issues, /learn, /ux-audit, /auto-ux-audit, /auto-ux-audit-full, /careful, /freeze, /guard, /unfreeze, /gstack-upgrade, and tells Claude that if hstack skills aren't working, run `cd .claude/skills/hstack && ./setup` to build the binary and register skills.
 
 Real files get committed to your repo (not a submodule), so `git clone` just works. Everything lives inside `.claude/`. Nothing touches your PATH or runs in the background.
 
@@ -218,6 +308,13 @@ Claude: [opens real Chromium browser, clicks through every flow]
         [finds a bug: "Add to Cart" button doesn't disable during submit]
         [fixes it, generates regression test, re-verifies with screenshot]
 
+You:    /auto-ux-audit-full http://localhost:3000
+Claude: [discovers 3 personas: Admin, New User, Visitor]
+        [simulates each persona's workflows in the browser]
+        [finds 14 friction points, fixes 11 with atomic commits]
+        [cross-persona check: admin fix broke visitor nav → fixed]
+        UX scores: Admin 52%→85%, New User 38%→71%, Visitor 75%→90%
+
 You:    /benchmark
 Claude: [baselines page load times, Core Web Vitals, resource sizes]
         [flags: hero image is 2.4MB unoptimized → compressed to 180KB]
@@ -271,6 +368,8 @@ Claude: [per-person breakdowns, shipping streaks, test health trends]
 | Review code before shipping | `/review` (+ `/codex` for second opinion) |
 | Audit security | `/cso` |
 | Find and fix bugs on a live site | `/qa` (or `/qa-only` for report without fixes) |
+| Audit UX workflows as real personas | `/ux-audit` (report) or `/auto-ux-audit` (report + fix) |
+| Audit UX for ALL personas at once | `/auto-ux-audit-full` (all personas + cross-persona verification) |
 | Debug a specific issue | `/investigate` |
 | Ship a PR | `/ship` |
 | Deploy and verify production | `/land-and-deploy` → `/canary` |
@@ -294,7 +393,7 @@ Claude: [per-person breakdowns, shipping streaks, test health trends]
 
 hstack is a process, not a collection of tools. The skills run in the order a sprint runs:
 
-**Think → Discover → Plan → Design → Build → Review → Secure → Test → Ship → Deploy → Reflect**
+**Think → Discover → Plan → Design → Build → Review → Secure → Test → UX Audit → Ship → Deploy → Reflect**
 
 ```
 /office-hours ──→ /discover ──→ /plan-ceo-review ──→ /plan-ux-review
@@ -305,18 +404,21 @@ hstack is a process, not a collection of tools. The skills run in the order a sp
                                                                        │
     ┌──────────────────────────────────────────────────────────────────┘
     ▼
-[build] ──→ /review ──→ /cso ──→ /qa ──→ /benchmark ──→ /ship
-                                                            │
-    ┌───────────────────────────────────────────────────────┘
+[build] ──→ /review ──→ /cso ──→ /qa ──→ /auto-ux-audit-full ──→ /benchmark ──→ /ship
+                                                                                    │
+    ┌───────────────────────────────────────────────────────────────────────────────┘
     ▼
 /land-and-deploy ──→ /canary ──→ /document-release ──→ /retro
 
 Shortcuts:
-  /autoplan-full  = office-hours → discover → CEO → UX → design → eng (idea to plan)
-  /autoplan       = CEO → design → eng (existing plan to reviewed plan)
-  /autobuild      = plan → implemented code (includes verify loop)
-  /autoaudit      = CSO + review (verify after build)
-  /verify-loop    = post-build self-healing (standalone or via /autobuild)
+  /autoplan-full       = office-hours → discover → CEO → UX → design → eng (idea to plan)
+  /autoplan            = CEO → design → eng (existing plan to reviewed plan)
+  /autobuild           = plan → implemented code (includes verify loop)
+  /autoaudit           = CSO + review (verify after build)
+  /verify-loop         = post-build self-healing (standalone or via /autobuild)
+  /auto-ux-audit-full  = all-persona UX audit + fix + cross-persona verify
+  /auto-ux-audit       = single-persona UX audit + fix
+  /ux-audit            = all-persona UX report (no fixes)
 ```
 
 | Skill | Your specialist | What they do |
@@ -347,6 +449,9 @@ Shortcuts:
 | `/investigate` | **Debugger** | Systematic root-cause debugging. Iron Law: no fixes without investigation. Traces data flow, tests hypotheses, stops after 3 failed fixes. |
 | `/qa` | **QA Lead** | Test your app, find bugs, fix them with atomic commits, re-verify. Auto-generates regression tests for every fix. |
 | `/qa-only` | **QA Reporter** | Same methodology as /qa but report only. Pure bug report without code changes. |
+| `/ux-audit` | **UX Researcher** | Persona-driven UX workflow audit on a live site. Simulates real user journeys, scores friction on 5 dimensions, produces heatmap. Report only — no code changes. |
+| `/auto-ux-audit` | **UX Engineer** | Single-persona UX audit with auto-fix. Finds friction, fixes it in source code, re-verifies in browser. Atomic commits per fix. |
+| `/auto-ux-audit-full` | **UX Team Lead** | All-persona UX audit with auto-fix. Audits each persona sequentially, fixes friction, then runs cross-persona verification to catch regressions between roles. |
 | `/benchmark` | **Performance Engineer** | Baseline page load times, Core Web Vitals, and resource sizes. Compare before/after on every PR. |
 | `/ship` | **Release Engineer** | Sync main, run tests, audit coverage, push, open PR. Bootstraps test frameworks if you don't have one. |
 | `/land-and-deploy` | **Release Engineer** | Merge the PR, wait for CI and deploy, verify production health. One command from "approved" to "verified in production." |
@@ -412,7 +517,7 @@ Free, MIT licensed, open source. No premium tier, no waitlist.
 
 I open sourced how I build software. You can fork it and make it your own.
 
-> **Upstream:** hstack is derived from [garrytan/gstack](https://github.com/garrytan/gstack) with `/plan-ux-review`, `/discover`, `/autoplan-full`, `/autobuild`, `/autoaudit`, `/verify-loop`, `/intel`, `/check-ci`, `/check-deps`, and `/check-issues` added.
+> **Upstream:** hstack is derived from [garrytan/gstack](https://github.com/garrytan/gstack) with `/plan-ux-review`, `/discover`, `/autoplan-full`, `/autobuild`, `/autoaudit`, `/verify-loop`, `/intel`, `/check-ci`, `/check-deps`, `/check-issues`, `/ux-audit`, `/auto-ux-audit`, and `/auto-ux-audit-full` added.
 > Pull from upstream regularly to stay current. Contributions welcome.
 
 ## Docs
@@ -466,8 +571,8 @@ Available skills: /office-hours, /discover, /plan-ceo-review, /plan-eng-review,
 /review, /ship, /land-and-deploy, /canary, /benchmark, /browse, /connect-chrome, /qa,
 /qa-only, /design-review, /setup-browser-cookies, /setup-deploy, /retro, /investigate,
 /document-release, /codex, /cso, /autoplan, /autoplan-full, /autobuild, /autoaudit,
-/verify-loop, /intel, /check-ci, /check-deps, /check-issues, /learn, /careful, /freeze,
-/guard, /unfreeze, /gstack-upgrade.
+/verify-loop, /intel, /check-ci, /check-deps, /check-issues, /learn, /ux-audit,
+/auto-ux-audit, /auto-ux-audit-full, /careful, /freeze, /guard, /unfreeze, /gstack-upgrade.
 ```
 
 ## License
