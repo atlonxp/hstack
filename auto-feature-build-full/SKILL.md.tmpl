@@ -1,0 +1,407 @@
+---
+name: auto-feature-build-full
+preamble-tier: 4
+version: 1.0.0
+description: |
+  Full feature gap-fill across ALL personas. Runs gap analysis per persona,
+  dedups into a unified feature queue, builds each feature in dependency
+  order, and re-verifies critical workflows for EVERY persona after each
+  build (not just the feature's primary persona). Cross-persona regression
+  detection prevents fixes for one persona breaking another's flows.
+  Orchestrates office-hours, autoplan, autobuild, verify-loop, autoaudit,
+  and auto-ux-audit-full at the end. Tier 3 of the feature-build family.
+  Use when asked to "build all missing features", "feature build full",
+  "auto feature build full", "kickstart for every persona", or
+  "complete feature gap fill". For single-persona, use /auto-feature-build.
+  For one feature, use /feature-build. (hstack)
+benefits-from: [ux-audit, office-hours]
+allowed-tools:
+  - Bash
+  - Read
+  - Write
+  - Edit
+  - Glob
+  - Grep
+  - AskUserQuestion
+  - WebSearch
+---
+
+{{PREAMBLE}}
+
+{{BASE_BRANCH_DETECT}}
+
+{{BENEFITS_FROM}}
+
+# /auto-feature-build-full: All-Persona Feature Gap-Filler
+
+You are a product-engineering team that builds missing workflows for EVERY
+persona, in one coordinated session. This is the build-side mirror of
+`/auto-ux-audit-full` — where that skill fixes friction across all personas
+with cross-persona regression detection, this skill builds MISSING workflows
+across all personas with cross-persona regression detection.
+
+## How this differs from Tier 2 (/auto-feature-build)
+
+| Aspect | Tier 2 | **Tier 3 (this)** |
+|--------|--------|-------------------|
+| Personas | 1 chosen at runtime | **All** |
+| Cap | 5 features | **10 features** |
+| Dedup matrix | No | **Yes — one feature serving N personas = 1 row** |
+| Cross-persona verification | No | **Yes — every feature re-verifies ALL personas' critical flows** |
+| End-of-batch UX audit | /auto-ux-audit (1 persona) | **/auto-ux-audit-full (all personas)** |
+
+**Tier 3 reads like Tier 2 with a persona loop around the discovery phases
+and a cross-persona regression check after each build.** The per-feature
+loop body (Phase 6a-6h) is shared with Tier 2 — see /auto-feature-build for
+the canonical definition.
+
+---
+
+## Setup
+
+Same as Tier 2, except the persona parameter is ignored — Tier 3 always
+runs for all personas.
+
+| Parameter | Default | Override example |
+|-----------|---------|------------------|
+| Target URL | Auto-detect | `http://localhost:3000` |
+| Cap | 10 features | `--cap 6` |
+| Scope | Full app | `Focus on the admin+member surfaces` |
+
+{{BROWSE_SETUP}}
+
+```bash
+export BROWSE_CMD_TIMEOUT=1000
+```
+
+---
+
+{{LEARNINGS_SEARCH}}
+
+## Phase 0: Pre-flight
+
+Same as /auto-feature-build Phase 0 (clean tree, base commit, resume check,
+dev server detection). Tier 3 uses a queue file at
+`.gstack/feature-build/feature-queue-{DATETIME}.md` with
+`Tier: auto-feature-build-full` and `Cap: 10` in the header.
+
+---
+
+## Phase 1: Load ALL personas
+
+### 1A. Read the shared registry
+
+```bash
+cat .gstack/ux-audit/personas.md 2>/dev/null
+```
+
+If the registry exists: load every persona. No runtime selection.
+
+### 1B. If the registry is missing
+
+Inline /ux-audit Phase 1 discovery logic for the FULL set (not just one
+persona). Write the complete registry to `.gstack/ux-audit/personas.md`.
+
+### 1C. Determine execution order (mirrors /auto-ux-audit-full 1E)
+
+Personas are processed in this order:
+
+1. **Highest frequency first** — daily > weekly > occasional > first-time
+2. **Highest permission first** within the same frequency — admin before
+   regular user
+3. **Unauthenticated last** — visitor/anonymous personas
+
+Rationale: auth-heavy, high-permission personas establish the scaffolding
+(auth, permissions, list views) that lower-frequency personas depend on.
+Build the root features once; lower-tier personas reuse them.
+
+---
+
+## Phase 2: Expected Workflows per Persona
+
+Loop. For each persona (in execution order), apply Tier 2's Phase 2 Step A
+derivation.
+
+Write one file per persona:
+`.gstack/feature-build/expected-workflows-{persona-id}-{DATETIME}.md`
+
+---
+
+## Phase 3: Gap Analysis per Persona
+
+Loop. For each persona, apply Tier 2's Phase 3 (Steps B + C + D).
+
+Write one gap report per persona:
+`.gstack/feature-build/gap-report-{persona-id}-{DATETIME}.md`
+
+---
+
+## Phase 3.5: Cross-Persona Dedup Matrix (NEW)
+
+Multiple personas may share the same missing feature. An admin needing
+"password reset" and a member needing "password reset" is the SAME feature;
+building it once serves both.
+
+### 3.5A. Build the dedup matrix
+
+For every gap report entry across all personas, compute a **dedup key**:
+
+```
+dedup_key = (route-prefix, primary-verb, primary-resource)
+```
+
+Examples:
+- `(admin/users, reset, password)` — admin password reset
+- `(account, reset, password)` — member self-serve password reset
+- `(admin/users, edit, role)` — admin edits user role
+
+### 3.5B. Merge rules
+
+- **Same dedup key across personas → 1 feature row** with
+  `serves_personas: [P1, P2, ...]`
+- **Same key BUT divergent acceptance criteria → keep as separate rows**
+  (safer to build twice than to merge two different specs into one plan)
+- **Near-miss keys (same route, different verb) → keep separate** unless
+  the acceptance criteria overlap
+
+### 3.5C. Write the matrix
+
+Write to: `.gstack/feature-build/cross-persona-matrix-{DATETIME}.md`
+
+Format:
+
+```
+# Cross-Persona Feature Matrix — {DATETIME}
+
+| Feature ID | Name | Dedup key | Serves personas | Source gap reports |
+|-----------|------|-----------|------------------|---------------------|
+| F-X-001   | Password reset | (admin/users, reset, password) | [P1] | gap-report-P1 |
+| F-X-002   | User list with search | (admin/users, list, user) | [P1, P2] | gap-report-P1, gap-report-P2 |
+| F-X-003   | Account settings | (account, edit, profile) | [P2] | gap-report-P2 |
+
+## Dropped (as duplicates)
+| From | Merged into | Reason |
+|------|-------------|--------|
+| F-P2-003 | F-X-002 | Same dedup key, compatible criteria |
+```
+
+---
+
+## Phase 4: Unified DAG across ALL personas
+
+Apply Tier 2's Phase 4 dependency rules to the unified (deduped) feature
+list. Re-sort topologically. Feature rows carry `serves_personas` so
+acceptance criteria for each persona can be checked later.
+
+Auth bootstrap priority applies PER PERSONA: if ANY persona needs login and
+login is absent, auth lands at position 1.
+
+---
+
+## Phase 5: GATE 1 — Scope Approval (10-feature cap, MANDATORY)
+
+Present the unified DAG as an indented tree. Warn loudly if > 20 features.
+
+```
+## Feature Build Queue — Proposal (all personas)
+
+Total features discovered: {N}
+Personas: {count} ({P1, P2, ...})
+[⚠️ WARNING if N > 20]
+
+Feature DAG (deduped across personas):
+  1. F-X-001  Critical   Login     serves=[P1,P2]
+  2. F-X-002  Critical   User list serves=[P1]     (depends on F-X-001)
+  3. F-X-003  Important  Password reset serves=[P1,P2] (depends on F-X-002)
+  ...
+
+Default recommendation: top 5 features (by priority + breadth of persona
+coverage).
+Hard cap: 10 features per run.
+```
+
+AskUserQuestion:
+- A) Build top 5 (recommended)
+- B) Build all capped at 10
+- C) Let me pick specific features
+- D) Cancel
+
+Populate the queue file with approved rows. STOP until user responds.
+
+---
+
+## Phase 6: Per-Feature Build Loop
+
+Identical to /auto-feature-build Phase 6 substeps 6a-6f (planning, building,
+verify-loop). Read the canonical definition from
+`~/.claude/skills/hstack/auto-feature-build/SKILL.md` Phase 6 if needed.
+
+Differences:
+
+- `feature_row.serves_personas` drives which acceptance criteria matter
+- The plan file name uses a generic slug (no single persona prefix) since
+  the feature may serve multiple personas
+- The feature design doc (written in Phase 4) lists ALL served personas
+  with their per-persona acceptance criteria
+
+After 6f (verify-loop OK), proceed to 6g **scoped workflow verification for
+the primary persona** (the highest-frequency one in `serves_personas`),
+then to Phase 6.5 for cross-persona re-verification.
+
+---
+
+## Phase 6.5: Cross-Persona Verification After EACH Feature (NEW)
+
+After each feature is built and passes scoped verification for its primary
+persona, re-run CRITICAL workflows for **every other persona** in
+`serves_personas` AND for every persona whose critical workflows touch the
+same route prefix as the new feature.
+
+### 6.5A. Re-execute each affected persona's critical flows
+
+```bash
+# For each persona in the affected set:
+# Authenticate → run the critical workflow → record acceptance outcome
+$B goto <login-url>
+# ...
+```
+
+### 6.5B. Regression detection
+
+For each re-run, compare against the persona's baseline UX score captured
+at Phase 3 gap analysis. If any dimension drops by **2+ points**, this is a
+**cross-persona regression**.
+
+Record:
+
+```
+CROSS-PERSONA REGRESSION: XR-{n}
+Feature: F-X-{id}
+Affected persona: {persona-id}
+Affected workflow: {workflow-id}
+Dimension: {name} ({before} → {after})
+Caused by: commit range of this feature
+```
+
+### 6.5C. Distinguish intentional vs accidental
+
+A feature may deliberately introduce a new gate (e.g., "admin edits role"
+now requires 2FA). That's not a regression — it's intentional scope.
+
+Decision rule:
+- The feature's acceptance criteria explicitly permit the new gate, AND
+- The regressed route intersects the feature's route
+
+→ **intentional**, log but do not abort.
+
+Otherwise → **accidental**, STOP the queue, AskUserQuestion:
+
+- A) Prioritize persona {A} — {tradeoff}
+- B) Prioritize persona {B} — {tradeoff}
+- C) Find a different approach that serves both (may take longer)
+
+RECOMMENDATION: Choose C when possible. If forced, choose the
+higher-frequency persona.
+
+---
+
+## Phase 7: Global Audit + Full UX Audit
+
+### 7A. Compute batch diff
+
+```bash
+git diff --stat {base_commit}..HEAD
+```
+
+### 7B. Run /autoaudit inline
+
+Read `~/.claude/skills/hstack/autoaudit/SKILL.md`. Execute on the full
+batch diff.
+
+### 7C. Run /auto-ux-audit-full inline (NOT single-persona)
+
+Read `~/.claude/skills/hstack/auto-ux-audit-full/SKILL.md`. Execute it in
+full — all personas, cross-persona verification, the works. This is Tier
+3's big-finish verification step: it re-audits every persona against the
+full post-build state.
+
+---
+
+## Phase 8: Consolidated Report
+
+Write `.gstack/feature-build/build-log-{DATETIME}.md`:
+
+```markdown
+# Feature Build Log (All Personas) — Session {DATETIME}
+
+## Summary
+Personas: {count}
+Features requested: {N}
+Features built + verified: {M}
+Features deferred / failed: {K}
+Cross-persona regressions (intentional / accidental): {I} / {A}
+Base commit: {short} → Head commit: {short}
+
+## Per-persona UX score delta
+| Persona | Before | After | Delta | Friction fixed |
+|---------|--------|-------|-------|-----------------|
+| P1 Admin | 52% | 84% | +32% | 6 |
+| P2 Member | 38% | 77% | +39% | 9 |
+
+## Queue outcome
+{queue rows with verdicts}
+
+## Cross-persona matrix
+{summary of Phase 3.5 dedup decisions}
+
+## Cross-persona regression log
+{from Phase 6.5 with resolutions}
+
+## Autoaudit findings
+{summary}
+
+## Auto-ux-audit-full findings
+{summary with per-persona scores and cross-persona regression count}
+
+## Aborts (if any)
+{from queue file}
+```
+
+---
+
+{{LEARNINGS_LOG}}
+
+## Guardrails (Tier 3-specific)
+
+All Tier 2 guardrails apply, plus:
+
+1. **10-feature cap per run.** Tier 3's breadth makes this stricter than
+   it looks — 10 features across 3 personas is 30+ acceptance checks.
+2. **Cross-persona verification is mandatory after each feature.** Never
+   skip Phase 6.5. This is the whole point of Tier 3.
+3. **Regression = STOP.** Accidental cross-persona regressions abort the
+   queue and require the user's decision.
+4. **Intentional regressions are logged, not aborted** — but must satisfy
+   both rules: acceptance criteria permit the gate AND route intersection.
+5. **Persona execution order is fixed** (frequency → permission →
+   unauthenticated). Adjustable only by the user at the gate, not by
+   auto-decision.
+6. **Dedup is conservative.** When in doubt, keep separate rows. One
+   extra build is cheaper than one wrong build.
+7. **End-of-batch uses /auto-ux-audit-full**, not single-persona. The
+   whole point is cross-persona verification.
+8. **Blast radius containment applies per feature.** verify-loop is
+   scoped to `{build_start_commit}..HEAD` for the CURRENT feature, not
+   the session base commit.
+
+## Important rules
+
+- **This is the heaviest tier.** Expect long sessions. The 10-feature cap
+  and queue-file state machine keep it resumable.
+- **Never merge features with divergent criteria.** The dedup matrix is
+  conservative by design.
+- **Auth bootstrap is global:** if ANY persona needs login and login is
+  absent, auth lands at position 1 unconditionally.
+- **Each feature's commit range is persona-independent** — one commit per
+  atomic unit of work, no `ux(P1):` vs `ux(P2):` prefixing. The commit
+  serves all personas in `serves_personas`.
