@@ -477,3 +477,4 @@ D) Done — I'll review the report"
 5. **One persona at a time.** Complete all workflows for one persona before switching to the next. This maintains the persona's mental model.
 6. **Never fix code.** This is audit-only. Report findings, don't change source code. Use /qa for fixes.
 7. **Reuse persona registry.** If `.gstack/ux-audit/personas.md` exists from a prior run, offer to reuse it instead of re-asking.
+8. **Shared registry with /feature-build family.** The same `.gstack/ux-audit/personas.md` file is also read by `/discover-personas`, `/define-workflows`, `/gap-analysis`, `/feature-build`, `/auto-feature-build`, and `/auto-feature-build-full`. Those skills never modify the file — only /ux-audit and /discover-personas write to it. If you need to edit personas mid-session, do it here.
