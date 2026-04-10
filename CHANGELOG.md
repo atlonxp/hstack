@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.16.3.0] - 2026-04-11
+
+### Added
+- **`/feature-build` family.** A three-tier feature builder that mirrors the `/ux-audit` family on the build side. The UX audit family finds and fixes friction in workflows that already exist; the feature-build family discovers, plans, and builds the workflows that don't exist yet. Together they answer "can every persona accomplish every goal on this app" — not just "does the app work."
+- **`/feature-build`** — manual single-feature builder. You hand it ONE feature; it takes it end-to-end: optional office-hours framing → autoplan-full planning (or autoplan with `--fast`) → autobuild → verify-loop → scoped persona verification → autoaudit + auto-ux-audit. One feature, maximum rigor. Use when you know exactly what you want built.
+- **`/auto-feature-build`** — single-persona auto-discovery. Picks one persona, derives expected workflows from their goal and permissions, compares against the live app with a 5-signal completeness rubric (route, form, handler, persist, feedback), builds a dependency-ordered queue of missing features, and walks through plan → build → verify → scoped re-check for each one. Hard cap: 5 features per run.
+- **`/auto-feature-build-full`** — all-persona auto-discovery. Loops the gap analysis across every persona in the registry, dedupes missing features into a unified matrix (one feature that serves N personas = one build), topologically sorts, then runs the per-feature loop with cross-persona regression verification after each build. If building a feature for admin breaks member flows, it stops and asks. Hard cap: 10 features per run.
+- **`/discover-personas`** — standalone entry point to bootstrap or update the shared persona registry at `.gstack/ux-audit/personas.md`. Same logic as `/ux-audit` Phase 1, extracted so you can set up personas without running a full audit.
+- **`/define-workflows`** — standalone entry point that derives expected workflows for each persona from their goal and permissions. Writes one file per persona. Feeds `/gap-analysis` and the feature-build family.
+- **`/gap-analysis`** — standalone entry point that compares expected workflows against what the live app actually supports. Produces per-persona gap reports with the 5-signal completeness rubric and an ABSENT / PRESENT_PARTIAL / PRESENT_BROKEN / HIDDEN / PRESENT_COMPLETE verdict per workflow. Report-only; chains into `/auto-feature-build` when you're ready to build.
+- **Shared persona registry.** The persona registry at `.gstack/ux-audit/personas.md` is now read by eight skills (the three ux-audit tiers, the three feature-build tiers, `/discover-personas`, and `/define-workflows`). One source of truth. Feature-build skills only read; `/ux-audit` and `/discover-personas` are the only writers.
+- **Feature queue state machine.** `/auto-feature-build` and `/auto-feature-build-full` use `.gstack/feature-build/feature-queue-{datetime}.md` as a durable state machine. Every substep Edits the queue file. Re-running either skill detects the existing queue and offers to resume from the exact row where you left off, even across sessions.
+
+### For contributors
+- `test/feature-build-skill.test.ts` — 38 static + fixture-based tests covering template existence, frontmatter, required phase headers, placeholder resolution, persona registry parsing, gap report parsing, and queue file resume logic.
+- `test/fixtures/feature-build/` — three reusable fixtures: a 2-persona registry, a 4-feature gap report, and a mid-session queue.
+
 ## [0.16.2.0] - 2026-04-09
 
 ### Added
