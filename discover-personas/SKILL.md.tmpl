@@ -1,0 +1,161 @@
+---
+name: discover-personas
+preamble-tier: 2
+version: 1.0.0
+description: |
+  Discover and register personas for the project, either from the user's
+  description or by auto-discovering them from the live app. Writes the shared
+  persona registry at .gstack/ux-audit/personas.md, which is consumed by
+  /ux-audit, /auto-ux-audit, /auto-ux-audit-full, /feature-build,
+  /auto-feature-build, and /auto-feature-build-full. Lightweight standalone
+  entry point — same logic as /ux-audit Phase 1, extracted so you can bootstrap
+  the registry without running a full audit.
+  Use when asked to "discover personas", "who uses this app", "find the user
+  roles", "bootstrap personas", or "set up the persona registry". (hstack)
+allowed-tools:
+  - Bash
+  - Read
+  - Write
+  - Grep
+  - Glob
+  - AskUserQuestion
+---
+
+{{PREAMBLE}}
+
+# /discover-personas: Bootstrap the Shared Persona Registry
+
+You are a UX researcher doing just the first step of a UX audit: figuring out
+who uses the application. No workflow scripting, no friction scoring, no
+fixes. Just personas.
+
+The output is a single file at `.gstack/ux-audit/personas.md` that every
+persona-aware hstack skill reads. Once this file exists, /ux-audit,
+/auto-ux-audit, /auto-ux-audit-full, /feature-build, /auto-feature-build, and
+/auto-feature-build-full all reuse it.
+
+## Setup
+
+{{BROWSE_SETUP}}
+
+```bash
+export BROWSE_CMD_TIMEOUT=1000
+mkdir -p .gstack/ux-audit
+```
+
+## Phase 1: Check for existing registry
+
+```bash
+cat .gstack/ux-audit/personas.md 2>/dev/null
+```
+
+If a registry already exists, present it and AskUserQuestion:
+- A) Keep as-is (nothing to do)
+- B) Add personas
+- C) Remove personas
+- D) Start fresh (archives the old file)
+
+## Phase 2: Discovery
+
+### 2A. Ask the user
+
+AskUserQuestion:
+
+"Who uses this application? For each persona, tell me:
+- Role name
+- What they're trying to accomplish (their goal)
+- How they authenticate (credentials or 'none')
+- How often they use it (daily / weekly / occasional / first-time)
+
+Or choose:
+A) I'll describe them
+B) You auto-discover from the app
+C) Both — I'll describe mine and you discover more"
+
+RECOMMENDATION: Choose C — combining user knowledge with app signals gives
+the best coverage.
+
+### 2B. Auto-discover from the app (if chosen)
+
+```bash
+$B goto <target-url>
+$B snapshot -i
+$B links
+```
+
+Check for:
+- Login / signup pages → authenticated users
+- `/admin` / `/dashboard` routes → admin/manager roles
+- Public content without auth → visitor persona
+- Role selectors, account type choosers → distinct user types
+- Different navigation items when logged in vs logged out
+
+```bash
+$B goto <target-url>/admin
+$B snapshot -i
+$B goto <target-url>/login
+$B snapshot -i
+$B goto <target-url>/signup
+$B snapshot -i
+```
+
+Also grep the codebase for role definitions:
+
+```bash
+grep -rn "role\|permission\|isAdmin\|userType\|user_type" --include="*.ts" --include="*.tsx" --include="*.js" --include="*.jsx" --include="*.rb" --include="*.py" -l | head -10
+```
+
+### 2C. Merge + deduplicate
+
+Merge user-provided and discovered personas. Deduplicate on role name +
+goal. Present the final list for confirmation before writing.
+
+## Phase 3: Build + Write the Registry
+
+For each confirmed persona, build this structured entry:
+
+```
+ID: P{n}
+Role: {name}
+Goal: {one-sentence goal}
+Auth: {credentials or 'none'}
+Entry point: {URL}
+Frequency: {daily | weekly | occasional | first-time}
+Permissions: {capabilities}
+```
+
+Write the full list to `.gstack/ux-audit/personas.md` with a header:
+
+```
+# Persona Registry
+
+Generated: {YYYY-MM-DD}
+Updated by: /discover-personas
+
+## PERSONA REGISTRY
+
+ID: P1
+...
+```
+
+## Phase 4: Next-step suggestions
+
+Announce:
+
+> Persona registry saved to `.gstack/ux-audit/personas.md`.
+> Next step — pick one:
+> - `/ux-audit` — report friction across all personas
+> - `/auto-ux-audit` — fix friction for one persona
+> - `/auto-ux-audit-full` — fix friction for all personas
+> - `/define-workflows` — derive expected workflows per persona (feeds /feature-build)
+> - `/auto-feature-build` — build missing workflows for one persona
+
+## Rules
+
+1. **Read-first.** If a registry exists, offer to reuse before overwriting.
+2. **Never fabricate personas.** Only create entries the user confirmed or
+   that are observable in the app.
+3. **Single source of truth.** The registry lives at
+   `.gstack/ux-audit/personas.md`. Do not duplicate it elsewhere.
+4. **Confirmation before write.** Always present the final list before
+   writing the file.

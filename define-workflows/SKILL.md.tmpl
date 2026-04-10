@@ -1,0 +1,141 @@
+---
+name: define-workflows
+preamble-tier: 2
+version: 1.0.0
+description: |
+  Derive the list of workflows each persona *should* be able to accomplish,
+  based on their goal, permissions, and entry point. Produces one expected-
+  workflows file per persona at .gstack/feature-build/expected-workflows-
+  {persona}-{datetime}.md. This is the input to /gap-analysis and
+  /auto-feature-build — a lightweight standalone entry point for Step A of
+  feature-build gap analysis, extracted so you can enumerate workflows
+  without running the full build pipeline.
+  Use when asked to "define workflows", "list expected workflows", "what
+  should each persona be able to do", or "enumerate workflows per persona".
+  (hstack)
+benefits-from: [discover-personas]
+allowed-tools:
+  - Bash
+  - Read
+  - Write
+  - Grep
+  - Glob
+  - AskUserQuestion
+---
+
+{{PREAMBLE}}
+
+{{BENEFITS_FROM}}
+
+# /define-workflows: Expected Workflows per Persona
+
+For each persona in the shared registry, enumerate the workflows they
+*should* be able to accomplish. This is Step A of the feature-build gap
+analysis — extracted as a standalone skill so you can plan workflow
+coverage without running the full /auto-feature-build pipeline.
+
+## Prerequisite
+
+The shared persona registry must exist at `.gstack/ux-audit/personas.md`.
+If missing, this skill points the user to `/discover-personas` and stops.
+
+## Setup
+
+```bash
+mkdir -p .gstack/feature-build
+DATETIME=$(date +%Y%m%d-%H%M%S)
+```
+
+Remember `DATETIME` — it's used in every output file name.
+
+## Phase 1: Load the persona registry
+
+```bash
+cat .gstack/ux-audit/personas.md 2>/dev/null
+```
+
+If missing:
+
+> No persona registry found at `.gstack/ux-audit/personas.md`. Run
+> `/discover-personas` first, then re-run this skill.
+
+STOP.
+
+## Phase 2: Persona selection
+
+AskUserQuestion: "Which personas should I derive expected workflows for?"
+
+Options:
+- A) All personas (recommended)
+- B) One specific persona
+- C) A subset — let me pick
+
+## Phase 3: Derive expected workflows (Step A)
+
+For each selected persona, apply these heuristics to the Role / Goal /
+Permissions / Auth / Entry point fields:
+
+- Every **verb** in the Goal → candidate workflow
+- Every entry in **Permissions** → CRUD workflow on the target resource
+- **Auth** + **Entry point** → always a workflow if auth is required
+- Cross-check against navigation items if /browse data is available
+
+Expected count: 6-15 workflows per persona. If you produce fewer than 4,
+the heuristic under-delivered — re-read the persona and try again. If
+more than 20, you over-expanded — consolidate similar workflows.
+
+## Phase 4: Write one file per persona
+
+For each persona, write:
+`.gstack/feature-build/expected-workflows-{persona-id}-{DATETIME}.md`
+
+Format:
+
+```markdown
+# Expected Workflows — {persona-id} ({role})
+
+Derived: {DATETIME}
+Persona goal: {goal from registry}
+Auth: {auth from registry}
+Entry point: {entry point from registry}
+
+## Workflows
+
+WORKFLOW: {persona-id}-EW1
+Name: "{verb the goal implies}"
+Trigger: {entry point / nav link / button}
+Steps (rough):
+  1. ...
+  2. ...
+  3. ...
+Success criterion: {observable state change}
+Notes: {why this matters to the persona}
+
+WORKFLOW: {persona-id}-EW2
+...
+```
+
+## Phase 5: Present + suggest next step
+
+Show the full list of workflow IDs per persona. Then suggest:
+
+> Expected workflows written to:
+> - .gstack/feature-build/expected-workflows-{persona1}-{DATETIME}.md
+> - ...
+>
+> Next step:
+> - `/gap-analysis` — compare expected vs actual (what exists in the app)
+> - `/auto-feature-build` — run the full pipeline (includes gap analysis
+>   and build loop)
+
+## Rules
+
+1. **Registry is a prerequisite.** If the file is missing, stop and
+   direct the user to `/discover-personas`.
+2. **Heuristics not magic.** The derivation rules above are explicit.
+   Follow them; do not invent workflows the persona's fields don't
+   justify.
+3. **One file per persona.** Keeps the input to `/gap-analysis`
+   composable.
+4. **Deterministic naming.** `{persona-id}-EW{n}` IDs never rotate —
+   later skills reference them by ID.

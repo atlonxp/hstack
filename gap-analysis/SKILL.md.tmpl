@@ -1,0 +1,207 @@
+---
+name: gap-analysis
+preamble-tier: 4
+version: 1.0.0
+description: |
+  Compare expected workflows (from /define-workflows) against what the app
+  actually supports. Produces one gap report per persona at
+  .gstack/feature-build/gap-report-{persona}-{datetime}.md with a
+  completeness rubric (route, form, handler, persist, feedback — 5 signals
+  each 0/1) and a verdict (PRESENT_COMPLETE, PRESENT_BROKEN, PRESENT_PARTIAL,
+  HIDDEN, ABSENT). Lightweight standalone entry point for Steps B+C+D of
+  feature-build gap analysis, extracted so you can see what's missing
+  without running the full build pipeline.
+  Use when asked to "gap analysis", "what's missing", "find gaps in the
+  app", "completeness check", or "what does each persona still need".
+  (hstack)
+benefits-from: [discover-personas, define-workflows]
+allowed-tools:
+  - Bash
+  - Read
+  - Write
+  - Grep
+  - Glob
+  - AskUserQuestion
+---
+
+{{PREAMBLE}}
+
+{{BENEFITS_FROM}}
+
+# /gap-analysis: What's Missing for Each Persona
+
+You compare expected workflows against what the app actually supports, and
+report the gaps with a completeness rubric. This is Steps B + C + D of the
+feature-build gap analysis, extracted as a standalone skill so you can see
+what's missing before committing to build anything.
+
+## How this chains
+
+```
+/discover-personas → /define-workflows → /gap-analysis → (optional) /auto-feature-build
+```
+
+Each skill is a thin wrapper around the corresponding phase of
+/auto-feature-build. Use them individually when you want visibility
+without commitment, or use /auto-feature-build to run them end-to-end with
+the build loop attached.
+
+## Prerequisites
+
+- `.gstack/ux-audit/personas.md` exists (from /discover-personas)
+- `.gstack/feature-build/expected-workflows-{persona}-*.md` exists for at
+  least one persona (from /define-workflows)
+
+If either is missing, stop and direct the user to the appropriate prior
+skill.
+
+## Setup
+
+{{BROWSE_SETUP}}
+
+```bash
+export BROWSE_CMD_TIMEOUT=1000
+mkdir -p .gstack/feature-build
+DATETIME=$(date +%Y%m%d-%H%M%S)
+```
+
+Remember `DATETIME`.
+
+## Phase 0: Dev server detection
+
+```bash
+curl -sSf -o /dev/null -m 2 "${TARGET_URL:-http://localhost:3000}" && echo LIVE || echo DOWN
+```
+
+If DOWN, enter **degraded mode**: skip Step B (browser) and rely on Step C
+(codebase grep) only. Every entry gets a `live-check-skipped` flag. Warn the
+user loudly before proceeding.
+
+## Phase 1: Load inputs
+
+```bash
+cat .gstack/ux-audit/personas.md 2>/dev/null
+ls -t .gstack/feature-build/expected-workflows-*.md 2>/dev/null
+```
+
+If either is missing:
+
+> Missing prerequisite. Run:
+> 1. `/discover-personas` (if no persona registry)
+> 2. `/define-workflows` (if no expected workflows)
+> Then re-run `/gap-analysis`.
+
+STOP.
+
+AskUserQuestion: "Which personas should I analyze gaps for?"
+
+## Phase 2: For each persona, walk Steps B + C + D
+
+### Step B — Existence check via /browse
+
+Ladder — stop at first match:
+
+1. **PRESENT_COMPLETE** — entry point navigated, all steps completed,
+   success criterion observed. → NOT a gap.
+2. **PRESENT_BROKEN** — entry point exists, steps fail. → Flag for
+   `/auto-ux-audit`, not /feature-build.
+3. **PRESENT_PARTIAL** — some steps work, success criterion not
+   reachable. → gap (partial).
+4. **HIDDEN** — entry point unreachable via navigation but may exist
+   at a guessed URL. → investigate further.
+5. **ABSENT** — no evidence. → gap (full).
+
+```bash
+$B goto <target-url>
+$B snapshot -i
+# Attempt to navigate to each workflow's entry point...
+```
+
+### Step C — Codebase cross-check (mandatory before declaring ABSENT)
+
+Derive search patterns from the workflow name. Example for
+"Admin resets user password":
+
+```bash
+grep -rn "password.*reset\|reset.*password\|forgotPassword\|resetPassword" --include="*.ts" --include="*.tsx" --include="*.js" --include="*.rb" --include="*.py" -l | head -20
+```
+
+- Code exists but browser says ABSENT → **ORPHANED** (belongs to
+  /verify-loop, not feature-build).
+- Code doesn't exist → confirmed ABSENT.
+
+### Step D — Completeness rubric (5 signals, 0/1 each)
+
+| Signal | Check |
+|--------|-------|
+| Route exists | Can the persona navigate to the entry point? |
+| Form/action exists | UI affordance present? |
+| Handler exists | Backend accepts the action? |
+| Persistence exists | State change observable? |
+| Feedback exists | Persona sees the outcome? |
+
+- `0/5` = ABSENT
+- `1-3/5` = PRESENT_PARTIAL
+- `4-5/5` = NOT a gap
+
+## Phase 3: Write the gap report
+
+For each persona, write:
+`.gstack/feature-build/gap-report-{persona-id}-{DATETIME}.md`
+
+Format — see `test/fixtures/feature-build/gap-report-P1.md` for the
+canonical layout, summarized here:
+
+```markdown
+# Gap Report — Persona {persona-id} ({role})
+
+Session: {DATETIME}
+Target URL: {url}
+Dev server: {LIVE | DOWN — degraded mode}
+
+## Summary
+| Workflow ID | Name | Verdict | Completeness | Priority |
+|-------------|------|---------|--------------|----------|
+| P1-EW1 | ... | PRESENT_COMPLETE | 5/5 | — |
+| P1-EW2 | ... | PRESENT_PARTIAL | 3/5 | Critical |
+| P1-EW3 | ... | ABSENT | 0/5 | Critical |
+
+## Features (ABSENT + PRESENT_PARTIAL)
+
+FEATURE: F-P1-001
+Name: "..."
+Expected workflow ID: P1-EW2
+Completeness: 3/5 (route=1, form=1, handler=1, persist=0, feedback=0)
+Verdict: PRESENT_PARTIAL
+Priority: Critical
+Dependencies: []
+Acceptance criteria:
+  - ...
+Codebase anchors:
+  - ...
+
+## Out of scope (belongs to other skills)
+- PRESENT_BROKEN items → `/auto-ux-audit`
+- ORPHANED items → `/verify-loop`
+```
+
+## Phase 4: Present + next step
+
+Show a summary table per persona (verdict counts) and suggest:
+
+> Gap reports written. Next step:
+> - `/auto-feature-build` — build missing workflows for ONE persona
+> - `/auto-feature-build-full` — build missing workflows for ALL personas
+> - `/feature-build` — build ONE specific feature end-to-end
+
+## Rules
+
+1. **Step C is mandatory before ABSENT.** Never declare a workflow
+   absent without codebase grep.
+2. **Degraded mode is explicit.** If the dev server is down, every
+   entry gets `live-check-skipped`.
+3. **Priority is derived, not assumed.** Critical = root workflow for
+   persona's goal. Important = secondary. Edge = rare.
+4. **Out-of-scope findings go to a separate section.** /gap-analysis
+   does not silently drop PRESENT_BROKEN or ORPHANED items.
+5. **Report-only.** Never write code or build anything.
