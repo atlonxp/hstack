@@ -1,0 +1,334 @@
+---
+name: feature-build
+preamble-tier: 4
+version: 1.0.0
+description: |
+  Single-feature manual builder. The user specifies exactly ONE feature they want
+  built; feature-build runs it through the full pipeline: (optionally) frame it
+  with office-hours, plan it with autoplan-full (deep framing) or autoplan (fast),
+  build it with autobuild, verify with verify-loop, then scoped workflow
+  verification + autoaudit. One feature, maximum rigor. No auto-discovery.
+  Use when asked to "build this feature", "feature build", "take this feature
+  end-to-end", or "one feature through the pipeline". For auto-discovery of
+  missing workflows, use /auto-feature-build. For all personas, use
+  /auto-feature-build-full. (hstack)
+benefits-from: [office-hours]
+allowed-tools:
+  - Bash
+  - Read
+  - Write
+  - Edit
+  - Glob
+  - Grep
+  - AskUserQuestion
+  - WebSearch
+---
+
+{{PREAMBLE}}
+
+{{BASE_BRANCH_DETECT}}
+
+{{BENEFITS_FROM}}
+
+# /feature-build: Single-Feature End-to-End Builder
+
+The user hands you ONE feature. You take it all the way from "I want X" to
+"X is built, verified, and audited". No auto-discovery. No multi-feature
+queue. Maximum rigor per feature.
+
+## How /feature-build relates to its siblings
+
+| Skill | Features | Personas | Discovery |
+|-------|----------|----------|-----------|
+| **`/feature-build`** | **1 (user-specified)** | **Any — user names the target persona** | **None — user says what to build** |
+| `/auto-feature-build` | Up to 5 | 1 (chosen at runtime) | Auto-discover via gap analysis |
+| `/auto-feature-build-full` | Up to 10 | All | Auto-discover + cross-persona dedup |
+
+This is the "manual, heavyweight" tier. It runs /autoplan-full by default
+because the user invested the mental cost of picking one feature — they
+deserve the deepest framing, research, and review.
+
+---
+
+## Setup
+
+Parse the user's request for:
+
+| Parameter | Default | Override example |
+|-----------|---------|------------------|
+| Feature description | Required — ask if missing | `"Admin can reset user passwords"` |
+| Persona | Ask | `--persona admin` |
+| Planning tier | `autoplan-full` | `--fast` (use /autoplan instead) |
+| Target URL | Auto-detect | `http://localhost:3000` |
+
+**Find the browse binary:**
+
+{{BROWSE_SETUP}}
+
+```bash
+export BROWSE_CMD_TIMEOUT=1000
+```
+
+---
+
+## Phase 0: Pre-flight
+
+### 0A. Setup paths
+
+```bash
+{{SLUG_SETUP}}
+BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null | tr '/' '-')
+DATETIME=$(date +%Y%m%d-%H%M%S)
+FB_DIR=".gstack/feature-build"
+mkdir -p "$FB_DIR"
+```
+
+Remember: `SLUG`, `BRANCH`, `DATETIME`, `FB_DIR`.
+
+### 0B. Clean working tree required
+
+```bash
+git status --porcelain
+```
+
+If dirty, AskUserQuestion: `commit / stash / abort`. STOP until resolved.
+
+### 0C. Capture base commit
+
+```bash
+git rev-parse HEAD
+```
+
+Remember as `base_commit`.
+
+### 0D. Confirm the feature
+
+If the user's request did not include a feature description, AskUserQuestion:
+"What feature do you want to build? Give me a 1-line name and 2-3 sentence
+description of what the user should be able to do after it's built."
+
+Also capture:
+- Target persona (must exist in `.gstack/ux-audit/personas.md`, or this skill
+  prompts to pick/create one)
+- Planning tier: `autoplan-full` (default) or `autoplan --fast`
+
+### 0E. Acceptance criteria
+
+If the user did not supply acceptance criteria, AskUserQuestion: "Offer
+optional framing via /office-hours, or let me gather acceptance criteria
+directly?"
+
+Options:
+- A) Frame it with /office-hours (recommended for fuzzy feature ideas)
+- B) I'll give you acceptance criteria now
+- C) Skip framing; you infer criteria from the description
+
+---
+
+## Phase 1: Feature Framing (optional)
+
+### 1A. If the user chose /office-hours
+
+Read `~/.claude/skills/hstack/office-hours/SKILL.md` and run it
+interactively. Scope: JUST this one feature. Do not expand to product-level
+framing. Capture the output into the standard design doc path.
+
+### 1B. If the user chose direct criteria
+
+AskUserQuestion: "Provide acceptance criteria as a bulleted list. Each
+criterion should be a persona-observable outcome."
+
+### 1C. If the user chose inference
+
+Derive 4-6 acceptance criteria from the feature description using these
+heuristics:
+- Entry point: how does the persona start the workflow?
+- Inputs: what does the persona provide?
+- State change: what becomes true after?
+- Feedback: what does the persona see?
+- Error paths: what happens if the input is invalid?
+
+Present the inferred criteria to the user for confirmation before moving on.
+
+---
+
+## Phase 1.75: Write the feature design doc
+
+Write to: `~/.gstack/projects/$SLUG/{user}-{branch}-feature-design-{persona}-{slug}-{DATETIME}.md`
+
+```markdown
+# {Feature Name}
+
+## Problem
+{1-2 sentences on what the persona cannot do today}
+
+## User
+{persona id} ({role})
+
+## Workflow
+1. ...
+2. ...
+
+## Acceptance criteria
+- ...
+- ...
+
+## Out-of-scope
+- ...
+```
+
+This path is picked up by /autoplan-full and /autoplan via their standard
+`*-design-*.md` glob — which means Phase 2 can skip the office-hours phase
+(the doc already exists).
+
+---
+
+## Phase 2: Plan
+
+### 2A. Default path — /autoplan-full (heavyweight framing)
+
+Read `~/.claude/skills/hstack/autoplan-full/SKILL.md`. Execute it in full
+with these overrides:
+
+- **Skip Phase 1 (office-hours)** — the design doc already exists at the
+  path from Phase 1.75. autoplan-full will detect this via its existing
+  design-doc detection logic.
+- **Keep Gate 1** — the framing + research gate still needs the user's
+  confirmation, because /discover may surface new context worth approving.
+- **Keep Gate 2** — the final plan approval gate is MANDATORY. Never bypass.
+
+### 2B. Fast path — /autoplan (if user passed `--fast`)
+
+Read `~/.claude/skills/hstack/autoplan/SKILL.md`. Same skip + keep gate
+logic, applied to autoplan's shorter pipeline.
+
+### 2C. Detect the plan file
+
+```bash
+ls -t ~/.gstack/projects/$SLUG/*-feature-*-plan-*.md 2>/dev/null | head -1
+```
+
+Remember this as `plan_file`.
+
+---
+
+## Phase 3: Build
+
+Read `~/.claude/skills/hstack/autobuild/SKILL.md`. Execute in full with:
+
+- Select Option A (full autonomy) at the pre-flight gate
+- autobuild finds the plan via its standard glob
+- autobuild's Phase 2.5 invokes /verify-loop automatically — capture verdict
+
+If verify-loop verdict is `NEEDS_ATTENTION` or `REGRESSION`:
+
+1. STOP the build pipeline.
+2. AskUserQuestion: `continue anyway / revert / investigate`.
+3. On revert: `git reset --hard {base_commit}`.
+4. On investigate: surface the finding and let the user drive the next step.
+
+If verdict is `CLEAN` or `FIXED`, continue.
+
+---
+
+## Phase 4: Scoped Workflow Verification
+
+Re-execute the persona's workflow against the acceptance criteria from
+Phase 1.
+
+```bash
+$B goto <entry-point-url>
+$B snapshot -i
+# Walk each acceptance criterion...
+```
+
+For each acceptance criterion, record PASS/FAIL. If any FAIL, report to user
+and offer to revert or investigate.
+
+---
+
+## Phase 5: End-of-Feature Audit
+
+### 5A. Compute the feature diff
+
+```bash
+git diff --stat {base_commit}..HEAD
+git log --oneline {base_commit}..HEAD
+```
+
+### 5B. Run /autoaudit inline
+
+Read `~/.claude/skills/hstack/autoaudit/SKILL.md`. Execute on the feature
+diff. Capture findings. Auto-fix obvious issues; flag ambiguous ones.
+
+### 5C. Run /auto-ux-audit inline (same persona, scoped to this feature)
+
+Read `~/.claude/skills/hstack/auto-ux-audit/SKILL.md`. Scope: the new
+workflow introduced by this feature.
+
+---
+
+## Phase 6: Report
+
+Write `.gstack/feature-build/build-log-{DATETIME}-{feature-slug}.md`:
+
+```markdown
+# Feature Build — {Feature Name}
+Session: {DATETIME}
+Persona: {persona-id}
+Planning tier: {autoplan-full | autoplan}
+
+## Outcome
+Status: {verified | failed}
+Base commit: {short}
+Head commit: {short}
+Commit range: {base..head}
+
+## Acceptance criteria
+- [x] ...
+- [x] ...
+
+## Autoaudit findings
+{summary}
+
+## Auto-ux-audit findings
+{summary, persona UX delta}
+
+## Plan file
+{path}
+
+## Feature design doc
+{path}
+```
+
+---
+
+{{LEARNINGS_LOG}}
+
+## Guardrails
+
+1. **One feature per run. No exceptions.** For auto-discovery, use
+   `/auto-feature-build`.
+2. **Plan gates are mandatory.** autoplan-full Gate 2 (or autoplan Gate 2)
+   is never bypassed. The user reviews the plan before the build starts.
+3. **Clean working tree at Phase 0.** Abort if dirty.
+4. **Abort on verify-loop failure.** Override only via explicit
+   AskUserQuestion.
+5. **Feature design doc is mandatory.** It's the hook /autoplan[-full] uses
+   to skip office-hours phase.
+6. **Plan file namespace:** `feature-*-plan-*.md` to avoid collision with
+   plain autoplan plans.
+7. **Never modify the shared persona registry.** Read-only access to
+   `.gstack/ux-audit/personas.md`.
+
+## Important rules
+
+- **/autoplan-full is the default** — Tier 1 is the heavyweight framing
+  tier. Use `--fast` to downgrade to /autoplan if the feature is small
+  enough not to need full CTO framing.
+- **office-hours is optional** — the user can skip it if acceptance
+  criteria are clear.
+- **Scoped workflow verification is separate from verify-loop.**
+  verify-loop catches code-path brokenness; scoped verification catches
+  "built the wrong thing".
+- **Atomic commits are inherited from autobuild.**
