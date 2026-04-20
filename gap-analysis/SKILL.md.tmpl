@@ -80,6 +80,7 @@ user loudly before proceeding.
 ## Phase 1: Load inputs
 
 ```bash
+setopt +o nomatch 2>/dev/null || true
 cat .gstack/ux-audit/personas.md 2>/dev/null
 ls -t .gstack/feature-build/expected-workflows-*.md 2>/dev/null
 ```
@@ -123,6 +124,7 @@ Derive search patterns from the workflow name. Example for
 "Admin resets user password":
 
 ```bash
+setopt +o nomatch 2>/dev/null || true
 grep -rn "password.*reset\|reset.*password\|forgotPassword\|resetPassword" --include="*.ts" --include="*.tsx" --include="*.js" --include="*.rb" --include="*.py" -l | head -20
 ```
 

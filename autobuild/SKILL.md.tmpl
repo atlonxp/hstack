@@ -2,7 +2,7 @@
 name: autobuild
 version: 1.0.0
 description: |
-  Autonomous implementation from an approved plan. Reads the plan file, enters plan mode,
+  Autonomous implementation for gstack from an approved plan. Reads the plan file, enters plan mode,
   and builds everything with full autonomy. Clears conversation context to maximize
   available tokens for implementation. Designed to run headless or with minimal supervision.
   Use when asked to "autobuild", "build the plan", "implement it", "go build",
@@ -71,6 +71,7 @@ Continue anyway, or run `/autoplan-full` first?"
 
 Search for test plan artifact:
 ```bash
+setopt +o nomatch 2>/dev/null || true
 ls -t ~/.gstack/projects/$SLUG/*-test-plan-*.md 2>/dev/null | head -1
 ```
 

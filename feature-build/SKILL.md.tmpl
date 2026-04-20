@@ -3,7 +3,7 @@ name: feature-build
 preamble-tier: 4
 version: 1.0.0
 description: |
-  Single-feature manual builder. The user specifies exactly ONE feature they want
+  Single-feature manual builder for gstack. The user specifies exactly ONE feature they want
   built; feature-build runs it through the full pipeline: (optionally) frame it
   with office-hours, plan it with autoplan-full (deep framing) or autoplan (fast),
   build it with autobuild, verify with verify-loop, then scoped workflow
@@ -205,6 +205,7 @@ logic, applied to autoplan's shorter pipeline.
 ### 2C. Detect the plan file
 
 ```bash
+setopt +o nomatch 2>/dev/null || true
 ls -t ~/.gstack/projects/$SLUG/*-feature-*-plan-*.md 2>/dev/null | head -1
 ```
 

@@ -3,7 +3,7 @@ name: auto-feature-build
 preamble-tier: 4
 version: 1.0.0
 description: |
-  Single-persona feature builder. Auto-discovers MISSING workflows for one persona,
+  Single-persona feature builder for gstack. Auto-discovers MISSING workflows for one persona,
   plans and builds each feature in dependency order, verifies as the persona, and
   runs autoaudit + auto-ux-audit at the end. Orchestrates office-hours, autoplan,
   autobuild, verify-loop, autoaudit, and auto-ux-audit on a queue of features.
@@ -123,6 +123,7 @@ batch diff uses it.
 ### 0D. Check for existing queue (resume protocol)
 
 ```bash
+setopt +o nomatch 2>/dev/null || true
 ls -t .gstack/feature-build/feature-queue-*.md 2>/dev/null | head -1
 ```
 
@@ -202,6 +203,7 @@ Inline the persona discovery logic from /ux-audit Phase 1:
    look for login/signup, `/admin` routes, role selectors.
 3. Also grep the codebase:
    ```bash
+   setopt +o nomatch 2>/dev/null || true
    grep -rn "role\|permission\|isAdmin\|userType" --include="*.ts" --include="*.tsx" --include="*.js" --include="*.jsx" --include="*.rb" --include="*.py" -l | head -10
    ```
 4. Build the registry with ID, Role, Goal, Auth, Entry point, Frequency, Permissions
@@ -302,6 +304,7 @@ Derive search patterns from the workflow name. Example for "Admin resets user
 password":
 
 ```bash
+setopt +o nomatch 2>/dev/null || true
 grep -rn "password.*reset\|reset.*password\|forgotPassword\|resetPassword" --include="*.ts" --include="*.tsx" --include="*.js" --include="*.rb" --include="*.py" -l | head -20
 ```
 
@@ -504,6 +507,7 @@ feature with deep framing" tier.
 ### 6c. Detect the plan file
 
 ```bash
+setopt +o nomatch 2>/dev/null || true
 ls -t ~/.gstack/projects/$SLUG/*-feature-*-plan-*.md 2>/dev/null | head -1
 ```
 

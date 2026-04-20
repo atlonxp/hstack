@@ -2,7 +2,7 @@
 name: discover
 version: 1.0.0
 description: |
-  CTO-mode technology and product intelligence. Scans competitors, scouts
+  CTO-mode technology and product intelligence for gstack. Scans competitors, scouts
   emerging tech, finds market gaps, and delivers opinionated recommendations.
   Not a report generator — a visionary who synthesizes and recommends with
   conviction. Output is a research brief consumable by downstream skills.
@@ -66,6 +66,7 @@ eval $(~/.claude/skills/gstack/bin/gstack-slug 2>/dev/null)
 2. Run `git log --oneline -15` to understand recent direction.
 3. Check for existing research briefs:
    ```bash
+   setopt +o nomatch 2>/dev/null || true
    ls -t ~/.gstack/projects/$SLUG/*-research-*.md 2>/dev/null
    ```
    If prior briefs exist, read the most recent one to avoid re-covering ground.

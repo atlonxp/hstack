@@ -102,6 +102,7 @@ $B snapshot -i
 Also grep the codebase for role definitions:
 
 ```bash
+setopt +o nomatch 2>/dev/null || true
 grep -rn "role\|permission\|isAdmin\|userType\|user_type" --include="*.ts" --include="*.tsx" --include="*.js" --include="*.jsx" --include="*.rb" --include="*.py" -l | head -10
 ```
 

@@ -154,6 +154,7 @@ $B snapshot -i
 Also check the codebase for role definitions:
 
 ```bash
+setopt +o nomatch 2>/dev/null || true
 # Look for role/permission definitions in code
 grep -rn "role\|permission\|isAdmin\|userType\|user_type" --include="*.ts" --include="*.tsx" --include="*.js" --include="*.jsx" --include="*.rb" --include="*.py" -l | head -10
 ```
