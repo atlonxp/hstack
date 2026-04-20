@@ -87,6 +87,11 @@ graph TB
         AutoUX["/auto-ux-audit — single persona fix"]
         AutoUXFull["/auto-ux-audit-full — all personas + cross-check"]
         AutoPlan["/autoplan-full — idea to reviewed plan"]
+        FB["/feature-build — one feature end-to-end"]
+        AutoFB["/auto-feature-build — gap-fill per persona"]
+        AutoFBFull["/auto-feature-build-full — gap-fill all personas"]
+        VerifyLoop["/verify-loop — self-healing post-build"]
+        InvestigateWF["/investigate-workflow — completeness trace"]
         Intel["/intel — cross-session memory"]
     end
 
@@ -94,6 +99,13 @@ graph TB
     Discover -.-> CEO
     CEO -.-> UXPlan
     UXPlan -.-> Design
+    Plan -.-> FB
+    Plan -.-> AutoFB
+    FB -.-> Build
+    AutoFB -.-> Build
+    AutoFBFull -.-> Build
+    Build -.-> VerifyLoop
+    Build -.-> InvestigateWF
     QA -.-> UXAudit
     UXAudit -.-> AutoUX
     AutoUX -.-> AutoUXFull
@@ -125,6 +137,35 @@ flowchart LR
     style Fix fill:#e8f5e9,stroke:#2e7d32
 ```
 
+### The feature-build pipeline
+
+The UX audit family fixes friction in workflows that already exist. The feature-build family discovers and builds the workflows that *don't* exist yet. Same persona registry, opposite direction.
+
+```mermaid
+flowchart LR
+    subgraph Standalone["Standalone entry points (report-only)"]
+        DP["/discover-personas"] --> PR[(".gstack/ux-audit/<br/>personas.md")]
+        DW["/define-workflows"] -->|"reads personas"| EW[(".gstack/feature-build/<br/>expected-workflows-*.md")]
+        GA["/gap-analysis"] -->|"expected vs live app"| GR[("gap-report-*.md<br/>ABSENT / PARTIAL / BROKEN /<br/>HIDDEN / COMPLETE")]
+    end
+
+    subgraph Build["Build loops (end-to-end)"]
+        FB["/feature-build<br/>(1 feature, max rigor)"] -->|"office-hours →<br/>autoplan-full → autobuild →<br/>verify-loop → autoaudit +<br/>auto-ux-audit"| C1["Shipped Feature"]
+        AFB["/auto-feature-build<br/>(1 persona, cap 5)"] -->|"per feature: plan →<br/>build → verify →<br/>scoped persona recheck"| C2["5 Shipped Features"]
+        AFBF["/auto-feature-build-full<br/>(all personas, cap 10)"] -->|"unified feature matrix +<br/>cross-persona regression<br/>after every build"| C3["10 Shipped Features"]
+    end
+
+    PR -.->|"shared registry<br/>(read by 8 skills)"| DW
+    EW -.-> GA
+    GR -.->|"queue feeds into"| AFB
+    GR -.-> AFBF
+
+    style Standalone fill:#fff3e0,stroke:#e65100
+    style Build fill:#e8f5e9,stroke:#2e7d32
+```
+
+All three build loops are **resumable** — each one writes a durable `feature-queue-{datetime}.md` state file. If you ctrl-C or crash mid-run, re-running the skill detects the queue and offers to pick up from the exact row where you left off, across sessions.
+
 ### What makes this different
 
 | Capability | gstack | hstack |
@@ -136,10 +177,20 @@ flowchart LR
 | Cross-persona regression detection | - | `/auto-ux-audit-full` |
 | Technology landscape intelligence | - | `/discover` |
 | Full CTO planning pipeline | - | `/autoplan-full` |
+| Single-feature end-to-end pipeline | - | `/feature-build` |
+| Auto-discover MISSING features (per persona) | - | `/auto-feature-build` |
+| Auto-discover MISSING features (all personas) | - | `/auto-feature-build-full` |
+| Workflow completeness gap analysis | - | `/gap-analysis` |
+| Post-build workflow investigator | - | `/investigate-workflow` |
+| Self-healing verify loop after build | - | `/verify-loop` |
+| Post-build security + review pipeline | - | `/autoaudit` |
+| One-shot CI / deps / issues checks | - | `/check-ci`, `/check-deps`, `/check-issues` |
 | Cross-session project memory | - | `/intel` |
 | Configurable Playwright timeout | - | `BROWSE_CMD_TIMEOUT` env var |
 
 The UX audit skills use a **5-dimension friction scoring system** (Findability, Clarity, Feedback, Recovery, Speed) evaluated at every step of every workflow for every persona. This isn't "does the button work" — it's "would a first-time user find the button, understand what it does, see confirmation after clicking it, and recover if they clicked the wrong one?"
+
+The feature-build family uses a **5-signal completeness rubric** (route, form, handler, persist, feedback) to answer a different question: not "is this feature built well?" but "which features is the app missing entirely?" For each persona, it derives the workflows they *should* be able to accomplish, compares against what the live app actually supports, and builds the missing ones in dependency order.
 
 ## Install — 30 seconds
 
@@ -283,10 +334,34 @@ You:    /design-html           → takes approved mockup and generates productio
 
 ### Phase 5: Build — approve the plan and let Claude write the code
 
+**Path A — you know what to build.** Use this when you have a single clear feature or a full roadmap already decided.
+
 ```
 You:    /autobuild             → reads the plan, builds everything autonomously
 Claude: [implements component by component, tests alongside each one]
         [2,400 lines across 11 files, 9 new tests. ~8 minutes.]
+```
+
+Or `/feature-build` for one specific feature with maximum rigor — framing + plan + build + verify + audit, all in one pipeline.
+
+**Path B — you don't know what to build yet.** Use this when you have a live app and personas but aren't sure which features are actually *missing*.
+
+```
+You:    /auto-feature-build-full http://localhost:3000
+Claude: [reads .gstack/ux-audit/personas.md — 3 personas]
+        [derives expected workflows per persona from goal + permissions]
+        [compares expected vs live app with 5-signal completeness rubric]
+        [unified feature matrix: 14 missing, 3 shared across personas]
+        [topological sort by dependencies]
+
+        Building feature 1/10: "Admin resets user password"
+          plan → build → verify → scoped persona recheck → cross-persona regression
+          → PASS for Admin, Member flows unaffected
+
+        Building feature 2/10: "Member cancels subscription"
+          ...
+        [writes .gstack/feature-build/feature-queue-2026-04-20-1400.md as it goes]
+        [if you ctrl-C, re-running resumes from the exact row you stopped at]
 ```
 
 Or manually: "Approve plan. Exit plan mode." and let Claude build.
@@ -374,31 +449,44 @@ Claude: [per-person breakdowns, shipping streaks, test health trends]
 | Go from idea to MVP (full autopilot) | `/autoplan-full` → `/autobuild` → `/autoaudit` → `/qa` → `/ship` |
 | Start a new project or feature (manual) | `/office-hours` → `/discover` → plan reviews → build |
 | Get a fully reviewed plan fast | `/autoplan-full` (idea → plan) or `/autoplan` (plan → reviewed plan) |
-| Review each plan step with full control | `/plan-ceo-review` → `/plan-design-review` → `/plan-ux-review` → `/plan-eng-review` |
+| Review each plan step with full control | `/plan-ceo-review` → `/plan-design-review` → `/plan-ux-review` → `/plan-devex-review` → `/plan-eng-review` |
+| Tune a plan's voice/tone before building | `/plan-tune` |
 | Explore visual design directions | `/design-shotgun` → `/design-html` |
 | Build a design system from scratch | `/design-consultation` |
 | Build from an approved plan | `/autobuild` |
+| **Build ONE specific feature end-to-end** | `/feature-build` (office-hours → plan → build → verify → audit) |
+| **Discover and build MISSING features (1 persona)** | `/auto-feature-build` (cap 5, dependency-ordered, resumable) |
+| **Discover and build MISSING features (ALL personas)** | `/auto-feature-build-full` (cap 10, cross-persona regression) |
+| Bootstrap personas from the live app | `/discover-personas` |
+| Derive expected workflows per persona | `/define-workflows` |
+| Report what's missing/broken/partial/hidden | `/gap-analysis` |
 | Verify code after building | `/autoaudit` (CSO + review in one command) |
+| Self-heal broken/incomplete build items | `/verify-loop` (max 3 iterations, regression detection) |
+| Trace a feature's full execution path | `/investigate-workflow` |
 | Review code before shipping | `/review` (+ `/codex` for second opinion) |
 | Audit security | `/cso` |
 | Find and fix bugs on a live site | `/qa` (or `/qa-only` for report without fixes) |
 | Audit UX workflows as real personas | `/ux-audit` (report) or `/auto-ux-audit` (report + fix) |
 | Audit UX for ALL personas at once | `/auto-ux-audit-full` (all personas + cross-persona verification) |
+| Audit developer experience (docs, TTHW, friction) | `/devex-review` or `/plan-devex-review` (pre-build) |
 | Debug a specific issue | `/investigate` |
 | Ship a PR | `/ship` |
 | Deploy and verify production | `/land-and-deploy` → `/canary` |
-| Measure performance | `/benchmark` |
+| Measure page performance | `/benchmark` |
+| Benchmark LLM models head-to-head | `/benchmark-models` |
+| Generate a publication-quality PDF from markdown | `/make-pdf` |
 | Update docs after shipping | `/document-release` |
 | Run a team retrospective | `/retro` (or `/retro global` for cross-project) |
 | Browse a site with real eyes | `/browse` |
-| Control Chrome with live side panel | `/connect-chrome` |
+| Control Chrome with live side panel | `/connect-chrome` or `/open-gstack-browser` |
+| Pair a remote agent with your browser | `/pair-agent` |
 | Test authenticated pages | `/setup-browser-cookies` → `/qa` |
 | Protect against destructive commands | `/careful` or `/guard` (= careful + freeze) |
 | Lock edits to one directory | `/freeze` (undo with `/unfreeze`) |
-| Verify build completeness | `/verify-loop` |
 | Get project intelligence briefing | `/intel` |
-| Review what gstack learned | `/learn` |
-| Save/resume working state | `/checkpoint` |
+| Review what hstack learned | `/learn` |
+| Save working state to resume later | `/context-save` |
+| Resume a saved working state | `/context-restore` |
 | Code quality dashboard | `/health` |
 | Check CI status | `/check-ci` |
 | Audit dependencies | `/check-deps` |
@@ -427,14 +515,23 @@ hstack is a process, not a collection of tools. The skills run in the order a sp
 /land-and-deploy ──→ /canary ──→ /document-release ──→ /retro
 
 Shortcuts:
-  /autoplan-full       = office-hours → discover → CEO → UX → design → eng (idea to plan)
-  /autoplan            = CEO → design → eng (existing plan to reviewed plan)
-  /autobuild           = plan → implemented code (includes verify loop)
-  /autoaudit           = CSO + review (verify after build)
-  /verify-loop         = post-build self-healing (standalone or via /autobuild)
-  /auto-ux-audit-full  = all-persona UX audit + fix + cross-persona verify
-  /auto-ux-audit       = single-persona UX audit + fix
-  /ux-audit            = all-persona UX report (no fixes)
+  /autoplan-full          = office-hours → discover → CEO → UX → design → eng (idea to plan)
+  /autoplan               = CEO → design → eng (existing plan to reviewed plan)
+  /autobuild              = plan → implemented code (includes verify loop)
+  /autoaudit              = CSO + review (verify after build)
+  /verify-loop            = post-build self-healing (standalone or via /autobuild)
+  /investigate-workflow   = trace a feature end-to-end, find broken/missing paths
+  /auto-ux-audit-full     = all-persona UX audit + fix + cross-persona verify
+  /auto-ux-audit          = single-persona UX audit + fix
+  /ux-audit               = all-persona UX report (no fixes)
+
+Feature-build (opposite direction from UX audit — build what's missing, not fix what's there):
+  /feature-build          = one feature end-to-end (framing → plan → build → verify → audit)
+  /auto-feature-build     = 1 persona, discover + build up to 5 missing features (resumable)
+  /auto-feature-build-full= all personas, unified matrix, cross-persona regression, cap 10
+  /discover-personas      = bootstrap or update the shared persona registry
+  /define-workflows       = derive expected workflows per persona
+  /gap-analysis           = compare expected vs live app (ABSENT / PARTIAL / BROKEN / HIDDEN / COMPLETE)
 ```
 
 | Skill | Your specialist | What they do |
@@ -468,7 +565,20 @@ Shortcuts:
 | `/ux-audit` | **UX Researcher** | Persona-driven UX workflow audit on a live site. Simulates real user journeys, scores friction on 5 dimensions, produces heatmap. Report only — no code changes. |
 | `/auto-ux-audit` | **UX Engineer** | Single-persona UX audit with auto-fix. Finds friction, fixes it in source code, re-verifies in browser. Atomic commits per fix. |
 | `/auto-ux-audit-full` | **UX Team Lead** | All-persona UX audit with auto-fix. Audits each persona sequentially, fixes friction, then runs cross-persona verification to catch regressions between roles. |
+| `/feature-build` | **Feature Builder (manual)** | You hand it ONE feature; it runs the full pipeline: (optional) office-hours framing → `/autoplan-full` → `/autobuild` → `/verify-loop` → scoped persona verification → `/autoaudit` + `/auto-ux-audit`. One feature, maximum rigor. |
+| `/auto-feature-build` | **Feature Builder (1 persona)** | Picks one persona, derives what they *should* be able to do, compares against the live app with a 5-signal completeness rubric (route/form/handler/persist/feedback), builds a dependency-ordered queue of missing features. Cap: 5. Durable queue file — resumable across sessions. |
+| `/auto-feature-build-full` | **Feature Builder (all personas)** | Loops gap analysis across every persona, dedupes features into a unified matrix (one feature serving N personas = one build), topologically sorts, and runs cross-persona regression verification after each build. Cap: 10. |
+| `/discover-personas` | **Persona Bootstrapper** | Standalone entry point that discovers or accepts personas and writes the shared registry at `.gstack/ux-audit/personas.md`. Read by 8 skills (3 ux-audit tiers, 3 feature-build tiers, `/discover-personas`, `/define-workflows`). |
+| `/define-workflows` | **Workflow Architect** | Derives expected workflows per persona from their goal + permissions + entry point. Writes one file per persona. Feeds `/gap-analysis` and the feature-build family. |
+| `/gap-analysis` | **Gap Analyst** | Compares expected workflows against what the live app supports. Per-persona reports with ABSENT / PRESENT_PARTIAL / PRESENT_BROKEN / HIDDEN / PRESENT_COMPLETE verdicts. Report-only; chains into `/auto-feature-build`. |
+| `/investigate-workflow` | **Completeness Investigator** | Post-implementation workflow tracer. Walks every code path in a feature area end-to-end — routes, handlers, APIs, state transitions, UI triggers — and reports what's broken, incomplete, or disconnected. |
+| `/plan-devex-review` | **DX Researcher** | Pre-build plan review for developer experience. Explores developer personas, benchmarks against competitors, designs magical moments, traces friction points. |
+| `/devex-review` | **DX Auditor** | Post-build DX audit. Navigates docs, tries the getting-started flow, times TTHW (time-to-hello-world), screenshots friction. |
 | `/benchmark` | **Performance Engineer** | Baseline page load times, Core Web Vitals, and resource sizes. Compare before/after on every PR. |
+| `/benchmark-models` | **Model Benchmarker** | Cross-model quality benchmark. Runs the same task across Opus / Sonnet / Haiku / Codex / Gemini and compares output quality, cost, and tool usage. |
+| `/plan-tune` | **Plan Stylist** | Tune a plan's voice, tone, and specificity before handoff to `/autobuild`. Catches ambiguity that would cost iterations during build. |
+| `/make-pdf` | **Publisher** | Convert markdown to publication-quality PDFs. Cover page, TOC, headers, footers, page numbers, custom fonts. Works on Mac and Linux (Docker/CI). |
+| `/pair-agent` | **Agent Pairer** | Pair a remote AI agent (OpenClaw, Hermes, GBrain) with your local browser session. Run one command to generate a setup key and connection instructions. |
 | `/ship` | **Release Engineer** | Sync main, run tests, audit coverage, push, open PR. Bootstraps test frameworks if you don't have one. |
 | `/land-and-deploy` | **Release Engineer** | Merge the PR, wait for CI and deploy, verify production health. One command from "approved" to "verified in production." |
 | `/canary` | **SRE** | Post-deploy monitoring loop. Watches for console errors, performance regressions, and page failures. |
@@ -486,8 +596,10 @@ Shortcuts:
 | `/guard` | **Full Safety** — `/careful` + `/freeze` in one command. Maximum safety for prod work. |
 | `/unfreeze` | **Unlock** — remove the `/freeze` boundary. |
 | `/connect-chrome` | **Chrome Controller** — launch Chrome with the Side Panel extension. Watch every action live, inspect CSS on any element, clean up pages, and take screenshots. Each tab gets its own agent. |
+| `/open-gstack-browser` | **GStack Browser** — launch a dedicated Chromium with the sidebar extension baked in. Visible window, live activity feed, no "is my real Chrome about to be hijacked" anxiety. |
 | `/setup-deploy` | **Deploy Configurator** — one-time setup for `/land-and-deploy`. Detects your platform, production URL, and deploy commands. |
-| `/checkpoint` | **State Saver** — save and resume working state. Captures git state, decisions, and remaining work so you can pick up where you left off. |
+| `/context-save` | **State Saver** — save working state to resume later. Captures git state, decisions, and remaining work as a markdown checkpoint. Continuous mode also threads recovery context into WIP commits. |
+| `/context-restore` | **State Resumer** — restore a saved working state. Lists all checkpoints across branches (Conductor workspace handoff), loads the most recent or a specified one, merges WIP-commit context blocks into the session. |
 | `/health` | **Quality Dashboard** — wraps type checker, linter, test runner, dead code detector. Weighted composite 0-10 score with trend tracking. |
 | `/gstack-upgrade` | **Self-Updater** — upgrade to latest. Detects global vs vendored install, syncs both, shows what changed. |
 
