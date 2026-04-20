@@ -3,9 +3,11 @@ name: autoplan-full
 version: 1.0.0
 description: |
   Full CTO planning pipeline for gstack — from raw idea to fully reviewed implementation plan.
-  Runs office-hours → discover → CEO review → UX review → design review → eng review
-  sequentially. Interactive in phases 1-2 (framing + research), auto-decided in phases
-  3-6 using decision principles. Two gates: framing confirmation and final approval.
+  Runs office-hours → discover → CEO review → UX review → DX review → design review → eng review
+  sequentially. UX always runs; DX (developer experience) runs when the plan has API/CLI/SDK/
+  platform/docs surface; design runs when the plan has UI scope. Interactive in phases 1-2
+  (framing + research), auto-decided in phases 3-6 using decision principles. Two gates:
+  framing confirmation and final approval.
   Use when asked to "full plan", "autoplan-full", "plan everything", "plan from scratch",
   "run the full pipeline", or "idea to plan".
   Proactively suggest when the user describes a new product idea or feature from scratch.
@@ -862,6 +864,7 @@ These rules auto-answer every intermediate question in phases 3-6:
 **Conflict resolution (context-dependent tiebreakers):**
 - **CEO phase:** P1 (completeness) + P2 (boil lakes) dominate.
 - **UX phase:** P1 (completeness) + P5 (explicit) dominate.
+- **DX phase:** P1 (completeness) + P5 (explicit) dominate.
 - **Design phase:** P5 (explicit) + P1 (completeness) dominate.
 - **Eng phase:** P5 (explicit) + P3 (pragmatic) dominate.
 
@@ -960,8 +963,10 @@ Use AskUserQuestion:
 - Tech landscape: [key finding]
 
 ### Ready for auto-review?
-The next 4 phases (CEO → UX → Design → Eng) will run automatically with
-auto-decisions. Taste decisions will be collected for your review at the end.
+The next 5 phases (CEO → UX → DX → Design → Eng) will run automatically with
+auto-decisions. DX runs only if developer surface (API/CLI/SDK/platform/docs)
+is detected; Design runs only if UI scope is detected. Taste decisions will
+be collected for your review at the end.
 ```
 
 Options:
@@ -971,7 +976,8 @@ Options:
 - D) Stop here — I'll run reviews manually
 
 If D: output the design doc + research brief paths and stop. User can run
-`/plan-ceo-review`, `/plan-ux-review`, `/plan-design-review`, `/plan-eng-review` manually.
+`/plan-ceo-review`, `/plan-ux-review`, `/plan-devex-review`, `/plan-design-review`,
+`/plan-eng-review` manually.
 
 ---
 
@@ -1050,6 +1056,67 @@ personas (admin vs user vs service), permission models, and workflow handoffs.
 - Permission matrix (who can do what)
 - Cross-feature flow map
 - UX pass scores (7 dimensions, 0-10 each)
+
+---
+
+## Phase 4.5: DX Review — Developer Experience (AUTO-DECIDED, conditional — skip if no developer surface)
+
+Detect developer surface: grep the plan for API/CLI/SDK/platform/docs terms
+(API, REST, GraphQL, gRPC, webhook, endpoint, CLI, --help, flag, argument,
+terminal, command, npm install, import, require, library, package, SDK, deploy,
+hosting, infrastructure, provisioning, docs, guide, tutorial, example,
+SKILL.md, skill template, MCP, Claude Code agent). Require 2+ matches across
+the plan.
+
+If developer surface detected:
+- Read `~/.claude/skills/hstack/plan-devex-review/SKILL.md`
+- Follow all 8 scoring passes at full depth
+- Override: every AskUserQuestion → auto-decide using the 6 principles and the
+  DX-specific auto-decision rules below
+
+**DX-specific auto-decision rules for Step 0 investigations:**
+
+`/plan-devex-review` has 5 natural STOP points (0A–0E). Each maps to an auto-decision:
+
+- **0A Developer Persona** — auto-pick the inferred persona from README/package.json
+  audience signals. If the plan/repo is ambiguous (no clear audience), mark as
+  **TASTE DECISION** (surface at the final gate with the inferred options).
+- **0B Empathy Narrative** — auto-generate the 150-250 word first-person narrative
+  tracing the actual getting-started path from real files. Write it verbatim into the
+  plan's required "Developer Perspective" section. Mark as **TASTE DECISION** so the
+  user can correct it at the final gate.
+- **0C Competitive Benchmark** — default to **Competitive tier (2-5 min TTHW)** unless
+  the plan explicitly mentions "champion", "Stripe-tier", or "sub-2-min", in which
+  case default to **Champion tier (< 2 min)**.
+- **0D Magical Moment Delivery** — auto-pick by product type:
+  - CLI Tool → copy-paste demo command
+  - API/Service → interactive playground/sandbox
+  - Library/SDK → guided tutorial with developer's own data
+  - Platform → copy-paste demo command
+  - Documentation → guided tutorial
+  - Claude Code Skill → copy-paste demo command
+  Mark as **TASTE DECISION** — surface recommendation at final gate.
+- **0E Mode Selection** — default to **DX POLISH**. autoplan pipelines polish
+  existing plans; they don't chase competitive advantage. If plan explicitly mentions
+  "competitive advantage" or "differentiation", default to DX EXPANSION.
+
+**Scoring-pass override rules:**
+- Error message improvements: auto-fix if single clear improvement (P5)
+- Docs structure issues: auto-fix (P5)
+- Missing CLI `--help` coverage: auto-fix (P1)
+- TTHW shortcuts requiring new infra: defer to TODOS.md (P3)
+- Magical moment delivery vehicle requires >1d build: mark TASTE DECISION
+
+**Mandatory outputs from Phase 4.5:**
+- Developer persona card (who, context, tolerance, expectations)
+- Empathy narrative — written into the plan's "Developer Perspective" section
+- Competitive benchmark table (3 competitors + your product)
+- Magical moment specification (delivery vehicle + target moment)
+- DX pass scores (8 dimensions, 0-10 each)
+- Auto-decided mode (POLISH / EXPANSION / TRIAGE)
+
+If no developer surface: output "Phase 4.5 skipped — no developer surface detected
+(searched for: API, CLI, SDK, library, platform, docs, MCP)."
 
 ---
 
@@ -1159,6 +1226,14 @@ produced. Check the plan file and conversation for each item.
 - [ ] Cross-feature flow map
 - [ ] UX pass scores (7 dimensions)
 
+**Phase 4.5 (DX) outputs — only if developer surface detected:**
+- [ ] Developer persona card
+- [ ] Empathy narrative written into plan's "Developer Perspective" section
+- [ ] Competitive benchmark table (3 competitors + your product)
+- [ ] Magical moment specification (delivery vehicle + target moment)
+- [ ] DX pass scores (8 dimensions)
+- [ ] Mode recorded (POLISH / EXPANSION / TRIAGE)
+
 **Phase 5 (Design) outputs — only if UI scope detected:**
 - [ ] All 7 dimensions evaluated with scores
 - [ ] Issues identified and auto-decided
@@ -1232,6 +1307,7 @@ landscape → reviewed plan]
 - Discover: [research brief path]
 - CEO Review: [summary + score]
 - UX Review: [summary + 7-dimension scores]
+- DX Review: [summary + 8-dimension scores + mode, OR "skipped, no developer surface"]
 - Design Review: [summary or "skipped, no UI scope"]
 - Eng Review: [summary + score]
 - Codex: [summary or "unavailable"]
@@ -1283,6 +1359,11 @@ TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 ~/.claude/skills/hstack/bin/gstack-review-log '{"skill":"plan-eng-review","timestamp":"'"$TIMESTAMP"'","status":"clean","unresolved":0,"critical_gaps":0,"issues_found":0,"mode":"FULL_REVIEW","via":"autoplan-full","commit":"'"$COMMIT"'"}'
 ```
 
+If Phase 4.5 ran (developer surface):
+```bash
+~/.claude/skills/hstack/bin/gstack-review-log '{"skill":"plan-devex-review","timestamp":"'"$TIMESTAMP"'","status":"clean","unresolved":0,"via":"autoplan-full","commit":"'"$COMMIT"'"}'
+```
+
 If Phase 5 ran (UI scope):
 ```bash
 ~/.claude/skills/hstack/bin/gstack-review-log '{"skill":"plan-design-review","timestamp":"'"$TIMESTAMP"'","status":"clean","unresolved":0,"via":"autoplan-full","commit":"'"$COMMIT"'"}'
@@ -1298,7 +1379,8 @@ Suggest next step: `/autobuild` to implement, or build manually.
 - **Phases 3-6 are auto-decided.** Follow the 6 principles. Surface taste decisions at the gate.
 - **Gate 1 is mandatory.** Never skip from research directly to auto-review without user confirmation.
 - **UX review always runs.** Even backend APIs have personas and permission models. This is the hstack differentiator.
+- **DX review runs conditionally.** Only when the plan has developer-facing surface (API/CLI/SDK/library/platform/docs/skill). UX covers end-user workflows, DX covers developer workflows — both can run for dev tools with dashboards.
 - **Full depth means full depth.** Every section from every loaded skill file must be executed at the same depth as the interactive version. The only thing that changes is who answers: you do, using the 6 principles.
 - **Log every decision.** No silent auto-decisions. Every choice gets a row in the audit trail.
-- **Sequential order.** Office Hours → Discover → CEO → UX → Design → Eng. Each phase builds on the last.
+- **Sequential order.** Office Hours → Discover → CEO → UX → DX → Design → Eng. Each phase builds on the last.
 - **Never abort.** The user chose /autoplan-full. Surface all taste decisions, never redirect to interactive review.
