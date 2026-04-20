@@ -1,4 +1,25 @@
-# gstack development
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Project identity
+
+This repo is **hstack (Hall Stack)** — a fork of [garrytan/gstack](https://github.com/garrytan/gstack)
+that adds persona-aware UX intelligence, CTO-mode product intelligence, and multi-persona
+feature-build pipelines on top of the upstream software factory. Current version tracked in `VERSION`
+(see `CHANGELOG.md` for the hstack-specific `X.Y.Z.N` scheme where `N` is the hstack patch suffix
+over upstream `X.Y.Z`).
+
+Because hstack ships through the same mechanism as upstream gstack, directory names, config paths
+(`~/.gstack/`, `~/.gstack-dev/`), and skill install location (`~/.claude/skills/gstack/`) retain
+the `gstack` prefix. Treat "gstack" in paths/configs as the install name and "hstack" as the product
+name. hstack-added skills live in top-level directories like `auto-feature-build/`,
+`auto-feature-build-full/`, `auto-ux-audit/`, `auto-ux-audit-full/`, `autobuild/`, `autoplan-full/`,
+`define-workflows/`, `discover/`, `discover-personas/`, `feature-build/`, `gap-analysis/`, `intel/`,
+`investigate-workflow/`, `plan-ux-review/`, `ux-audit/`, `verify-loop/`, `check-ci/`, `check-deps/`,
+`check-issues/`. See `README.md` for the full list and `ARCHITECTURE.md` / `BROWSER.md` for deeper
+architecture. Upstream merges land via `merge upstream/main vX.Y.Z.0 → hstack vX.Y.Z.N` commits —
+when resolving conflicts, preserve both upstream changes and hstack extensions.
 
 ## Commands
 
