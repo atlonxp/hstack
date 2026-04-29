@@ -200,7 +200,7 @@ The feature-build family uses a **5-signal completeness rubric** (route, form, h
 
 Open Claude Code and paste this. Claude does the rest.
 
-> Install hstack: run **`git clone --single-branch --depth 1 https://github.com/atlonxp/hstack.git ~/.claude/skills/hstack && cd ~/.claude/skills/hstack && ./setup`** then add an "hstack" section to CLAUDE.md that says to use the /browse skill from hstack for all web browsing, never use mcp\_\_claude-in-chrome\_\_\* tools, and lists the available skills: /office-hours, /discover, /plan-ceo-review, /plan-eng-review, /plan-design-review, /plan-ux-review, /plan-devex-review, /plan-tune, /design-consultation, /design-shotgun, /design-html, /review, /ship, /land-and-deploy, /canary, /benchmark, /benchmark-models, /browse, /connect-chrome, /open-gstack-browser, /pair-agent, /make-pdf, /qa, /qa-only, /design-review, /devex-review, /setup-browser-cookies, /setup-deploy, /retro, /investigate, /investigate-workflow, /document-release, /codex, /cso, /autoplan, /autoplan-full, /autobuild, /autoaudit, /verify-loop, /intel, /check-ci, /check-deps, /check-issues, /learn, /ux-audit, /auto-ux-audit, /auto-ux-audit-full, /feature-build, /auto-feature-build, /auto-feature-build-full, /discover-personas, /define-workflows, /gap-analysis, /context-save, /context-restore, /health, /careful, /freeze, /guard, /unfreeze, /gstack-upgrade. Then ask the user if they also want to add hstack to the current project so teammates get it.
+> Install hstack: run **`git clone --single-branch --depth 1 https://github.com/atlonxp/hstack.git ~/.claude/skills/hstack && cd ~/.claude/skills/hstack && ./setup`** then add an "hstack" section to CLAUDE.md that says to use the /browse skill from hstack for all web browsing, never use mcp\_\_claude-in-chrome\_\_\* tools, and lists the available skills: /office-hours, /discover, /plan-ceo-review, /plan-eng-review, /plan-design-review, /plan-ux-review, /plan-devex-review, /plan-tune, /design-consultation, /design-shotgun, /design-html, /review, /ship, /land-and-deploy, /canary, /benchmark, /benchmark-models, /browse, /connect-chrome, /open-gstack-browser, /pair-agent, /make-pdf, /qa, /qa-only, /design-review, /devex-review, /scrape, /skillify, /setup-browser-cookies, /setup-deploy, /setup-gbrain, /retro, /investigate, /investigate-workflow, /document-release, /codex, /cso, /autoplan, /autoplan-full, /autobuild, /autoaudit, /verify-loop, /intel, /check-ci, /check-deps, /check-issues, /learn, /ux-audit, /auto-ux-audit, /auto-ux-audit-full, /feature-build, /auto-feature-build, /auto-feature-build-full, /discover-personas, /define-workflows, /gap-analysis, /context-save, /context-restore, /health, /careful, /freeze, /guard, /unfreeze, /gstack-upgrade. Then ask the user if they also want to add hstack to the current project so teammates get it.
 
 ### Step 2: Add to your repo so teammates get it (optional)
 
@@ -601,7 +601,32 @@ Feature-build (opposite direction from UX audit — build what's missing, not fi
 | `/context-save` | **State Saver** — save working state to resume later. Captures git state, decisions, and remaining work as a markdown checkpoint. Continuous mode also threads recovery context into WIP commits. |
 | `/context-restore` | **State Resumer** — restore a saved working state. Lists all checkpoints across branches (Conductor workspace handoff), loads the most recent or a specified one, merges WIP-commit context blocks into the session. |
 | `/health` | **Quality Dashboard** — wraps type checker, linter, test runner, dead code detector. Weighted composite 0-10 score with trend tracking. |
+| `/setup-gbrain` | **GBrain Onboarding** — from zero to running gbrain in under 5 minutes. PGLite local, Supabase existing URL, or auto-provision a new Supabase project via Management API. MCP registration for Claude Code + per-repo trust triad (read-write/read-only/deny). [Full guide](USING_GBRAIN_WITH_GSTACK.md). |
+| `/scrape` | **Scrape with one verb** — `/scrape <intent>` matches an existing browser-skill via `triggers:` (200ms) or prototypes via `$B` on a brand-new intent (~30s) and returns JSON. Pair with `/skillify` to codify the prototype. |
+| `/skillify` | **Codify a prototype** — walks the conversation, extracts the final-attempt `$B` calls from the last `/scrape`, synthesizes `script.ts` + `script.test.ts` + a captured fixture, stages to a temp dir, runs the test, and asks before committing under `~/.gstack/browser-skills/<name>/`. |
 | `/gstack-upgrade` | **Self-Updater** — upgrade to latest. Detects global vs vendored install, syncs both, shows what changed. |
+
+### New binaries (v0.19)
+
+Beyond the slash-command skills, gstack ships standalone CLIs for workflows that don't belong inside a session:
+
+| Command | What it does |
+|---------|-------------|
+| `gstack-model-benchmark` | **Cross-model benchmark** — run the same prompt through Claude, GPT (via Codex CLI), and Gemini; compare latency, tokens, cost, and (optionally) LLM-judge quality score. Auth detected per provider, unavailable providers skip cleanly. Output as table, JSON, or markdown. `--dry-run` validates flags + auth without spending API calls. |
+| `gstack-taste-update` | **Design taste learning** — writes approvals and rejections from `/design-shotgun` into a persistent per-project taste profile. Decays 5%/week. Feeds back into future variant generation so the system learns what you actually pick. |
+
+### Continuous checkpoint mode (opt-in, local by default)
+
+Set `gstack-config set checkpoint_mode continuous` and skills auto-commit your work as you go with a `WIP:` prefix plus a structured `[gstack-context]` body (decisions, remaining work, failed approaches). Survives crashes and context switches. `/context-restore` reads those commits to reconstruct session state. `/ship` filter-squashes WIP commits before the PR (preserving non-WIP commits) so bisect stays clean. Push is opt-in via `checkpoint_push=true` — default is local-only so you don't trigger CI on every WIP commit.
+
+### Domain skills + raw CDP escape hatch
+
+Two new browser primitives compound the gstack agent over time:
+
+- **`$B domain-skill save`** — agent saves a per-site note (e.g., "LinkedIn's Apply button lives in an iframe") that fires automatically next time it visits that hostname. Quarantined → active after 3 successful uses → optional cross-project promotion via `$B domain-skill promote-to-global`. Storage lives alongside `/learn`'s per-project learnings file. Full reference: **[docs/domain-skills.md](docs/domain-skills.md)**.
+- **`$B cdp <Domain.method>`** — raw Chrome DevTools Protocol escape hatch for the rare case curated commands miss. Deny-default: methods must be explicitly added to `browse/src/cdp-allowlist.ts` with a one-line justification. Two-tier mutex serializes browser-scoped CDP calls against per-tab work. Output for data-exfil methods is wrapped in the UNTRUSTED envelope.
+
+> Want raw CDP with no rails, no allowlist, no daemon — just thin transport from agent to Chrome? [browser-use/browser-harness-js](https://github.com/browser-use/browser-harness-js) is a different philosophy (agent-authored helpers vs gstack's curated commands) and a good fit if you don't want gstack's security stack. The two can coexist: gstack's `$B cdp` and harness can both attach to the same Chrome via Playwright's `newCDPSession`.
 
 **[Deep dives with examples and philosophy for every skill →](docs/skills.md)**
 
@@ -652,12 +677,48 @@ I open sourced how I build software. You can fork it and make it your own.
 >
 > **What's current from upstream v1.5.2.0:** `/make-pdf` (markdown → publication-quality PDFs), `/benchmark-models` (cross-model quality benchmark), `/context-save` + `/context-restore` (rename of old `/checkpoint` with WIP-commit recovery), `/plan-tune`, `/devex-review` + `/plan-devex-review`, `/pair-agent` (remote agent ↔ browser pairing), ML-based prompt injection defense for the sidebar, Puppeteer-parity `browse` commands, UX behavioral foundations, GBrain + Hermes agent runtime hosts.
 
+## GBrain — persistent knowledge for your coding agent
+
+[GBrain](https://github.com/garrytan/gbrain) is a persistent knowledge base for AI agents — think of it as the memory your agent actually keeps between sessions. GStack gives you a one-command path from zero to "it's running, my agent can call it."
+
+```bash
+/setup-gbrain
+```
+
+Three paths, pick one:
+
+- **Supabase, existing URL** — your cloud agent already provisioned a brain; paste the Session Pooler URL, now this laptop uses the same data.
+- **Supabase, auto-provision** — paste a Supabase Personal Access Token; the skill creates a new project, polls to healthy, fetches the pooler URL, hands it to `gbrain init`. ~90 seconds end-to-end.
+- **PGLite local** — zero accounts, zero network, ~30 seconds. Isolated brain on this Mac only. Great for try-first; migrate to Supabase later with `/setup-gbrain --switch`.
+
+After init, the skill offers to register gbrain as an MCP server for Claude Code (`claude mcp add gbrain -- gbrain serve`) so `gbrain search`, `gbrain put_page`, etc. show up as first-class typed tools — not bash shell-outs.
+
+**Per-remote trust policy.** Each repo on your machine gets one of three tiers:
+
+- `read-write` — agent can search the brain AND write new pages back from this repo
+- `read-only` — agent can search but never writes (best for multi-client consultants: search the shared brain, don't contaminate it with Client A's work while in Client B's repo)
+- `deny` — no gbrain interaction at all
+
+The skill asks once per repo. The decision is sticky across worktrees and branches of the same remote.
+
+**GStack memory sync (different feature, same private-repo infra).** Optionally pushes your gstack state (learnings, CEO plans, design docs, retros, developer profile) to a private git repo so your memory follows you across machines, with a one-time privacy prompt (everything allowlisted / artifacts only / off) and a defense-in-depth secret scanner that blocks AWS keys, tokens, PEM blocks, and JWTs before they leave your machine.
+
+```bash
+gstack-brain-init
+```
+
+**Full monty — every scenario, every flag, every bin helper, every troubleshooting step:** [USING_GBRAIN_WITH_GSTACK.md](USING_GBRAIN_WITH_GSTACK.md)
+
+Other references: [docs/gbrain-sync.md](docs/gbrain-sync.md) (sync-specific guide) • [docs/gbrain-sync-errors.md](docs/gbrain-sync-errors.md) (error index)
+
 ## Docs
 
 | Doc | What it covers |
 |-----|---------------|
 | [Skill Deep Dives](docs/skills.md) | Philosophy, examples, and workflow for every skill (includes Greptile integration) |
 | [Builder Ethos](ETHOS.md) | Builder philosophy: Boil the Lake, Search Before Building, three layers of knowledge |
+| [Using GBrain with GStack](USING_GBRAIN_WITH_GSTACK.md) | Every path, flag, bin helper, and troubleshooting step for `/setup-gbrain` |
+| [GBrain Sync](docs/gbrain-sync.md) | Cross-machine memory setup, privacy modes, troubleshooting |
 | [Architecture](ARCHITECTURE.md) | Design decisions and system internals |
 | [Browser Reference](BROWSER.md) | Full command reference for `/browse` |
 | [Contributing](CONTRIBUTING.md) | Dev setup, testing, contributor mode, and dev mode |
@@ -700,11 +761,13 @@ Data is stored in [Supabase](https://supabase.com) (open source Firebase alterna
 Use /browse from hstack for all web browsing. Never use mcp__claude-in-chrome__* tools.
 Available skills: /office-hours, /discover, /plan-ceo-review, /plan-eng-review,
 /plan-design-review, /plan-ux-review, /design-consultation, /design-shotgun, /design-html,
-/review, /ship, /land-and-deploy, /canary, /benchmark, /browse, /connect-chrome, /qa,
-/qa-only, /design-review, /setup-browser-cookies, /setup-deploy, /retro, /investigate,
+/review, /ship, /land-and-deploy, /canary, /benchmark, /browse, /connect-chrome,
+/open-gstack-browser, /pair-agent, /qa, /qa-only, /design-review, /scrape, /skillify,
+/setup-browser-cookies, /setup-deploy, /setup-gbrain, /retro, /investigate,
 /document-release, /codex, /cso, /autoplan, /autoplan-full, /autobuild, /autoaudit,
 /verify-loop, /intel, /check-ci, /check-deps, /check-issues, /learn, /ux-audit,
-/auto-ux-audit, /auto-ux-audit-full, /checkpoint, /health, /careful, /freeze, /guard, /unfreeze, /gstack-upgrade.
+/auto-ux-audit, /auto-ux-audit-full, /context-save, /context-restore, /health,
+/careful, /freeze, /guard, /unfreeze, /gstack-upgrade.
 ```
 
 ## License
