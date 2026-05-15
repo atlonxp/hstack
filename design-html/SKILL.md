@@ -3,7 +3,7 @@ name: design-html
 preamble-tier: 2
 version: 1.0.0
 description: |
-  Design finalization: generates production-quality Pretext-native HTML/CSS.
+  [Design] Design finalization: generates production-quality Pretext-native HTML/CSS.
   Works with approved mockups from /design-shotgun, CEO plans from /plan-ceo-review,
   design review context from /plan-design-review, or from scratch with a user
   description. Text actually reflows, heights are computed, layouts are dynamic.

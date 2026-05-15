@@ -2,7 +2,7 @@
 name: scrape
 version: 1.0.0
 description: |
-  Pull data from a web page. First call on a new intent prototypes the flow
+  [Browser & Web] Pull data from a web page. First call on a new intent prototypes the flow
   via $B primitives and returns JSON. Subsequent calls on a matching intent
   route to a codified browser-skill and return in ~200ms. Read-only — for
   mutating flows (form fills, clicks, submissions), use /automate.

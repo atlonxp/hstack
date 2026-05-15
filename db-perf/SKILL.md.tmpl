@@ -1,0 +1,332 @@
+---
+name: db-perf
+preamble-tier: 3
+version: 1.0.0
+description: |
+  [API/DB] EXPLAIN-driven slow-query diagnosis and index advisor. Extracts candidate
+  queries from app code and DB logs, runs EXPLAIN ANALYZE against a read-only
+  dev/staging DB, spots seq scans, missing indexes, N+1 patterns, suboptimal joins,
+  and bad statistics. Suggests indexes with cost estimates and predicted impact.
+  Supports Postgres, SQLite, and MySQL. Use when: "the API is slow", "diagnose
+  this query", "missing index", "p99 spike", "explain plan", or "advise indexes".
+  (gstack)
+allowed-tools:
+  - Read
+  - Write
+  - Edit
+  - Grep
+  - Glob
+  - AskUserQuestion
+  - Bash
+  - WebSearch
+triggers:
+  - diagnose slow query
+  - missing index
+  - explain plan
+  - n plus one
+  - index advisor
+  - db performance review
+---
+
+{{PREAMBLE}}
+
+{{GBRAIN_CONTEXT_LOAD}}
+
+# /db-perf — Family E2 — API/DB
+
+Slow queries get diagnosed reactively from p99 alerts; query-plan reviews never happen
+until prod is on fire. This skill flips that: extract candidate queries from app code
+and DB logs, run EXPLAIN ANALYZE against a non-prod DB, identify the structural problems,
+and recommend indexes with predicted impact.
+
+The skill **never connects to production**. Read-only credentials against a dev or
+staging clone are required. The recommendations are then handed to the user (or to
+`/db-migration` for safe rollout).
+
+## When to use
+
+- Reactive: a specific endpoint or query is slow, you have the query text or the route.
+- Proactive: pre-launch review of the candidate query set for a new feature.
+- Periodic: monthly "what got slower" sweep, comparing current plans against a baseline.
+- After a schema change: did the new index actually help? did anything else regress?
+
+**Do not use for:**
+
+- Schema design — that's `/db-design`.
+- Executing index creation safely on a live table — that's `/db-migration` with
+  `CREATE INDEX CONCURRENTLY`.
+- Application-level profiling (CPU, allocation) — out of scope.
+
+## Inputs
+
+The skill expects:
+
+1. A **read-only connection string** to a non-prod DB with representative data volume.
+2. One or more of:
+   - **Slow query log** path (`pg_stat_statements` / `slow_query_log` / `sqlite_stmt`).
+   - **Specific query text** the user wants diagnosed.
+   - **Route handler / ORM call site** to reverse-engineer the SQL from.
+3. The **engine** — Postgres, SQLite, or MySQL. AskUserQuestion if unclear.
+
+If no non-prod DB is available, AskUserQuestion to surface options: connect to staging
+(read-only), spin up a local copy, or restrict the skill to static SQL review without
+EXPLAIN.
+
+## Database engines supported
+
+| Engine     | EXPLAIN tool                          | pg_stat_statements equivalent       |
+|------------|---------------------------------------|--------------------------------------|
+| PostgreSQL | `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)` | `pg_stat_statements` extension     |
+| SQLite     | `EXPLAIN QUERY PLAN` + `EXPLAIN`     | `sqlite_stmt` virtual table          |
+| MySQL      | `EXPLAIN ANALYZE` (8.0.18+) / `EXPLAIN FORMAT=JSON` | `performance_schema.events_statements_summary_by_digest` |
+
+## Procedure
+
+### Step 0: Detect engine + collect candidate queries
+
+```bash
+# Find ORM / SQL files
+SQL_FILES=$(find . -type f \( -name "*.sql" -o -name "models.py" -o -name "*.rb" -o -name "schema.prisma" \) -not -path "*/node_modules/*" -not -path "*/.git/*" 2>/dev/null | head -20)
+LOG_FILES=$(find . -type f \( -name "slow*.log" -o -name "postgres*.log" -o -name "query*.log" \) 2>/dev/null | head -5)
+echo "SQL/model files: ${SQL_FILES:-none}"
+echo "Log files: ${LOG_FILES:-none}"
+```
+
+Also check standard system locations if running on a dev box:
+- Postgres: `pg_stat_statements` view (requires extension), `log_min_duration_statement` output.
+- MySQL: `mysql.slow_log` table or file at `/var/log/mysql/mysql-slow.log`.
+- SQLite: app-side timing logs.
+
+State what you found. AskUserQuestion if the candidate-query source is unclear.
+
+### Step 1: AskUserQuestion — scope + connection
+
+One issue per call. Use the preamble's AskUserQuestion format. Ask:
+
+- **Connection string** — confirm it's read-only and points to non-prod. If unset, gate.
+- **Scope** — single query, single route, top-N slowest, or all queries above a threshold?
+- **Threshold** — what's "slow"? Default: any query exceeding p95 of 100ms or doing
+  more than 10k row reads.
+- **Engine version** — Postgres 16 vs 13 changes EXPLAIN output (Memoize node, parallel
+  hash join, etc.); MySQL 5.7 vs 8.0 changes EXPLAIN ANALYZE availability.
+
+Do NOT proceed until the user responds.
+
+### Step 2: Collect the query set
+
+Build the candidate list. Each entry: `{ query_id, query_text, p95_ms, calls_per_min,
+rows_per_call, source }`.
+
+**From `pg_stat_statements` (Postgres):**
+
+```sql
+SELECT
+  queryid,
+  substring(query, 1, 200) AS query,
+  calls,
+  mean_exec_time AS mean_ms,
+  total_exec_time AS total_ms,
+  rows / NULLIF(calls, 0) AS rows_per_call
+FROM pg_stat_statements
+ORDER BY total_exec_time DESC
+LIMIT 30;
+```
+
+If the extension isn't enabled, document the install path
+(`CREATE EXTENSION pg_stat_statements;` + `shared_preload_libraries` config) but do
+not require it for the audit. Fall back to log-file parsing.
+
+**From MySQL `performance_schema`:**
+
+```sql
+SELECT
+  DIGEST_TEXT,
+  COUNT_STAR,
+  AVG_TIMER_WAIT / 1e9 AS avg_ms,
+  SUM_ROWS_EXAMINED / COUNT_STAR AS rows_per_call
+FROM performance_schema.events_statements_summary_by_digest
+WHERE SCHEMA_NAME = DATABASE()
+ORDER BY SUM_TIMER_WAIT DESC
+LIMIT 30;
+```
+
+**From SQLite:** there's no built-in slow log; rely on `EXPLAIN QUERY PLAN` and
+app-side timing logs.
+
+**From app code:** Grep for `SELECT`, `.find_by`, `.where(`, `prisma.x.findMany`,
+`session.query(`, `db.query(`, etc. Use the model layer as the source of truth.
+
+### Step 3: Run EXPLAIN per query
+
+For each candidate, run the engine-appropriate EXPLAIN with real-execution stats:
+
+**Postgres:**
+
+```sql
+EXPLAIN (ANALYZE, BUFFERS, VERBOSE, FORMAT JSON)
+SELECT ... FROM ... WHERE ...;
+```
+
+`ANALYZE` actually executes the query — only on non-prod, with bounded result sets.
+For mutating queries, wrap in a transaction and ROLLBACK:
+
+```sql
+BEGIN;
+EXPLAIN (ANALYZE, BUFFERS) UPDATE orders SET status = 'shipped' WHERE id = 123;
+ROLLBACK;
+```
+
+**SQLite:**
+
+```sql
+EXPLAIN QUERY PLAN SELECT ... ;  -- structural; what indexes are used
+EXPLAIN SELECT ... ;             -- VM opcodes; deeper analysis
+```
+
+**MySQL 8.0.18+:**
+
+```sql
+EXPLAIN ANALYZE SELECT ... ;
+EXPLAIN FORMAT=JSON SELECT ... ;
+```
+
+Capture the raw plan for each query in the report.
+
+### Step 4: Diagnose the plan
+
+For each query, look for these structural problems (in priority order):
+
+1. **Seq Scan / Full Table Scan on large tables** — missing index on the filter column.
+   In Postgres EXPLAIN, look for `Seq Scan on T  (cost=... rows=N)` with high N.
+   Acceptable only when the predicate matches most rows or the table is tiny.
+2. **Index used but high `Rows Removed by Filter`** — index is too broad. A
+   multicolumn or partial index would skip more rows.
+3. **`Rows` estimate vs actual diverges by >10x** — stale statistics. Run `ANALYZE
+   <table>` (Postgres/SQLite) or `ANALYZE TABLE <table>` (MySQL). Bad estimates cause
+   the planner to pick the wrong join order.
+4. **Nested Loop with large outer side** — should likely be Hash Join. Often caused by
+   bad statistics (above) or `enable_hashjoin = off`.
+5. **Sort node with `disk: ...`** — `work_mem` too small or unbounded ORDER BY. Add
+   `LIMIT` or an index that provides pre-sorted output.
+6. **Bitmap Heap Scan with high lossy recheck** — `work_mem` issue, or the index match
+   is too broad.
+7. **Function call in WHERE breaks index** — `WHERE lower(email) = ...` without a
+   functional index. Either add `CREATE INDEX ON users (lower(email))` or normalize
+   the column.
+8. **`LIKE '%foo%'` (leading wildcard)** — B-tree can't help. Add a trigram index
+   (`CREATE INDEX ... USING GIN (col gin_trgm_ops)` in Postgres; FTS5 in SQLite;
+   FULLTEXT in MySQL).
+9. **N+1 from the ORM** — the same `SELECT ... WHERE id = ?` repeated hundreds of times
+   per request. The fix is in app code (eager-load / `includes` / `select_related`),
+   not the DB. Flag it but route to the app team.
+10. **Subquery that could be a JOIN** — semi-join / anti-join optimizer often handles
+    this, but EXISTS vs IN vs JOIN performance differs per engine. Document the actual
+    plan.
+11. **OR across columns** — Postgres often switches to BitmapOr scans; if not, split
+    into UNION ALL with index-friendly predicates per branch.
+12. **Pagination via OFFSET** — `OFFSET 10000` reads + discards 10000 rows. Switch to
+    keyset pagination: `WHERE (created_at, id) < (?, ?) ORDER BY created_at DESC, id DESC LIMIT N`.
+
+### Step 5: Index advisor
+
+For each problem in Step 4, recommend a fix. For missing-index cases:
+
+1. State the proposed index: `CREATE INDEX idx_orders_user_id_created_at ON orders (user_id, created_at DESC) WHERE deleted_at IS NULL;`
+2. Why this shape: which queries benefit, the WHERE / ORDER BY columns covered.
+3. Predicted impact: re-run the EXPLAIN with the index hypothetically in place.
+   Postgres has `HypoPG` extension (`hypopg_create_index('CREATE INDEX ...')`) for
+   simulated indexes — use it where installed; otherwise note "predicted, not simulated".
+4. Cost of adding the index: estimated size (from `pg_class.relpages` extrapolation),
+   write-amplification cost, lock cost. Recommend `CREATE INDEX CONCURRENTLY` for
+   Postgres (route to `/db-migration` for execution).
+5. Risk: any concurrent-writer impact, statistics-collection delay, replication lag.
+
+Do NOT recommend more than 1 new index per (table, query-shape) combination.
+Index bloat is real. Each new index slows writes ~5-15%.
+
+### Step 6: Statistics + maintenance hygiene
+
+Check separately from per-query problems:
+
+- **Postgres:** are autovacuum + autoanalyze keeping up? `pg_stat_user_tables` —
+  any table with `n_mod_since_analyze` high relative to `n_live_tup`? Any with
+  `n_dead_tup` close to `n_live_tup`? Recommend autovacuum tuning per-table if needed.
+- **MySQL:** is `innodb_stats_persistent` on? When did `ANALYZE TABLE` last run?
+- **SQLite:** `ANALYZE` produces `sqlite_stat1`. Re-run after big inserts/deletes.
+
+Flag bloat, missing ANALYZE, unused indexes (`pg_stat_user_indexes` where `idx_scan = 0`
+over a meaningful window).
+
+### Step 7: Emit the report
+
+Write `db/perf/{YYYY-MM-DD}.md`:
+
+- **Top findings** — the highest-impact 5-10 queries, ordered by `total_ms` impact.
+- **Per query:** original SQL, plan summary, problem diagnosis, recommended index (or
+  app fix), predicted impact, risk.
+- **Statistics hygiene** — vacuum/analyze findings.
+- **Unused indexes** — candidates for removal (data only — never auto-drop).
+- **Suggested next actions** — ordered list, each linking to `/db-migration` or to the
+  app-layer fix.
+
+### Step 8: AskUserQuestion — gate per recommendation
+
+For every recommended index or schema change, AskUserQuestion individually. Present
+options: apply now (via `/db-migration`), schedule, or skip. Do not auto-apply.
+
+## Outputs
+
+- `db/perf/{YYYY-MM-DD}.md` — the full report with findings, plans, recommendations.
+- Optionally `db/perf/{YYYY-MM-DD}/plans/{query-id}.json` — raw EXPLAIN output preserved
+  per query for future before/after diffing.
+
+## Edge cases
+
+- **EXPLAIN without ANALYZE** — only run ANALYZE on non-prod; the plan-only EXPLAIN
+  doesn't execute the query but also doesn't give actual row counts. Falls back to
+  plan-only for prod / production-shaped datasets the user shouldn't load.
+- **Replica lag** — if running on a hot standby, plans can match prod but execution
+  times don't (different cache state). Note when results came from a replica.
+- **Connection pooler in the way** — PgBouncer in transaction mode breaks
+  `pg_stat_statements` per-session views; bypass the pooler for the audit query.
+- **ORM-generated SQL is ugly** — show the actual emitted SQL, not the ORM call. The
+  planner sees the real query. ActiveRecord / Django ORM sometimes emit surprising
+  joins.
+- **Prepared statements** — Postgres re-plans after 5 invocations and may switch to a
+  generic plan that's worse. `plan_cache_mode = force_custom_plan` while debugging.
+- **Partial indexes need WHERE-clause matching** — `CREATE INDEX ... WHERE status = 'pending'`
+  only helps queries with the exact same predicate (or stricter). Document the rule.
+- **GIN indexes are huge and slow to write** — only for JSONB you query often, full-text
+  search, and trigram search. Each GIN index can be 30% of the table size.
+- **MySQL InnoDB clustered PKs** — picking the wrong PK shape (random UUID) hurts both
+  insert performance AND every secondary index (which embeds the PK). Surface this if
+  you see it.
+- **SQLite single-writer** — many "perf" problems on SQLite are write contention, not
+  query shape. Recommend WAL mode (`PRAGMA journal_mode=WAL`) and `PRAGMA synchronous=NORMAL`
+  as first checks before chasing indexes.
+- **Read-only credential refusal** — if connection allows writes, refuse and demand
+  read-only. Never run on a connection that could mutate a production system, even by
+  accident.
+
+## Dependencies
+
+- Read-only DB credentials to a non-prod environment.
+- `psql` / `sqlite3` / `mysql` CLI.
+- Optional Postgres extensions: `pg_stat_statements`, `HypoPG` (hypothetical indexes),
+  `auto_explain` (slow-query plan logging).
+- Optional MySQL: `performance_schema` (default-on in 8.0).
+- WebSearch for engine-version-specific plan-node lookups.
+
+No new gstack libs are strictly required, though `lib/db-explain/{postgres,mysql,sqlite}.ts`
+is the natural shared layer if multiple skills want to parse EXPLAIN JSON consistently.
+If that lib already exists, use it; if not, defer creating it until a second skill needs
+the same parsing.
+
+## Stop gates
+
+- After Step 1 (connection + scope) — refuse to proceed without read-only confirmation.
+- After Step 8 (per recommendation) — every index or schema change needs explicit approval.
+
+The AskUserQuestion call is a tool_use, not prose — call the tool directly. Loading the
+schema via ToolSearch and writing the recommendation as chat prose is the failure mode
+these gates exist to prevent.

@@ -1,0 +1,278 @@
+---
+name: api-design
+preamble-tier: 3
+version: 1.0.0
+description: |
+  [API/DB] Design or audit an API surface. Picks REST / GraphQL / gRPC based on use case
+  and consumer profile, generates OpenAPI 3.1 / GraphQL SDL / Protocol Buffers, and
+  validates against a chosen style guide (Stripe API Design Guide is the default).
+  Reviewer mode walks an existing surface, catches breaking changes, scores consistency,
+  and produces a remediation plan. Use when: "design this API", "audit our API",
+  "REST vs GraphQL", "generate OpenAPI", "API style guide", or "is this a breaking
+  change". (gstack)
+allowed-tools:
+  - Read
+  - Write
+  - Edit
+  - Grep
+  - Glob
+  - AskUserQuestion
+  - Bash
+  - WebSearch
+triggers:
+  - design an API
+  - audit the API
+  - generate openapi
+  - rest vs graphql
+  - api style guide
+  - breaking change check
+---
+
+{{PREAMBLE}}
+
+{{GBRAIN_CONTEXT_LOAD}}
+
+# /api-design — Family E2 — API/DB
+
+Design a new API or audit an existing one. Two modes:
+
+- **Design mode** — green-field. Pick protocol (REST/GraphQL/gRPC), pick style guide,
+  generate the schema, generate examples, write the style guide doc.
+- **Audit mode** — existing API. Score against style guide, identify inconsistencies,
+  detect breaking changes vs the deployed version, produce a remediation plan.
+
+The goal is a **stable, consistent, and well-documented surface** that consumers can
+build against without surprises.
+
+## When to use
+
+- Greenfield service that needs a public API surface.
+- Existing API where endpoints have drifted (mixed casing, mixed envelope shape, missing
+  pagination, ad-hoc error codes).
+- Before a major API version bump (`v1` → `v2`), to scope what changes and stay backward
+  compatible where possible.
+- Pre-merge gate for any PR that adds or modifies an endpoint, message, or RPC.
+- Migration from REST to GraphQL (or vice versa), or adding gRPC alongside an existing
+  REST surface for internal traffic.
+
+**Do not use for:**
+
+- Contract testing — that's `/api-contract-test`.
+- Database schema design — that's `/db-design`.
+- Event/message schemas — that's `/event-design`.
+
+## Inputs
+
+The skill accepts one or more of:
+
+1. An **API spec file** at a conventional location:
+   - `openapi.yaml` / `openapi.json` / `api/openapi.yaml`
+   - `schema.graphql` / `graphql/schema.graphql`
+   - `*.proto` files under `proto/` or `api/proto/`
+2. A **codebase** with route handlers — the skill will reverse-engineer the surface.
+   Looks for: Express/Fastify/Hono/Koa routes, FastAPI/Flask/Django routes, Rails routes,
+   Gin/Echo/Chi routes, Spring `@RestController`, NestJS controllers.
+3. A **natural-language brief** describing the resources, actions, and consumers.
+
+If none of these is present, AskUserQuestion to pick a starting point.
+
+## Style guides supported
+
+Default is the [Stripe API Design Guide](https://stripe.com/docs/api). Others available:
+
+| Style guide                  | When to use                                    |
+|------------------------------|------------------------------------------------|
+| Stripe                       | Default. Resource-oriented REST, snake_case, predictable envelopes. |
+| Google AOIP (Google API IP)  | gRPC-first or REST-with-resource-collections.  |
+| Microsoft REST API Guidelines | Enterprise REST, Azure-flavored.              |
+| JSON:API                     | When clients want sparse fieldsets + relationships out of the box. |
+| GraphQL Best Practices (graphql.org) | GraphQL surfaces.                      |
+
+The user can override via AskUserQuestion at Step 2.
+
+## Procedure
+
+### Step 0: Detect existing surface and mode
+
+```bash
+# Detect spec files
+SPEC_OPENAPI=$(find . -type f \( -name "openapi.yaml" -o -name "openapi.json" -o -name "openapi.yml" \) -not -path "*/node_modules/*" -not -path "*/.git/*" 2>/dev/null | head -3)
+SPEC_GRAPHQL=$(find . -type f -name "schema.graphql" -not -path "*/node_modules/*" -not -path "*/.git/*" 2>/dev/null | head -3)
+SPEC_PROTO=$(find . -type f -name "*.proto" -not -path "*/node_modules/*" -not -path "*/.git/*" -not -path "*/vendor/*" 2>/dev/null | head -5)
+echo "OpenAPI: ${SPEC_OPENAPI:-none}"
+echo "GraphQL: ${SPEC_GRAPHQL:-none}"
+echo "Proto:   ${SPEC_PROTO:-none}"
+```
+
+If any spec exists → **Audit mode**. Otherwise → **Design mode** (greenfield).
+
+State the detected mode out loud before continuing.
+
+### Step 1: AskUserQuestion — confirm intent
+
+One issue per call. Use the preamble's AskUserQuestion format. Ask:
+
+- **Mode** — Design (new API) or Audit (existing API)?
+- **Protocol** — REST, GraphQL, gRPC, or "let me pick" (in which case proceed to Step 2)?
+- **Consumers** — internal services only, external public API, partner/B2B API, or mobile
+  client? This drives stability, versioning, and auth choices.
+
+Do NOT proceed until the user responds. The AskUserQuestion call is a tool_use, not prose.
+
+### Step 2: Protocol decision (if user asked you to pick)
+
+Use this matrix. State which row matches and why:
+
+| Use case                                                       | Recommendation       |
+|----------------------------------------------------------------|----------------------|
+| Public HTTP API consumed by browsers + curl + ad-hoc tools      | REST + OpenAPI 3.1   |
+| Internal service mesh, polyglot, low latency, streaming        | gRPC + Protobuf      |
+| Frontend with deep relational reads, mobile bandwidth concerns | GraphQL              |
+| Mix of public REST + internal high-perf paths                  | REST + gRPC parallel |
+| Event-driven, async, fire-and-forget                           | Not this skill — use `/event-design` |
+
+When in doubt: **REST with OpenAPI 3.1 is the boring default**. GraphQL and gRPC are
+innovation tokens — spend them where the use case demands.
+
+### Step 3: AskUserQuestion — style guide + naming convention
+
+Defaults are Stripe + `snake_case` for REST, GraphQL standard `camelCase` for GraphQL,
+`snake_case` for Protobuf fields with `CamelCase` messages.
+
+Confirm with the user before proceeding. Once chosen, the convention is **locked**.
+Inconsistency is the #1 thing this skill fixes.
+
+### Step 4: Design — generate the surface
+
+For **REST + OpenAPI 3.1**:
+
+1. List resources (nouns). For each, define the supported actions (GET/POST/PUT/PATCH/DELETE).
+2. Define the canonical envelope. Stripe-style is `{ "object": "...", "id": "...", ...fields, "metadata": {} }`. JSON:API is `{ "data": [{...}], "included": [...], "meta": {} }`.
+3. Define pagination. Cursor-based (`starting_after` / `ending_before` + `has_more`) is
+   the default — offset/page is fine for small fixed-size lists, but cursor scales.
+4. Define filtering, sorting, sparse fieldsets.
+5. Define error shape. RFC 7807 (`application/problem+json`) is the modern boring default.
+   Stripe-style `{ "error": { "type": "...", "code": "...", "message": "...", "param": "..." } }`
+   is also fine — pick one and stay consistent.
+6. Define auth (OAuth2 / API key / mTLS / signed requests).
+7. Define rate-limit headers (`X-RateLimit-Limit`, `-Remaining`, `-Reset`, plus `Retry-After`
+   on 429).
+8. Define versioning. URL-versioning (`/v1`, `/v2`) is the boring choice. Header
+   versioning (`Stripe-Version`) gives finer control but adds client complexity.
+9. Define idempotency for non-idempotent verbs. `Idempotency-Key` header, 24h dedup window.
+10. Emit `docs/api/{version}/openapi.yaml` covering every endpoint with request/response
+    schemas, examples, and error responses.
+
+For **GraphQL SDL**:
+
+1. Define root types (`Query`, `Mutation`, `Subscription` if needed).
+2. Define entity types with `id: ID!` and a `Node` interface for global object identification.
+3. Use Relay-style cursor connections (`edges`, `node`, `pageInfo`) for collections.
+4. Define `interface`s for shared shapes. Avoid `union` unless types truly diverge.
+5. Define input types separately from object types (don't reuse object types as inputs).
+6. Errors-as-data via `union MutationResult = Success | UserError | ServerError` — not just
+   throwing in resolvers.
+7. Deprecation via `@deprecated(reason: "use X instead")`. Never delete fields.
+8. Emit `schema.graphql` and a `docs/api/style-guide.md`.
+
+For **gRPC + Protobuf**:
+
+1. Define services and RPCs. Prefer many small RPCs over one fat one.
+2. Use `optional` for nullable scalars (Proto3 explicit presence). Never use `bool` for tri-state.
+3. Field numbers 1-15 are 1-byte encoded — reserve them for hot fields.
+4. Reserve removed field numbers and names: `reserved 4, 7; reserved "old_name";`.
+5. Use `google.protobuf.Timestamp`, `Duration`, `FieldMask` from well-known types.
+6. Streaming: pick unary, server-streaming, client-streaming, or bidi per RPC.
+7. Errors via `google.rpc.Status` + `details` carrying typed protos.
+8. Emit `proto/{service}.proto` and a buf.yaml/buf.gen.yaml if using `buf`.
+
+### Step 5: Audit — score the existing surface
+
+Only run in Audit mode. Score against the chosen style guide. For each finding, name
+the rule, the file/line, the violation, and the fix. Group findings:
+
+- **Breaking changes** — fields removed, types narrowed, required-added, enum values
+  removed, response shape changed. These need a version bump or deprecation cycle.
+- **Consistency violations** — mixed casing, mixed envelope, mixed error shape, mixed
+  pagination style. Same surface, different rules across endpoints.
+- **Anti-patterns** — verbs in URLs (`/getUser`), GET endpoints that mutate, missing
+  pagination on unbounded collections, missing rate-limit headers, missing idempotency
+  on POSTs, leaked internal IDs (DB primary keys instead of opaque IDs).
+- **Documentation gaps** — endpoints without examples, fields without descriptions,
+  errors without canonical codes.
+
+Run automated linters where available:
+
+- **REST/OpenAPI:** [Spectral](https://stoplight.io/open-source/spectral) with
+  `@stoplight/spectral-rulesets` (`spectral:oas`, plus Stripe-style custom rules).
+  Run: `npx -p @stoplight/spectral-cli spectral lint openapi.yaml`.
+- **OpenAPI breaking-change detection:** [oasdiff](https://github.com/oasdiff/oasdiff).
+  Run: `oasdiff breaking old.yaml new.yaml`.
+- **GraphQL:** [GraphQL Inspector](https://the-guild.dev/graphql/inspector) for diff +
+  breaking-change detection. Run: `graphql-inspector diff old.graphql new.graphql`.
+  Plus `eslint-plugin-graphql` and the graphql.org schema design rules.
+- **Protobuf:** [buf lint](https://buf.build/docs/lint/overview) and
+  [buf breaking](https://buf.build/docs/breaking/overview). Run: `buf lint` and
+  `buf breaking --against '.git#branch=main'`.
+
+Score on a 0-10 scale across: **consistency**, **discoverability**, **stability**,
+**ergonomics**, **error design**, **versioning**. Explain what would make each a 10.
+
+### Step 6: AskUserQuestion — gate per finding
+
+For every breaking change or anti-pattern in audit mode, AskUserQuestion individually.
+Present 2-3 options including "defer" where reasonable. Recommend one. Explain why.
+Do not batch.
+
+### Step 7: Emit outputs
+
+- `docs/api/{version}/openapi.yaml` or `schema.graphql` or `proto/*.proto`.
+- `docs/api/style-guide.md` — the chosen conventions, written as enforceable rules.
+- `docs/api/audit-{YYYY-MM-DD}.md` (audit mode only) — findings, scores, remediation
+  plan, ordered by severity.
+
+## Outputs
+
+- **Spec file:** OpenAPI 3.1 YAML, GraphQL SDL, or `.proto` — valid and lintable.
+- **Style guide:** `docs/api/style-guide.md` codifying every convention so future
+  endpoints don't drift.
+- **Audit report** (audit mode): scored findings + remediation plan.
+- **Breaking-change report** (when comparing two versions): pass/fail with the list of
+  breaking deltas and suggested compat paths (additive change, deprecation, version bump).
+
+## Edge cases
+
+- **Mixed monolith** — different parts of the same service follow different styles. Audit
+  surfaces each part separately and recommends staged convergence, not a big-bang rewrite.
+- **REST + GraphQL coexistence** — common during migration. Document which surface owns
+  which resource. Don't make both authoritative for the same data.
+- **gRPC-Web / Connect** — if the gRPC surface is consumed from browsers, generate the
+  Connect-Go / Connect-Web glue and document the limitations vs full gRPC streaming.
+- **Webhooks** — webhooks are an API surface too. Apply the same conventions: stable IDs,
+  signed delivery (HMAC + timestamp), retries with exponential backoff, idempotency on
+  the consumer side, dead-letter queue. Document the event shape in the style guide.
+- **Versioning a public API** — once an API is public, breaking changes need a deprecation
+  cycle (announce, dual-run, sunset). For internal-only APIs, breaking changes are cheaper
+  but still coordinate via `/api-contract-test`.
+- **HATEOAS / hypermedia** — supported for JSON:API and HAL. Not required by default;
+  most consumers don't use it. Only add if there's a real driver.
+
+## Dependencies
+
+- `spectral-cli` for OpenAPI linting (npx works, no install required).
+- `oasdiff` for OpenAPI breaking-change detection (Go binary).
+- `buf` CLI for Protobuf linting + breaking-change detection.
+- `graphql-inspector` for GraphQL diffing.
+- WebSearch for current best-practice lookups (e.g. "OpenAPI 3.1 pagination best practice 2026").
+
+No new gstack libs.
+
+## Stop gates
+
+- After Step 1 (mode/protocol confirmation) — do not proceed without user response.
+- After Step 3 (style guide) — convention is locked once chosen.
+- Per finding in Step 6 — every breaking change or anti-pattern needs explicit approval.
+
+The AskUserQuestion call is a tool_use, not prose — call the tool directly. Loading the
+schema via ToolSearch and writing the recommendation as chat prose is the failure mode
+these gates exist to prevent.

@@ -1,0 +1,416 @@
+---
+name: voice-eval
+preamble-tier: 2
+version: 1.0.0
+description: |
+  [Speech & Voice AI] Multi-metric TTS / voice-clone eval harness. Scores synthesized
+  audio on MOS (human) + MOSNet (predicted), speaker similarity (ECAPA-TDNN cosine),
+  WER (Whisper back-transcribe), prosody distance (F0 + duration), and emotion-classifier
+  accuracy. Stores baselines in the shared eval store (S9) for regression detection.
+  Produces a per-task perceptual scorecard. Real eval beats "does it sound good?".
+  Use when: "evaluate TTS quality", "voice eval", "MOS score", "speaker similarity",
+  "voice regression test", "TTS scorecard". (gstack)
+voice-triggers:
+  - "voice eval"
+  - "score this tts"
+  - "voice quality test"
+  - "tts regression"
+triggers:
+  - voice eval
+  - tts eval
+  - voice scorecard
+  - speaker similarity
+  - tts regression
+allowed-tools:
+  - Bash
+  - Read
+  - Write
+  - Glob
+  - Grep
+  - AskUserQuestion
+---
+
+{{PREAMBLE}}
+
+# /voice-eval — Family L — Speech & Voice AI
+
+You are running the `/voice-eval` skill. This is the **eval harness** for TTS and
+voice-cloning outputs. Given a set of synthesized audio samples (plus reference
+text, optional reference audio, and optional style tags), it computes a multi-metric
+scorecard, stores baselines in S9 eval-store, and flags regressions.
+
+This skill does NOT train models. It runs eval on whatever you point it at.
+Synthesis happens upstream (`/finetune` output, `/tts-design` candidate, an
+existing TTS endpoint). This skill measures.
+
+Real TTS eval is not "does it sound good." It is: does it preserve speaker
+identity, is it intelligible, does the prosody match the request, and is the
+emotion recoverable? Each metric guards against a different failure mode. You
+run them all unless the user explicitly opts out of one.
+
+---
+
+## When to use
+
+- Comparing two TTS architecture candidates head-to-head (`/tts-design --compare`).
+- Regression-testing a voice clone after a training run.
+- Validating a prosody-control surface (`/prosody-control` end-of-pipeline).
+- Pre-release gate for any TTS-using product.
+- Periodic re-eval in production (drift detection).
+
+Do NOT use for:
+- Designing the architecture → `/tts-design`.
+- Designing the prosody surface → `/prosody-control`.
+- Cloning a voice → `/voice-clone`.
+- ASR eval (speech recognition, not synthesis) → that's `/eval-harness --domain
+  speech-asr`.
+
+---
+
+## Inputs
+
+| Input | Required? | Format |
+|---|---|---|
+| Synthesized audio dir | yes | Path; WAV or FLAC files |
+| Reference text | yes | TSV/JSONL mapping filename → text |
+| Reference audio | optional | Per-speaker reference clips for similarity comparison |
+| Style tags | optional | Per-file style label (for emotion-classifier eval) |
+| Task slug | yes | Stable ID for S9 (e.g., `tts-tsl-en-th-v3`) |
+| Model / system being evaluated | yes | Name + version for S9 record |
+| Metric set | yes | Subset of {MOS, MOSNet, similarity, WER, prosody, emotion, RTF, watermark} |
+| Baseline run_id | optional | Compare against a prior run instead of absolute thresholds |
+| Human-MOS panel | optional | If running full MOS, panel config (raters, samples per rater) |
+
+Spec mode: `--spec voice-eval.yaml`. Interactive mode: AskUserQuestion.
+
+---
+
+## Procedure
+
+### Step 0: Locate eval store + slug
+
+```bash
+EVAL_STORE="${GSTACK_EVAL_STORE:-$HOME/.gstack/evals/baselines}"
+mkdir -p "$EVAL_STORE"
+PLAN_ROOT="${CLAUDE_PLANS_DIR:-$HOME/.gstack/projects/$(basename "$PWD")}/tts"
+mkdir -p "$PLAN_ROOT"
+echo "EVAL_STORE: $EVAL_STORE"
+echo "PLAN_ROOT: $PLAN_ROOT"
+```
+
+Outputs land at `$PLAN_ROOT/{slug}/EVAL/{YYYY-MM-DD}/`.
+
+### Step 1: Confirm task + metric set
+
+AskUserQuestion (preamble format):
+- **Re-ground:** current project + branch.
+- **Simplify:** "TTS eval is multi-metric. We run as many metrics as your samples
+  support — each one catches a different failure mode. If you skip one, we record
+  the gap so future runs know to fill it."
+- **RECOMMENDATION:** A — run the full default set unless a specific metric isn't
+  applicable.
+- **Options:**
+  - A) Full default set (MOSNet, ECAPA-TDNN similarity, Whisper WER, prosody
+    distance, emotion classifier, RTF). Completeness: 10/10.
+  - B) Quick set (MOSNet + WER only) — for fast iteration during training.
+    Completeness: 6/10 (misses identity drift + prosody regressions).
+  - C) Custom — pick metrics on next turn. Completeness: 8/10.
+
+If user has a watermarked voice (per `/voice-clone`), automatically add the
+watermark-recovery metric. Surface it: "Detected watermark in clone-config.yaml;
+adding watermark-recovery metric to the run."
+
+### Step 2: Verify input shape
+
+```bash
+AUDIO_COUNT=$(find "$AUDIO_DIR" -type f \( -name '*.wav' -o -name '*.flac' \) | wc -l)
+TEXT_LINES=$(wc -l < "$REF_TEXT")
+echo "AUDIO_COUNT: $AUDIO_COUNT  TEXT_LINES: $TEXT_LINES"
+```
+
+If they don't match, refuse and tell the user to fix the manifest. The skill
+will NOT proceed with partial data — a partial eval is misleading.
+
+Minimum sample count: 30 for usable per-metric statistics; 100+ for tight CIs.
+If under 30, warn but continue (mark `n_samples` in the scorecard).
+
+### Step 3: Run each metric
+
+Each metric is a separate runner — keep them independent so a single failure
+doesn't kill the whole eval.
+
+#### 3a) MOSNet (predicted MOS) — always cheap
+
+Library: `pyworld` for F0 features + a MOSNet checkpoint (e.g., `nisqa` v2,
+`utmos`). UTMOS-22 is the current preferred predictor (2022, Tencent / NTU);
+fall back to NISQA v2 if UTMOS unavailable.
+
+```bash
+# Pseudo — actual runner is in lib (downstream), this is the eval contract.
+# Input: audio dir.
+# Output: $OUT/mosnet.jsonl — one line per file: {file, predicted_mos, ci}
+# Aggregate: mean + 95% CI.
+```
+
+#### 3b) MOS (human panel) — expensive, opt-in
+
+If the user opted in: emit a panel package — N audio files, randomized order,
+absolute-category-rating template (5 = Excellent, 1 = Bad). Recommend 5+ raters,
+30+ samples per rater. Provide the CSV intake template; do NOT run human panels
+inline.
+
+Output: `$OUT/mos-panel-package/` with audio files + rating sheet template +
+README. Mark the metric as "pending" in the scorecard until the user runs the
+panel and uploads results.
+
+#### 3c) Speaker similarity (ECAPA-TDNN) — requires reference audio
+
+Library: `speechbrain` (ECAPA-TDNN), or `pyannote.audio` (segmentation +
+embedding).
+
+For each synthesized file:
+- Compute ECAPA embedding.
+- Compute embedding(s) for the reference audio of the target speaker.
+- Cosine similarity → mean + std + percentile breakdown.
+
+Thresholds (illustrative):
+- > 0.85: same-speaker confidence.
+- 0.70-0.85: weak similarity; production risk.
+- < 0.70: identity drift; fail.
+
+#### 3d) WER via Whisper back-transcribe — intelligibility
+
+Library: `faster-whisper` (CTranslate2) for speed; `whisper` (OpenAI) for accuracy.
+Model size: `medium` for English, `large-v3` for multilingual.
+
+```
+For each synthesized file:
+- Transcribe with Whisper.
+- Compute WER between predicted transcript and reference text.
+- Aggregate: mean WER + per-language breakdown.
+```
+
+WER thresholds (illustrative for English, single-speaker):
+- < 5%: excellent intelligibility.
+- 5-10%: production-ready.
+- 10-20%: review needed.
+- > 20%: fail; synth is failing on common words.
+
+For code-switched outputs: use Whisper with language detection per segment, then
+WER per language.
+
+#### 3e) Prosody distance — F0 + duration RMSE
+
+Library: `pyworld` (F0 via DIO/Harvest), Montreal Forced Aligner (phoneme
+durations).
+
+For each (synthesized, reference) pair:
+- Extract F0 contour; DTW-align with reference; compute RMSE.
+- Extract phoneme durations; compute RMSE per phoneme + sentence-level.
+- Aggregate: mean RMSE.
+
+Requires reference audio (or a reference TTS output) per text. If unavailable,
+mark "skipped — no reference."
+
+#### 3f) Emotion classifier accuracy — opt-in if styles tagged
+
+Library: `emotion2vec` (foundation model, 2024) OR `wav2vec2-emotion` classifier.
+
+For each tagged file:
+- Predict emotion class.
+- Compute accuracy vs requested style tag.
+- Confusion matrix.
+
+Only applicable when style tags are present in the input.
+
+#### 3g) Real-time factor (RTF) — latency
+
+If the synthesis log includes wall-clock generation time per file: RTF = gen_time /
+audio_length. Mean + 95th percentile.
+
+Required for streaming / real-time use cases. Skip for offline batch synth.
+
+#### 3h) Watermark recovery — if applicable
+
+If `/voice-clone` produced this voice, verify the inaudible watermark survives
+synthesis.
+
+Library: matches the watermark technique chosen in `/voice-clone` (AudioSeal,
+WavMark, etc.).
+
+For each synthesized file:
+- Extract watermark.
+- Compare fingerprint to `keys/watermark-key.hex`.
+- Aggregate: recovery rate (fraction of files where extraction succeeds).
+
+Threshold: > 95% recovery required for production.
+
+### Step 4: Write scorecard
+
+Aggregate all metric outputs into `$PLAN_ROOT/{slug}/EVAL/{date}/SCORECARD.md`:
+
+```markdown
+# Voice Eval Scorecard — {slug} — {date}
+
+**System:** {model name + version}
+**Task ID:** voice-{slug}
+**Samples:** {n}
+**Run ID:** {uuid}
+
+## Headline
+
+| Metric | Value | 95% CI | Threshold | Status |
+|---|---|---|---|---|
+| MOSNet (UTMOS) | 4.12 | ±0.08 | > 3.8 | OK |
+| WER (Whisper-large-v3) | 4.2% | ±0.6 | < 10% | OK |
+| Speaker similarity (ECAPA cosine) | 0.87 | ±0.03 | > 0.85 | OK |
+| Prosody F0 RMSE | 12.4 Hz | ±1.8 | < 20 Hz | OK |
+| Prosody duration RMSE | 28 ms | ±4 | < 50 ms | OK |
+| Emotion accuracy | 78% | ±5 | > 70% | OK |
+| Watermark recovery | 99.2% | — | > 95% | OK |
+| RTF | 0.28 | ±0.04 | < 1.0 | OK |
+
+## Per-style breakdown
+{table of metrics × style if styles tagged}
+
+## Per-language breakdown
+{table of metrics × language if multilingual}
+
+## Comparison to baseline (run_id={prior})
+{diff table — green = improvement, red = regression}
+
+## Failure cases
+{up to 10 worst-scoring files with file path, scores, requested text}
+
+## What this means
+{2-3 sentences interpreting the scorecard for the user — what to ship, what to fix}
+```
+
+Also write `$PLAN_ROOT/{slug}/EVAL/{date}/metrics.jsonl` — one JSON record per
+metric × file, ready for `/eval-harness` cross-skill consumption.
+
+### Step 5: Write to S9 eval-store
+
+For each metric, append to `$EVAL_STORE/voice.jsonl`:
+
+```json
+{
+  "task_id": "voice-{slug}-{metric}",
+  "model": "{model name + version}",
+  "dataset_hash": "{sha256 of audio dir + reference text}",
+  "metric": "{metric name}",
+  "value": {aggregate value},
+  "ci": [low, high],
+  "run_id": "{uuid}",
+  "ts": "{ISO 8601}"
+}
+```
+
+This is the S9 contract. `/tts-design`, `/voice-clone`, `/prosody-control`, and
+`/eval-harness` all read this store.
+
+### Step 6: Regression flag
+
+If `--baseline {run_id}` was provided, compute per-metric delta. Flag any metric
+where the new run is worse by more than the CI overlap. Print the flagged list at
+the top of the scorecard.
+
+If no baseline: write this run as the new baseline (only if user confirms — don't
+silently overwrite production baselines).
+
+### Step 7: Hand-off
+
+Print the scorecard path + the per-metric JSONL. AskUserQuestion:
+- **Simplify:** "Eval done. Common next steps: human-MOS panel (if not run),
+  ship gate (if all metrics pass), or back to training (if regressions)."
+- **RECOMMENDATION:** depends on results.
+- **Options:**
+  - A) Set up the human-MOS panel (recommend if MOSNet is borderline). Completeness: 10/10.
+  - B) Promote this as the new baseline for {slug}. Completeness: 9/10.
+  - C) Investigate the failure cases — open the worst-scoring files. Completeness: 9/10.
+  - D) Re-train (if regressions are blocking). Completeness: 8/10.
+
+---
+
+## Outputs
+
+```
+$PLAN_ROOT/{slug}/EVAL/{YYYY-MM-DD}/
+├── SCORECARD.md           # Headline table + per-style + per-language + failures
+├── metrics.jsonl          # One JSON per metric × file (for cross-skill consumption)
+├── mos-panel-package/     # (optional) Human-rating package: audio + sheet template
+└── failure-cases/         # (optional) Worst-scoring files, copied for inspection
+```
+
+S9 records appended to `$EVAL_STORE/voice.jsonl` (the shared eval store).
+
+---
+
+## Edge cases
+
+- **Multilingual code-switched samples:** run Whisper with `--language auto` per
+  segment; aggregate WER per detected language. Report code-switch transitions
+  as a separate metric (`code-switch transition WER`).
+- **Reference audio missing for similarity metric:** skip with `status: skipped,
+  reason: no_reference`. Do not silently drop the metric — make the gap visible.
+- **Style classifier disagrees with human panel:** when both are available,
+  report both. Classifier accuracy is a proxy; human panel is ground truth.
+- **Watermark extraction fails on all files:** stop the run, surface as a
+  high-severity finding. Either the watermarking step is broken or the synthesis
+  is destroying the watermark. Block release until resolved.
+- **Sample count under 30:** run anyway, but every metric's CI will be wide.
+  Tag the scorecard with `n_samples_warning: true`. Refuse to overwrite a
+  production baseline from an n<30 run.
+- **Dataset hash drift:** if reference text changed but task_id is the same,
+  flag it — same `task_id` with different `dataset_hash` means baselines aren't
+  comparable. Force the user to bump task_id (e.g., add `-v2`).
+- **UTMOS unavailable:** fall back to NISQA v2; never to a hand-rolled formula.
+- **Whisper hallucinates on silent or near-silent files:** filter audio with
+  energy below threshold before WER computation; mark filtered files in metrics.jsonl.
+
+---
+
+## Dependencies
+
+- **S9 — Eval-store schema:** this skill is the primary writer to `voice.jsonl`.
+  Schema: `task_id`, `model`, `dataset_hash`, `metric`, `value`, `ci`, `run_id`, `ts`.
+- **S12 — Study artifact format:** SCORECARD.md carries YAML frontmatter with
+  `target`, `mode: eval`, `derived_from`.
+- `/tts-design` — produces the EVAL-PLAN.md that calls this skill.
+- `/voice-clone` — produces the EVAL.md that calls this skill; sets watermark
+  metric automatically.
+- `/prosody-control` — produces the EVAL-PERCEPT.md that calls this skill with
+  style-aware metric set.
+- `/eval-harness` — cross-domain orchestrator that may invoke this skill via
+  `--domain speech-tts`.
+- `/benchmark-models` — for cross-system comparisons; this skill provides the
+  quality dimension.
+- Model checkpoints (downloaded once, cached):
+  - **UTMOS-22** (MOS predictor): ~100MB.
+  - **NISQA v2** (MOS predictor fallback): ~80MB.
+  - **ECAPA-TDNN** via SpeechBrain: ~80MB.
+  - **Whisper large-v3**: ~3GB; medium: ~1.5GB.
+  - **emotion2vec**: ~300MB.
+  - **AudioSeal detector** (if watermark metric): ~120MB.
+- Auxiliary: `pyworld` (F0), Montreal Forced Aligner (phoneme alignment),
+  `faster-whisper` (CTranslate2 inference), `speechbrain` (ECAPA), `pyannote.audio`
+  (alt embedding).
+- Framework: PyTorch is the default runtime. JAX is not standard for these eval
+  models. vLLM / SGLang do NOT apply (LLM-only stacks).
+
+---
+
+## Important Rules
+
+- **Always run the full default metric set unless the user opts out per metric.**
+  Skipping silently hides regressions.
+- **Never overwrite a production baseline from a low-n run.** Refuse if n < 30.
+- **Watermark failure is HIGH severity.** Block the run; surface immediately.
+- **Mark skipped metrics explicitly.** No silent drops.
+- **Dataset hash mismatch ⇒ refuse to compare** against an old baseline. Force
+  task_id bump.
+- **Human-MOS panels never run inline.** Emit the package and wait for results.
+- **Every metric writes to S9.** The scorecard is for humans; metrics.jsonl is
+  for downstream skills. Both are required outputs.
+- **Cross-language WER is per-language.** Don't average across languages; that
+  hides per-language failures.

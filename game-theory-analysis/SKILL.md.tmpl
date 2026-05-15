@@ -1,0 +1,465 @@
+---
+name: game-theory-analysis
+preamble-tier: 2
+version: 1.0.0
+description: |
+  [Operations Research / Behavioral] Model a strategic situation as a formal game
+  (normal form for one-shot, extensive form for sequential). Identifies players, action
+  spaces, payoffs, and the right equilibrium concept (Nash, subgame-perfect, dominant-
+  strategy, correlated, evolutionary stable). Generates the payoff matrix, computes
+  equilibria with nashpy / gambit, surfaces dominated strategies, credible threats,
+  and commitment opportunities. Use for pricing wars, feature races, negotiation prep,
+  competitive responses, and public-commitment design.
+  Use when: "game theory", "nash equilibrium", "payoff matrix", "competitive response",
+  "negotiation prep", "credible threat", "dominant strategy". (gstack)
+allowed-tools:
+  - Read
+  - Write
+  - Grep
+  - Glob
+  - Bash
+  - AskUserQuestion
+  - WebSearch
+benefits-from: [marketing-psychology]
+triggers:
+  - game theory
+  - nash equilibrium
+  - payoff matrix
+  - competitive response analysis
+  - credible threat
+---
+
+{{PREAMBLE}}
+
+# /game-theory-analysis — Family I — Operations Research / Behavioral
+
+You model competitive / strategic situations as **formal games** and compute
+equilibria so the user can make decisions with eyes open about how the
+other side will respond.
+
+Most "competitive analysis" is one-step thinking: "if we lower price, we
+win." Game theory is **two-step or more thinking**: "if we lower price,
+they will respond by [X], and we will end up in [Y]." The skill forces this
+discipline.
+
+You produce: (a) the formal game (players, actions, payoffs), (b) the
+equilibrium under the right solution concept, (c) the dominated strategies
+to ignore, (d) the credible threats that change the game, and (e) a plain-
+English recommendation grounded in the math.
+
+## When to use
+
+Use this skill when:
+- You face a **competitive move** with a likely response (pricing change,
+  feature race, public commitment, market entry).
+- You are **negotiating** with a counterparty whose payoffs you can
+  approximate (BATNA analysis, posture choice).
+- You face a **coordination / collective-action** problem (do we publish
+  the standard? join the alliance? release the open dataset?).
+- You want to design a **commitment device** that constrains your future
+  self credibly.
+- You face a **principal-agent** structure (you / customer / supplier with
+  hidden actions or hidden information).
+
+Do NOT use this skill when:
+- The "other player" is not strategic (weather, regulator who will follow
+  rules deterministically). Use `/simulate` or `/optimize-decision`.
+- You can't approximate payoffs at all — game theory amplifies bad payoff
+  estimates into confident wrong answers.
+
+## Inputs (Payoff structure)
+
+1. **Players.** Who is in the game? (You, competitor X, regulator, customer.)
+   Cap at 2-4 — beyond that, computation and interpretation get unmanageable.
+2. **Information structure.**
+   - Perfect (everyone sees everything)?
+   - Imperfect (simultaneous moves, no observation)?
+   - Incomplete (uncertainty about opponent type / payoffs)?
+3. **Timing.** Simultaneous (normal form) or sequential (extensive form,
+   game tree)?
+4. **Action spaces.** What can each player do? Discrete (finite list) or
+   continuous (price ∈ ℝ⁺)?
+5. **Payoffs.** Each cell of the payoff matrix (or each terminal node of the
+   game tree). Approximate, but with reasoning. Cardinal payoffs (numbers)
+   for Nash; ordinal (ranking) suffices for dominance analysis.
+6. **Game iteration.** One-shot or repeated? If repeated, finite or infinite
+   horizon? Discount factor?
+7. **Solution concept.** Default: Nash for one-shot, subgame-perfect for
+   sequential. Ask the user if uncertainty is involved (Bayesian Nash) or
+   if a population is playing (evolutionary stable strategy).
+
+## Procedure
+
+### Step 1 — Game classification
+
+Pin down the structure first. Use AskUserQuestion to confirm:
+
+| Structure | Indicator | Solution concept |
+|-----------|-----------|------------------|
+| One-shot, simultaneous, complete info | Two-player price war this quarter | Nash equilibrium |
+| Sequential, complete info | You move first, they respond | Subgame-perfect (backward induction) |
+| Repeated infinitely, complete info | Ongoing competition | Folk theorem; cooperative equilibria sustainable |
+| Repeated finitely, complete info | Ends in N rounds, both know it | Unraveling — defection from end backwards |
+| One-shot, incomplete info | You don't know their cost / value | Bayesian Nash |
+| Sequential, incomplete info | Signaling, screening | Perfect Bayesian Equilibrium |
+| Population play | Many players, mixed | Evolutionarily Stable Strategy |
+| Cooperative | Players can form coalitions and side-pay | Core, Shapley value |
+
+### Step 2 — Build the game
+
+#### For a normal-form (one-shot, simultaneous) game
+
+Build the payoff matrix. With 2 players, 2-3 actions each:
+
+```
+                       Competitor
+                  Hold price  |  Drop price
+                  ----------- + -----------
+You: Hold price     (8, 8)    |   (3, 10)
+You: Drop price    (10, 3)    |   (4, 4)
+```
+
+Each cell: `(your payoff, their payoff)`. Use real units (millions, %, NPV).
+If payoffs are uncertain, do a sensitivity sweep in Step 6.
+
+#### For an extensive-form (sequential) game
+
+Build a game tree. ASCII works:
+
+```
+                 You move
+              ┌──────┴──────┐
+           PRE-ANNOUNCE   STAY-QUIET
+              │              │
+        Comp move       Comp move
+        ┌──┴──┐         ┌──┴──┐
+      MATCH  IGNORE   MATCH  IGNORE
+       (2,5)  (6,3)    (4,6)  (5,4)
+```
+
+Each leaf: `(your payoff, their payoff)`. Information sets matter — mark
+which decision nodes are indistinguishable to the player making the
+choice.
+
+### Step 3 — Solve with the right tool
+
+Use `nashpy` for normal-form 2-player games:
+
+```python
+"""
+{slug} — Pricing-war Nash analysis.
+Generated by /game-theory-analysis.
+"""
+import numpy as np
+import nashpy as nash
+
+# Payoff matrices (row player = You, column player = Competitor)
+# Rows: [Hold, Drop]
+# Cols: [Hold, Drop]
+A = np.array([[ 8,  3],
+              [10,  4]])    # Your payoffs
+B = np.array([[ 8, 10],
+              [ 3,  4]])    # Competitor's payoffs
+
+game = nash.Game(A, B)
+print(game)
+
+# Pure-strategy Nash equilibria via support enumeration
+print("Pure NE:")
+for eq in game.support_enumeration():
+    print(" ", eq)
+
+# All NE including mixed (Lemke-Howson)
+print("\nLemke-Howson:")
+for eq in game.lemke_howson_enumeration():
+    print(" ", eq)
+
+# Expected payoffs at each equilibrium
+for sigma_r, sigma_c in game.support_enumeration():
+    ep_r, ep_c = game[sigma_r, sigma_c]
+    print(f"NE: row plays {sigma_r}, col plays {sigma_c} → payoffs ({ep_r:.2f}, {ep_c:.2f})")
+```
+
+For **n-player** games or **extensive-form** with imperfect information,
+use **Gambit** (`pip install gambit`). Gambit handles:
+- Extensive-form games (trees, information sets, chance nodes).
+- N-player normal-form.
+- Bayesian / perfect-Bayesian equilibrium.
+
+```python
+import pygambit as gbt
+
+g = gbt.Game.new_tree(players=["You", "Competitor"])
+# ... build tree, set info sets, set payoffs ...
+result = gbt.nash.lcp_solve(g)  # solves for SPE on extensive form
+```
+
+For **sequential games with perfect info**, backward induction by hand or
+script:
+
+```python
+def backward_induct(node):
+    if node.is_leaf:
+        return node.payoffs
+    best_for_mover = max if node.mover == "You" else min  # zero-sum example
+    # for non-zero-sum, take the action that maximizes that player's payoff
+    payoffs = [backward_induct(child) for child in node.children]
+    chosen = max(payoffs, key=lambda p: p[node.mover_index])
+    return chosen
+```
+
+### Step 4 — Find dominated strategies (eliminate before solving)
+
+Iteratively eliminate strictly dominated strategies. A strategy is
+**strictly dominated** if another strategy yields strictly higher payoff
+against every opponent action. Removing dominated strategies simplifies
+the game without changing equilibria.
+
+```python
+def remove_dominated(A, B):
+    """Iteratively eliminate strictly dominated strategies for both players."""
+    while True:
+        changed = False
+        # Row player: remove row i if some row j strictly dominates it
+        for i in range(A.shape[0]):
+            for j in range(A.shape[0]):
+                if i != j and np.all(A[j, :] > A[i, :]):
+                    A = np.delete(A, i, axis=0); B = np.delete(B, i, axis=0)
+                    changed = True; break
+            if changed: break
+        # Column player: same for columns
+        # ...
+        if not changed: return A, B
+```
+
+Report any strategies eliminated. The user often sees these and says "oh,
+of course we wouldn't do that" — and that's the point.
+
+### Step 5 — Compute the equilibrium / equilibria
+
+Output **all** Nash equilibria, not just one. Pure strategies first, mixed
+second. For each:
+- The strategy profile (who plays what, with what probability).
+- The expected payoff to each player.
+- Whether it is **Pareto-dominated** by another outcome (cooperative gain
+  available?).
+- Whether it is **risk-dominant** vs payoff-dominant in multi-equilibrium
+  games.
+
+For sequential games, compute the subgame-perfect equilibrium via backward
+induction. Surface **non-credible threats** — threats that wouldn't be
+followed through on once it's the threatener's turn to move (these are
+ruled out by subgame perfection).
+
+### Step 6 — Sensitivity / payoff uncertainty
+
+Payoffs are estimates. Sweep ±20% on each payoff cell, re-solve, and report
+whether the equilibrium changes. If small perturbations flip the
+equilibrium, the analysis is **fragile** — flag it loudly. If the
+equilibrium is robust across a 50% range of payoffs, that's confidence.
+
+### Step 7 — Credible threats and commitment
+
+A core insight from Schelling: in sequential games, the ability to
+**commit credibly** to a strategy you wouldn't otherwise play changes the
+equilibrium. Examples:
+
+- Pre-announcing price floors with public penalties for violation.
+- Burning bridges (closing alternatives so you can't retreat).
+- Delegating to an agent with different payoffs (board, regulator).
+- Public commitments with reputational cost.
+
+For each player in the game, ask: **what commitment, if credible, would
+shift the equilibrium in your favor?** Then ask: **can you actually make
+that commitment credible**, or is it cheap talk?
+
+| Commitment device | Mechanism | Credibility |
+|-------------------|-----------|-------------|
+| Public statement | Reputation cost | Moderate; depends on audience memory |
+| Contract penalty | Financial cost of reversal | High; depends on enforceability |
+| Sunk cost (build the factory) | Can't undo | Very high; irreversible |
+| Delegate to third party | Removes your discretion | High; depends on agent loyalty |
+| Burn bridges | Eliminate alternatives | Very high but irreversible |
+
+### Step 8 — Repeated game considerations
+
+If the game is repeated:
+
+- **Finite, known horizon** — backward induction unravels cooperation to
+  the one-shot Nash. Even if cooperation pays at each round, the last-
+  round defection cascades back.
+- **Infinite or indefinite horizon** — folk theorem applies: many outcomes
+  including cooperation can be sustained as equilibria with grim-trigger
+  or tit-for-tat strategies. Sustainability depends on the discount factor
+  δ; cooperation requires δ ≥ critical value.
+- **Imperfect monitoring** — if you can't see whether the opponent
+  defected, cooperation is harder; need noise-tolerant strategies (e.g.,
+  generous tit-for-tat).
+- **Public commitment to a strategy** in a repeated game is itself a
+  competitive lever.
+
+Compute the **discount factor required to sustain cooperation** and compare
+to the realistic δ for the user's situation. If realistic δ is below
+critical, cooperation will not emerge naturally — design a mechanism if
+cooperation is desired.
+
+### Step 9 — Behavioral overlays
+
+Players are not always rational. The skill must surface this:
+- **Bounded rationality.** Real opponents may not see the dominated
+  strategy. Plan for one-step thinking from them.
+- **Loss aversion.** Opponents over-weight losses → they will fight
+  harder than payoffs predict to avoid a loss.
+- **Reciprocity / fairness.** In games with a "fair" outcome (e.g., 50/50
+  split), proposing the Nash that gives them 10% may be rejected even
+  when 10% > 0.
+- **Reputation / non-myopic play.** Players in early rounds of a long
+  game may sacrifice short-term payoff to establish reputation.
+
+If behavioral dynamics dominate, recommend cross-referencing with
+`/incentive-design` and `/biases-audit`.
+
+### Step 10 — Recommendation
+
+Translate the math into a plain-English recommendation:
+
+- **Best action** for the user given the equilibrium analysis.
+- **Likely opponent response** with rationale.
+- **Predicted payoffs** at the equilibrium.
+- **Key risks** (e.g., "if competitor is non-rational, they may fight
+  harder than the model predicts").
+- **Commitment opportunities** that could shift the equilibrium favorably.
+- **Off-ramps** if the analysis turns out wrong.
+
+### Step 11 — Write the doc
+
+Produce `decisions/game-theory/{slug}.md` with:
+
+- Problem framing (one paragraph).
+- Game classification (one-shot / sequential, complete / incomplete info).
+- Players, actions, payoffs.
+- Payoff matrix or game tree.
+- Dominated strategies eliminated.
+- Equilibrium / equilibria with expected payoffs.
+- Sensitivity to payoff uncertainty.
+- Credible threats and commitment opportunities.
+- Behavioral overlay risks.
+- Recommendation.
+- Caveats.
+
+Also write the runnable solver script at `decisions/game-theory/{slug}.py`.
+
+## Outputs
+
+```
+decisions/game-theory/{slug}.md     # decision doc
+decisions/game-theory/{slug}.py     # runnable solver (nashpy / gambit)
+decisions/game-theory/{slug}.json   # structured: players, payoffs, equilibria
+```
+
+## Edge cases
+
+- **Multiple equilibria.** If the game has multiple NE, equilibrium
+  selection is itself a problem. Use focal points (Schelling), risk
+  dominance (Harsanyi-Selten), or evolutionary stability to pick. Surface
+  ALL equilibria; never silently pick one.
+- **Mixed-strategy equilibria.** Often counter-intuitive. In a 2×2 with no
+  pure NE, the mixed NE has each player randomizing in a way that makes the
+  opponent indifferent. Report the mixing probability and remind the user
+  that "play 60/40" means literally randomizing — not "do A most of the
+  time."
+- **Zero-sum vs non-zero-sum.** Zero-sum has a clean minimax / maximin
+  solution and no cooperation is possible. Most business situations are
+  non-zero-sum — cooperative gains exist but Nash may miss them. Always
+  check for Pareto improvements over the Nash outcome.
+- **Prisoner's-Dilemma trap.** PD is everywhere (pricing, advertising,
+  emissions). Naive analysis says "defect, defect, both lose." Repeated-
+  game / commitment / mechanism design can escape it — explicitly check.
+- **Incomplete information.** If you don't know the opponent's type
+  (their cost, their value), use Bayesian Nash with a prior over types.
+  Surface the prior assumption — the analysis is only as good as the prior.
+- **Beyond 2 players.** N-player games can have many equilibria and high
+  computational cost. Coalition formation matters. Recommend cooperative
+  game theory (Shapley value) when side payments / coalitions are allowed.
+- **Beware of payoff fabrication.** Cardinal payoffs feel scientific but
+  are usually guesses. Always run the sensitivity sweep in Step 6 — if the
+  equilibrium flips at ±20%, the analysis is suggestive, not conclusive.
+- **Continuous action spaces.** Pricing is naturally continuous. Either
+  discretize (lose granularity) or use calculus (Bertrand, Cournot
+  closed-forms for symmetric duopoly). For asymmetric continuous games,
+  numerical methods (best-response iteration).
+- **Strategic complements vs substitutes.** Cournot quantities are
+  strategic substitutes (their increase makes my optimal decrease);
+  Bertrand prices are strategic complements (their increase makes my
+  optimal increase). The distinction determines whether commitment helps
+  by being aggressive or accommodating.
+
+## Important context
+
+Game theory is a **lens**, not an oracle. The math is precise; the inputs
+are approximate. The value is in:
+
+1. **Forcing the user to think one step ahead** about opponent response.
+2. **Surfacing dominated strategies** to ignore.
+3. **Identifying commitment opportunities** that change the game.
+4. **Naming the equilibrium concept** so disagreements are about assumptions,
+   not vague intuitions.
+
+If the user wants a precise prediction of what the competitor will do, they
+should ask competitive intelligence, not game theory.
+
+## Dependencies
+
+- **nashpy** (`pip install nashpy`) — 2-player normal-form.
+- **gambit** (`pip install gambit-python`) — n-player, extensive-form,
+  Bayesian.
+- **NumPy** — payoff matrices.
+- **`marketing-psychology` skill** — behavioral overlays (Step 9).
+- **`/incentive-design`** — when the result of the game suggests changing
+  the payoff structure (mechanism design).
+- **`/biases-audit`** — defensive check on payoff estimation (your own
+  biases inflate your payoffs and deflate the opponent's).
+- **`/simulate`** — when the game is dynamic and analytical equilibrium is
+  intractable; agent-based simulation of strategies.
+
+## AskUserQuestion gates
+
+Mandatory:
+
+1. **Player set.** Who are the strategic actors? (Cap at 2-4.)
+2. **Timing structure.** Simultaneous or sequential?
+3. **Information structure.** Complete or incomplete?
+4. **Repetition.** One-shot, finite-repeated, or infinite-repeated? Discount
+   factor?
+5. **Payoff estimation method.** Where do the numbers come from? Best guess,
+   range, or modeled estimate?
+6. **Solution concept.** Nash, subgame-perfect, Bayesian Nash, ESS,
+   correlated equilibrium — confirm or accept default.
+7. **Equilibrium selection.** If multiple equilibria, which selection
+   criterion (risk dominance, payoff dominance, focal point)?
+
+## Critical rules
+
+1. **Never report a single Nash equilibrium when multiple exist.** Always
+   list them and apply a selection criterion.
+2. **Always run sensitivity on payoffs.** Numbers are estimates; equilibria
+   should be robust to small perturbations to be trusted.
+3. **Subgame-perfect rules out non-credible threats.** In sequential games,
+   filter strategies that rely on threats nobody would carry out.
+4. **Surface the behavioral overlay risk.** Real opponents are not rational
+   in textbook ways. Pair with `/biases-audit` on the analysis.
+
+## Completion summary
+
+After analysis, present:
+
+- Game classification.
+- Number of equilibria found + selection criterion applied.
+- Recommended strategy.
+- Predicted opponent response.
+- Sensitivity verdict (robust / fragile).
+- Top commitment opportunity.
+- Files written.
+- Recommended follow-ups: `/incentive-design` (if mechanism redesign would
+  improve the game), `/simulate` (if dynamic interaction needs agent-based
+  modeling), `/biases-audit` (defensive check on payoff estimates).

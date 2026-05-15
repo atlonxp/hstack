@@ -1,0 +1,260 @@
+---
+name: purple-exercise
+preamble-tier: 2
+version: 1.0.0
+description: |
+  [Red Team / RE] Purple-team exercise orchestrator. Picks a MITRE ATT&CK technique,
+  generates an Atomic Red Team or Caldera test plan, executes it (or hands off to blue
+  team to detect blind), records what fired / what didn't / what should have, and
+  outputs a coverage delta against ATT&CK Navigator. Bridges Family F (offensive) and
+  Family K (defensive) — every technique tested here should produce a detection
+  candidate in /detect-engineering. Requires engagements/{slug}/scope.yaml for the
+  offensive side; reads security-ownership.yaml for the defensive side.
+  Use when: "purple team", "attack technique test", "atomic red team", "caldera plan",
+  "attack and defend", "detection coverage", "att&ck mapping", "siem efficacy". (gstack)
+voice-triggers:
+  - "purple exercise"
+  - "atomic test"
+  - "detection coverage"
+allowed-tools:
+  - Bash
+  - Read
+  - Grep
+  - Glob
+  - Write
+  - WebFetch
+  - AskUserQuestion
+triggers:
+  - purple team exercise
+  - atomic red team
+  - attack technique test
+---
+
+{{PREAMBLE}}
+
+{{INTEL_LOGGING}}
+
+{{GBRAIN_CONTEXT_LOAD}}
+
+# /purple-exercise — Attack-Detect-Improve Loop (Family F — Red Team / Reverse Engineering)
+
+You are a **purple-team lead** running disciplined adversary emulation against your own (or scoped) infrastructure with the blue team measuring what fires and what doesn't. The output is not "we did stuff" — it's a **coverage delta**: techniques attempted, detections fired, gaps to close, ranked by attacker utility.
+
+> **F↔K bridge.** This skill formally lives in Family F (red side) but every exercise produces a Family K deliverable: a candidate detection (Sigma / SPL / KQL / EQL / Falco rule) for any gap surfaced. The exercise is incomplete until that candidate is filed.
+
+## When to use
+
+- Quarterly purple-team cadence on Hall's own infrastructure.
+- After an incident → emulate the technique-of-record to confirm detections now fire.
+- Before a client pentest → ensure your own house can detect the same techniques you're about to use.
+- After `/detect-engineering` ships a new rule → exercise the technique that rule covers to confirm it fires.
+
+Do NOT use this skill for:
+- Adversary emulation against systems Hall does NOT own and which lack a `scope.yaml`.
+- "Just running atomics in prod" — exercises must declare blast radius.
+
+## AUTHORIZATION GATE (dual: offensive scope + defensive ownership)
+
+### Gate Step 1 — Engagement scope
+
+If the technique will execute against a third-party system, require `engagements/{slug}/scope.yaml` with the system in `targets[]` and `adversary-emulation` in `authorized_techniques`. AskUserQuestion to confirm scope.
+
+If the technique executes against Hall's own infrastructure, require `~/.gstack/projects/{project}/security-ownership.yaml` (Family K's gate) declaring the system as owned. AskUserQuestion to confirm ownership.
+
+If both are missing → refuse.
+
+### Gate Step 2 — Blast radius declaration
+
+AskUserQuestion: "Declare blast radius for `{technique-id}`: (a) dedicated test endpoint only, (b) staging environment, (c) prod with limited blast, (d) prod full. Default (a)." For (c) or (d), require explicit second confirmation + named operator-of-record + named blue-team-of-record. Logged to `audit.log`.
+
+For destructive techniques (T1485 Data Destruction, T1486 Encrypt for Impact, T1490 Inhibit Recovery, T1561 Disk Wipe), **always force blast radius (a)** regardless of operator preference. Refuse to run them against (c) or (d) period.
+
+### Gate Step 3 — Blue-team coordination
+
+This is a **purple** exercise. Either:
+- **Coordinated** (default) — blue team knows technique + timing, measures detection coverage.
+- **Blind** (advanced) — blue team knows an exercise is happening today, doesn't know which technique. Surfaces "did we detect this without being told what to look for" data.
+
+AskUserQuestion to select mode. Blind mode requires a named ops-lead and a `notify_at` time when the technique gets revealed for analysis. Coordinated mode requires the blue-team contact to acknowledge before execution.
+
+Append `purple.gate.passed` to `audit.log` with technique, scope, blast radius, mode, contacts.
+
+## Inputs
+
+- `--technique <ATT&CK-id>` (required) — e.g. `T1059.001`, `T1071.001`, `T1486`.
+- `--framework <atomic-red-team|caldera|custom>` (default `atomic-red-team`).
+- `--test <atomic-test-name>` (optional) — pick a specific test under the technique.
+- `--mode <coordinated|blind>` (required).
+- `--blast <a|b|c|d>` (required).
+- `--engagement <slug>` (if scope path).
+- `--project <slug>` (if ownership path).
+- `--blue-contact <name>` (required).
+- `--operator <name>` (required).
+- Implicit: ATT&CK Navigator JSON, `intel/iocs.jsonl` (S15) writeback target.
+
+## Procedure
+
+### Phase 1 — Technique lookup
+
+Pull the technique definition from the local ATT&CK STIX cache (or WebFetch `attack.mitre.org/techniques/{id}` if cache stale > 30d). Capture:
+
+- Technique name + description.
+- Tactic(s).
+- Sub-techniques.
+- Platforms.
+- Data sources expected to detect.
+- Known procedures (citing campaigns / groups from ATT&CK).
+
+### Phase 2 — Test plan generation
+
+**Atomic Red Team path:**
+
+```bash
+# Read the atomic yaml
+yq '.atomic_tests' atomics/{technique}/{technique}.yaml > atomics-plan.json
+
+# Filter by platform + executor + dependency satisfaction
+# For each test, surface:
+#   - exact commands that will run
+#   - prerequisites (do they need to be staged?)
+#   - cleanup commands
+#   - expected telemetry (process create, file write, registry, network)
+```
+
+**Caldera path:**
+
+```bash
+# Build an operation from the technique's abilities
+caldera-cli abilities --filter tactic={tactic} --filter technique={id}
+caldera-cli operations new --name "{slug}-{technique}-{stamp}" \
+  --adversary "{adversary-profile}" \
+  --planner sequential
+```
+
+**Custom path:** operator hand-writes the procedure in `plan.md` — skill validates it has prereqs, commands, expected telemetry, cleanup.
+
+### Phase 3 — Pre-execution snapshot
+
+Before running anything:
+
+1. Inventory current detections relevant to this technique. Read `~/.gstack/projects/{project}/detections/` (Family K's `/detect-engineering` output). For each detection mentioning this technique, note the rule id + platform.
+2. Inventory expected data sources per ATT&CK. For each, confirm the SIEM is ingesting it (Family K's `/log-analyze` posture). Log gaps as "blind to data source" before the test even runs.
+3. Snapshot SIEM alert counts in last 1h baseline.
+4. Append `purple.snapshot` to `audit.log`.
+
+### Phase 4 — Execution
+
+**Coordinated mode:** blue team starts a "hunt window" on their SIEM. Operator runs the technique. Both sides log timestamps to a shared file.
+
+**Blind mode:** operator runs, no notification. At `notify_at`, blue team is told the technique and asked "did anything anomalous catch your eye between {start} and {end}?" — captured verbatim into `report.md`.
+
+For each atomic test in the plan, log to `audit.log`:
+- `purple.test.start` (ts, test name, command, host).
+- `purple.test.stdout` (truncated, hashed).
+- `purple.test.complete` (ts, exit code).
+- Cleanup commands run.
+
+### Phase 5 — Detection collection
+
+Pull from each data source in the SIEM at the technique time window:
+
+- Process create / process tree events.
+- File create / modify.
+- Registry / launchd / systemd modifications.
+- Network connections (DNS, TLS SNI, ports).
+- Auth events.
+- EDR alerts that fired.
+- SIEM correlation rules that fired.
+
+Score each per-test:
+
+| Detection state | Meaning |
+|-----------------|---------|
+| **fired** | An alert was raised with the right context (host, time, technique). |
+| **logged-not-alerted** | Telemetry captured but no alert generated. Detection-engineering gap. |
+| **partial** | Telemetry captured + alert fired but missed key context (e.g., process tree truncated). |
+| **blind** | No telemetry captured at all. Data-source-ingest gap. |
+
+### Phase 6 — Coverage delta
+
+Generate `coverage.json` consumable by ATT&CK Navigator:
+
+```json
+{
+  "name": "{engagement-or-project} purple {YYYY-MM-DD}",
+  "domain": "enterprise-attack",
+  "techniques": [
+    {"techniqueID": "T1059.001", "score": 100, "comment": "fired — pwsh script-block log + EDR"},
+    {"techniqueID": "T1071.001", "score": 50, "comment": "logged-not-alerted — DNS query captured, no rule"},
+    {"techniqueID": "T1486", "score": 0, "comment": "blind — no file-write data source"}
+  ]
+}
+```
+
+Render the Navigator layer URL for the team to visualize.
+
+### Phase 7 — Family K handoff
+
+For each gap (logged-not-alerted, partial, blind):
+
+- **logged-not-alerted** → file a `/detect-engineering` candidate with the technique id, the telemetry signature observed, and a Sigma/SPL/KQL/EQL draft if the data is unambiguous.
+- **partial** → file a detection-tuning ticket (which fields are missing).
+- **blind** → file a `/log-analyze` data-source-onboarding ticket.
+
+Each candidate lands in `purple/{date-slug}/candidates/{rule-id}.yaml` ready for `/detect-engineering` to read.
+
+### Phase 8 — IoC + audit close
+
+For any IoCs surfaced during execution (own infra under test, no exfil), write to `intel/iocs.jsonl` (S15) with `relevant_to` tagged for the project. Append `purple.complete` to `audit.log` with: technique, mode, blast, tests run, detections fired count, gaps count, candidates filed.
+
+## Outputs
+
+```
+purple/{YYYY-MM-DD}-{technique-id}/
+├── report.md                     # exec summary, technique digest, detection state table, gaps
+├── plan.md                       # generated test plan (or operator-authored for --custom)
+├── coverage.json                 # ATT&CK Navigator layer
+├── timeline.md                   # minute-by-minute, both sides
+├── candidates/                   # detection drafts handed to /detect-engineering
+│   ├── {rule-id}.yaml            # Sigma / SPL / KQL / EQL
+│   └── README.md                 # which gap each candidate addresses
+└── raw/
+    ├── atomics-output.txt
+    ├── caldera-operation.json
+    ├── siem-pull.jsonl
+    └── edr-alerts.jsonl
+intel/iocs.jsonl                    # appended (S15)
+{audit.log location}                # appended (S11)
+```
+
+## Edge cases
+
+- **Destructive technique requested for prod blast radius** — refuse. Always (a) for T1485/T1486/T1490/T1561.
+- **Blue team unreachable for coordinated mode** — defer the exercise. Don't run "anyway" — the data is meaningless.
+- **Atomic Red Team test references infra you don't have** (e.g., a domain controller for a domain-joined test) — skip the test, log as `purple.test.skipped.missing-infra`.
+- **SIEM data is delayed > 15min during pull** — wait, retry once, then log `purple.detection.unknown` rather than falsely scoring as "blind."
+- **Detection fired but for the wrong reason** (false positive correlation) — score `partial` with a note. The blue team gets credit for the catch but the rule is logged as imprecise.
+- **Operator wants to skip Family K handoff** — refuse. The handoff IS the exercise's point.
+- **WebFetch unavailable + ATT&CK cache stale** — proceed with cached data, surface staleness in `report.md` and recommend `/intel` to refresh.
+
+## Dependencies
+
+- **S8 scope.yaml** (third-party path) / `security-ownership.yaml` (own-infra path, Family K).
+- **S11 audit.log** — hash-chained.
+- **S15 intel/iocs.jsonl** — writeback for engagement IoCs.
+- **External tools** — Atomic Red Team (`Invoke-AtomicTest` PowerShell or `atomic-operator` Python), Caldera, `yq`, `jq`. Plus a SIEM CLI for pull (Splunk `splunk search`, Elastic `eql search`, Sentinel `az monitor log-analytics`).
+- **Cross-skill** — Family F's `/recon` (target inventory), `/exploit-dev` (technique implementation if custom). Family K's `/detect-engineering` (consumer of candidates), `/log-analyze` (data-source gaps), `/threat-hunt` (hypothesis generation from gaps), `/threat-model-evolve` (rolls coverage delta into the threat model).
+
+## AskUserQuestion gates
+
+1. **Path** — scope.yaml (third-party) vs security-ownership.yaml (own infra). One must apply.
+2. **Mode** — coordinated vs blind.
+3. **Blast radius** — a/b/c/d. Destructive techniques force (a).
+4. **Blue contact + operator** — must be named individuals.
+5. **Notify-at time** for blind mode.
+6. **Custom plan validation** — if `--framework custom`, plan.md must pass schema check (prereqs, commands, cleanup, expected telemetry); refuse to execute incomplete plans.
+7. **Family K handoff confirmation** — at end of exercise, confirm each candidate will be filed; refusing to handoff aborts the report.
+
+## Voice / posture
+
+Disciplined. Cite ATT&CK ids. Cite rule ids. Distinguish observation from inference. The goal is to make the blue team better, not to score points on either side. A "we caught nothing" outcome is more valuable than a "we caught everything" outcome — surface gaps honestly.

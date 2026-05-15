@@ -1,0 +1,253 @@
+---
+name: c4-diagram
+preamble-tier: 2
+version: 1.0.0
+description: |
+  [Chief Architect] Generates the four C4 model levels (System Context, Container,
+  Component, Code) from the actual codebase, not whiteboard memory. Uses imports,
+  service boundaries, IaC, and OpenAPI specs as ground truth. Emits Mermaid and
+  structurizr-DSL so diagrams can be rendered in docs or pushed to a Structurizr
+  workspace. Use when: "C4 diagram", "architecture diagram", "draw the system",
+  "context container component", "structurizr", or "generate architecture docs". (gstack)
+allowed-tools:
+  - Read
+  - Write
+  - Edit
+  - Grep
+  - Glob
+  - AskUserQuestion
+  - Bash
+triggers:
+  - generate c4 diagram
+  - architecture diagram
+  - context container component
+  - structurizr dsl
+  - mermaid c4
+---
+
+{{PREAMBLE}}
+
+{{GBRAIN_CONTEXT_LOAD}}
+
+# /c4-diagram — Family D — Chief Architect
+
+C4 (Context / Container / Component / Code) is the only architecture-diagramming
+notation that survives contact with a real codebase. This skill builds all four
+levels from ground truth — imports, service boundaries, IaC resources, OpenAPI
+specs — so the diagrams don't lie three months from now.
+
+## When to use
+
+- New team member onboarding ("show me the system on one page").
+- Pre-PR architecture review when the change crosses a service boundary.
+- Quarterly architecture refresh — diagrams diverge from reality faster than docs.
+- Migration planning — `/migration-plan` consumes Container + Component graphs.
+- Vendor / security review where you need a defensible System Context diagram.
+
+**Do not use for:**
+
+- A single-service sequence diagram — that's a Mermaid `sequenceDiagram` in-line.
+- ER diagrams for a database — that's `/db-design`.
+- Network topology / VPC drawings — those come from `/iac-review` outputs.
+
+## Inputs
+
+The skill prefers to read, in priority order:
+
+1. **`docs/services/INDEX.md`** if `/service-catalog` has run — gives owners and
+   external-system list for free.
+2. **`~/.gstack/projects/{slug}/graph.json`** if `/dep-graph` has run — gives the
+   already-computed dep graph for Component-level diagrams.
+3. **Codebase** — package boundaries, imports, route handlers, dockerfiles,
+   docker-compose, helm charts, kustomize, IaC modules.
+4. **OpenAPI / GraphQL / proto** specs — drawn as labeled edges between containers.
+5. **`README.md`** — last-resort for system purpose and external actor names.
+
+If none of `/service-catalog` or `/dep-graph` has run, ask the user whether to run
+them first (recommended) or to extract from raw codebase only.
+
+## Procedure
+
+### Step 0: Detect what's available
+
+```bash
+# Detect catalog
+[ -f docs/services/INDEX.md ] && echo "service-catalog: yes" || echo "service-catalog: no"
+
+# Detect dep graph cache
+SLUG=$(basename "$(pwd)")
+[ -f "$HOME/.gstack/projects/$SLUG/graph.json" ] && echo "dep-graph: yes" || echo "dep-graph: no"
+
+# Detect IaC + container manifests
+find . -maxdepth 4 -type f \( -name "*.tf" -o -name "Pulumi.yaml" -o -name "cdk.json" \
+  -o -name "docker-compose*.yml" -o -name "Chart.yaml" -o -name "kustomization.yaml" \) \
+  -not -path "*/node_modules/*" -not -path "*/.git/*" 2>/dev/null | head -20
+
+# Detect API specs
+find . -maxdepth 5 -type f \( -name "openapi.y*ml" -o -name "schema.graphql" -o -name "*.proto" \) \
+  -not -path "*/node_modules/*" -not -path "*/vendor/*" 2>/dev/null | head -20
+```
+
+State the inventory out loud before continuing.
+
+### Step 1: AskUserQuestion — scope and level
+
+One issue per call. Ask:
+
+- **Levels to generate** — All four (default), or specific (Context only, Container
+  only, etc.)? Context is cheap; Code-level for a 50-service monorepo is expensive.
+- **Output target** — Mermaid only (renders in GitHub), structurizr-DSL only (pushes
+  to a Structurizr workspace), or both (recommended).
+- **External-actor inference** — should the skill infer external systems from
+  outbound URLs / SDK imports (`stripe`, `sentry`, `datadog`, etc.) or only show
+  what's explicitly listed in `/service-catalog`?
+
+Do not proceed until the user responds.
+
+### Step 2: Level 1 — System Context
+
+The picture a CEO can read. One box for the system, surrounding boxes for users
+and external systems. Edges labeled with the relationship verb.
+
+Extraction rules:
+
+1. **System name** — from `package.json` `name`, `Cargo.toml`, `go.mod` module,
+   or `README.md` H1. If ambiguous, AskUserQuestion.
+2. **Users / actors** — from auth roles in code (`admin`, `customer`, `partner`),
+   from `docs/services/*.md` `users:` frontmatter, or AskUserQuestion if neither.
+3. **External systems** — outbound HTTP base URLs (`https://api.stripe.com`,
+   `https://hooks.slack.com`), SDK imports (`@aws-sdk/*`, `stripe`, `sendgrid`,
+   `twilio`), env var hostnames (`SMTP_HOST`, `REDIS_URL`).
+4. **Edges** — verb + protocol. "Sends invoices via SMTP." "Charges cards via HTTPS."
+
+Emit Mermaid `C4Context` (Mermaid supports the C4 DSL natively) and structurizr
+DSL into separate files. Validate Mermaid syntax with a dry-render check.
+
+### Step 3: Level 2 — Container
+
+Each deployable unit is a container: a web app, an API service, a worker, a
+database, a cache. Containers are NOT Docker-specific — a serverless function is a
+container in C4 terms.
+
+Extraction rules:
+
+1. **From docker-compose / helm / kustomize** — each `service:` or `Deployment` is
+   a container. Read the image, env vars, exposed ports.
+2. **From a monorepo** — each top-level package with a `Dockerfile`, a `main.go`,
+   an `index.ts` entrypoint, or a `manage.py` is a container.
+3. **From IaC** — Lambda functions, Cloud Run services, ECS tasks, App Service
+   plans, Heroku dynos. Parse `aws_lambda_function`, `google_cloud_run_service`,
+   `azurerm_function_app`, etc.
+4. **Data stores** — RDS / Cloud SQL / DynamoDB / Mongo Atlas / Redis / S3 buckets.
+   Each is a container with a cylinder shape.
+5. **Edges** — protocol + payload shape. "Calls REST /v1/charges over HTTPS."
+   "Publishes order.created to Kafka." Source: OpenAPI consumers, gRPC client
+   imports, AMQP/Kafka client configs.
+
+Emit Mermaid `C4Container` + structurizr `container` blocks.
+
+### Step 4: Level 3 — Component
+
+Inside each container, identify components (logical modules with a clear
+responsibility). Source: package boundaries, controller/service/repo layering,
+domain-package naming.
+
+Extraction rules:
+
+1. **JS/TS** — `madge` or `dependency-cruiser` output. Group by top-level src
+   subdirectory (`src/auth`, `src/billing`, `src/email`).
+2. **Python** — top-level packages under `src/` or the project root.
+3. **Go** — top-level packages under `internal/` or `pkg/`.
+4. **Java/Kotlin** — top-level packages under the root package.
+5. **Edges** — call edges from imports. Annotate cyclical components — those are
+   the ones `/dep-graph` already flagged.
+
+Only generate Component diagrams for containers the user asks about. A 50-service
+system has 50 Component diagrams; that's spam unless you wanted it.
+
+### Step 5: Level 4 — Code (optional, usually skip)
+
+Class diagrams. Useful for a single critical algorithm, a state machine, or the
+core domain model. Defaults to skipping unless the user explicitly requests a
+container at this level.
+
+When generated: Mermaid `classDiagram` with the public surface only. Internal
+helper classes are noise.
+
+### Step 6: Validate and emit
+
+```bash
+mkdir -p docs/architecture
+
+# Mermaid lint — render via mermaid-cli if available, else syntax check only
+if command -v mmdc >/dev/null 2>&1; then
+  for f in docs/architecture/*.mmd; do
+    mmdc -i "$f" -o "${f%.mmd}.svg" 2>&1 | head -5
+  done
+fi
+
+# Structurizr DSL lint
+if command -v structurizr-cli >/dev/null 2>&1; then
+  structurizr-cli validate -workspace docs/architecture/workspace.dsl
+fi
+```
+
+If `mmdc` / `structurizr-cli` aren't installed, note it and skip — do NOT fail the
+skill. Recommend `npm install -g @mermaid-js/mermaid-cli` if the user wants SVG rendering.
+
+### Step 7: AskUserQuestion — push to Structurizr workspace?
+
+Default: no. If the user has a Structurizr cloud workspace, ask for workspace ID
+and API key (read from `~/.gstack/config.yaml` `structurizr.workspace_id` /
+`api_key` if present). Confirm before pushing — pushing overwrites the workspace.
+
+## Outputs
+
+- `docs/architecture/01-context.md` — Mermaid C4Context + 1-paragraph narrative.
+- `docs/architecture/02-container.md` — Mermaid C4Container + container table
+  (name, owner, tech, exposed ports, data classification).
+- `docs/architecture/03-component-{container}.md` — one file per container.
+- `docs/architecture/04-code-{component}.md` — optional, per request.
+- `docs/architecture/workspace.dsl` — full structurizr DSL covering all four levels.
+- `docs/architecture/*.svg` — rendered if `mmdc` available.
+
+Each markdown file follows the same shape: title, last-updated date, the diagram,
+a key/legend, and a "What changed" section that diffs vs the previous version (the
+skill reads the prior file's diagram and notes added/removed/renamed boxes).
+
+## Edge cases
+
+- **Monorepo with shared libs** — shared libraries (`packages/ui`, `packages/utils`)
+  are NOT containers. Show them as Components inside the consumers, or as a single
+  "shared library" Component cluster at Container level if they're substantial.
+- **Multi-cloud** — group containers by cloud provider as a structurizr
+  deployment node. Mermaid C4 doesn't model deployment cleanly; use structurizr
+  for the deployment view.
+- **Serverless** — Lambda / Cloud Functions are containers. Group by the bounded
+  context they serve, not by the runtime.
+- **Background workers vs HTTP services** — distinguish via the `technology`
+  property. Background workers have queue inputs, not HTTP endpoints; draw the
+  queue as a separate container with the worker subscribing.
+- **External system inference accuracy** — false positives are common (a `sentry`
+  import in a dev-only path). Cross-check with prod env vars before listing as
+  external dependency.
+- **Diagrams over the Mermaid 200-node soft limit** — break into multiple Component
+  diagrams scoped to one bounded context each. Don't ship a single 400-node graph.
+
+## Dependencies
+
+- **S1 (Hall-mode preamble)** for trust-gated outputs.
+- `madge` or `dependency-cruiser` for JS/TS Component extraction (via `/dep-graph`).
+- `@mermaid-js/mermaid-cli` (optional) for SVG rendering.
+- `structurizr-cli` (optional) for DSL validation and workspace push.
+- `/service-catalog` (recommended) for owners and external system list.
+- `/dep-graph` (recommended) for Component-level edges.
+
+## Stop gates
+
+- After Step 1 (scope) — do not generate Code-level diagrams without explicit ask.
+- Before Step 7 (Structurizr push) — pushing overwrites the workspace; confirm.
+
+Diagrams that lie are worse than no diagrams. If you cannot determine an edge
+direction or a component boundary from the codebase, mark it `??` in the diagram
+and AskUserQuestion — do not guess.

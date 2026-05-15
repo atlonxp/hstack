@@ -1,0 +1,393 @@
+---
+name: mobile-release
+preamble-tier: 3
+version: 1.0.0
+description: |
+  [Mobile] End-to-end TestFlight / Play Internal release pipeline. Bumps the app version,
+  builds a signed artifact, uploads to TestFlight (iOS) and the Play Internal track
+  (Android), drafts release notes from git log + CHANGELOG, notifies testers, and writes
+  a release record with a rollback runbook. Use when: "ship to TestFlight", "ship to
+  internal track", "cut a mobile release", "mobile release", or "upload the build".
+  (gstack)
+allowed-tools:
+  - Read
+  - Write
+  - Edit
+  - Grep
+  - Glob
+  - AskUserQuestion
+  - Bash
+  - WebSearch
+triggers:
+  - mobile release
+  - ship to testflight
+  - ship to internal track
+  - cut a mobile build
+  - upload the ipa
+  - upload the aab
+---
+
+{{PREAMBLE}}
+
+{{BASE_BRANCH_DETECT}}
+
+# /mobile-release — Family E1 — Mobile
+
+Cut a mobile release without 12 manual steps. The skill walks the version bump → signed
+build → upload → notes → notify cycle, writes a release record under `mobile/releases/`,
+and includes a rollback runbook so the next on-call can revert quickly when something
+breaks in beta.
+
+Two cadences:
+
+- **Internal release** (default) — TestFlight internal tester group + Play Internal track.
+  Fast, no review, for the team.
+- **External beta** — TestFlight external testers (requires Apple beta review,
+  ~24-48 hours) + Play Closed Testing track.
+
+Production release to App Store / Play Store is an explicit override. The default is
+beta; pushing to prod requires `--prod` and an extra confirmation.
+
+## When to use
+
+- Daily / weekly cadence to push fresh builds to internal testers.
+- Pre-prod beta with external testers before a public release.
+- Manual prod release when the team is not yet on a fully automated trunk-based deploy.
+
+**Do not use for:**
+
+- Mobile feature scaffolding — that's `/mobile-build`.
+- QA flow execution — that's `/mobile-qa` (this skill calls it as a pre-flight gate).
+- Performance profiling — that's `/mobile-perf`.
+
+## Stack auto-detection
+
+```bash
+# RN / Flutter / native?
+test -f package.json && grep -q '"react-native"' package.json && echo "rn"
+test -f pubspec.yaml && echo "flutter"
+test -d ios && find ios -maxdepth 2 -name "*.xcworkspace" -o -name "*.xcodeproj" 2>/dev/null | head -1
+test -d android && test -f android/build.gradle -o -f android/build.gradle.kts && echo "android-gradle"
+
+# fastlane detection — strongly preferred for both stores
+test -d fastlane && cat fastlane/Fastfile 2>/dev/null | head -5
+```
+
+The pipeline runs differently depending on whether `fastlane` is configured:
+
+- **With fastlane** — call `fastlane beta` / `fastlane ios beta` / `fastlane android beta`
+  for the upload. fastlane handles version bump, signing, archive, upload, notes.
+- **Without fastlane** — fall back to `xcodebuild` + `xcrun altool` (iOS) and
+  `./gradlew bundleRelease` + Google Play Publisher API (Android). The skill writes a
+  minimal `fastlane/Fastfile` on request and recommends adopting it.
+
+## Inputs
+
+The skill accepts:
+
+1. **Version bump direction** — patch (default), minor, major. Honors semver.
+2. **Track** — internal / external / prod. Internal is default.
+3. **Release-notes source** — `auto` (default: git log + CHANGELOG since last tag),
+   `manual` (AskUserQuestion to paste notes), or a path to a notes file.
+4. **Tester groups** — pulled from `fastlane/Appfile` + `Pluginfile` if present;
+   otherwise AskUserQuestion.
+5. **Signing identities** — Apple Distribution cert + provisioning profile (iOS), upload
+   keystore + key alias (Android). See `fastlane match` if the project uses it.
+
+## Procedure
+
+### Step 0: Pre-flight
+
+```bash
+git status --porcelain
+git rev-parse --abbrev-ref HEAD
+git log --oneline -1
+```
+
+The working tree MUST be clean. If dirty, AskUserQuestion: commit / stash / abort. STOP
+until resolved.
+
+State the current branch and head commit. If the branch is not the base branch (default
+release branch), AskUserQuestion to confirm the user intends to release from a feature
+branch. Releasing from a feature branch is allowed only with `--force-branch`.
+
+### Step 1: AskUserQuestion — release parameters
+
+One issue per call:
+
+- **Bump** — patch / minor / major.
+- **Track** — internal / external / prod.
+- **Run mobile-qa first?** — yes (recommended) / no / already ran.
+
+If `prod` is selected, add a second AskUserQuestion: "Confirm you want to release to
+production. This will be visible to all users. Type the exact app name to confirm."
+
+### Step 2: Pre-flight QA gate (optional but default-on)
+
+If the user chose to run QA: invoke `/mobile-qa` in **run mode** against existing flows
+on the current+1 / current / current-1 OS matrix. Capture the verdict.
+
+- **PASS** — continue.
+- **FLAKY** — AskUserQuestion to continue or abort. Recommend abort for prod, continue
+  for internal.
+- **FAIL** — abort. Report the failing flows and tell the user to fix or skip QA.
+
+### Step 3: Version bump
+
+Find the version sources for the detected stack:
+
+- **iOS native + RN** — `ios/{App}/Info.plist` (`CFBundleShortVersionString` +
+  `CFBundleVersion`) or the marketing/build version in the `.xcodeproj` build settings
+  (`MARKETING_VERSION`, `CURRENT_PROJECT_VERSION`).
+- **Android native + RN** — `android/app/build.gradle(.kts)` (`versionName`,
+  `versionCode`).
+- **Flutter** — `pubspec.yaml` (`version: 1.2.3+45` where `+45` is the build number).
+- **RN with `react-native-version` or `react-native-bump-version`** — use the
+  configured tool.
+
+Bump rules:
+
+- `versionName` / `CFBundleShortVersionString` — semver, follow the chosen bump.
+- `versionCode` / `CFBundleVersion` — always increment by 1. Never re-use a build
+  number on the same track (both stores reject duplicates).
+
+Show the user the proposed version + build number before committing. AskUserQuestion to
+confirm.
+
+Commit:
+
+```bash
+git add {version files}
+git commit -m "chore(release): bump to {version} ({buildNumber})"
+git tag "v{version}"
+```
+
+### Step 4: Build the signed artifact
+
+#### iOS (with fastlane)
+
+```bash
+bundle exec fastlane ios beta
+# or fastlane ios release for prod
+```
+
+#### iOS (without fastlane)
+
+```bash
+cd ios
+xcodebuild -workspace {App}.xcworkspace -scheme {Scheme} -configuration Release \
+  -archivePath build/{App}.xcarchive archive
+xcodebuild -exportArchive -archivePath build/{App}.xcarchive \
+  -exportOptionsPlist ExportOptions.plist -exportPath build/
+# Outputs build/{App}.ipa
+```
+
+`ExportOptions.plist` must specify `method: app-store-connect` (or `release-testing` for
+TestFlight ad-hoc). Signing identity comes from the project + the keychain.
+
+#### Android (with fastlane)
+
+```bash
+bundle exec fastlane android beta
+```
+
+#### Android (without fastlane)
+
+```bash
+cd android
+./gradlew :app:bundleRelease
+# Outputs app/build/outputs/bundle/release/app-release.aab
+```
+
+The release signing config must already be wired up in `app/build.gradle(.kts)`:
+
+```kotlin
+signingConfigs {
+  create("release") {
+    storeFile = file(System.getenv("ANDROID_KEYSTORE_PATH"))
+    storePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD")
+    keyAlias = System.getenv("ANDROID_KEY_ALIAS")
+    keyPassword = System.getenv("ANDROID_KEY_PASSWORD")
+  }
+}
+```
+
+If the signing config is missing, STOP. Do not silently produce an unsigned build. Ask
+the user to set up signing.
+
+#### Flutter
+
+```bash
+flutter build ipa --release          # iOS
+flutter build appbundle --release     # Android
+```
+
+Same fastlane / signing rules apply.
+
+### Step 5: Upload
+
+#### TestFlight (iOS)
+
+With fastlane: `fastlane pilot upload --ipa build/{App}.ipa --skip_submission true`
+(internal) or `--skip_submission false` (external — triggers Apple beta review).
+
+Without fastlane: `xcrun altool --upload-app -f build/{App}.ipa -t ios -u {apple-id} -p {app-specific-password}`. Notarization status is polled; surface the result.
+
+#### Play Internal / Closed Testing (Android)
+
+With fastlane: `fastlane supply --aab app-release.aab --track internal` (or
+`--track beta` for closed testing, or `--track production` for prod).
+
+Without fastlane: use the Google Play Publisher API directly. Requires a service-account
+JSON file (`GOOGLE_PLAY_JSON_KEY` env). The skill writes a minimal upload script if not
+present, but recommends fastlane for the long term.
+
+### Step 6: Draft release notes
+
+Generate notes from:
+
+- `git log --pretty=format:"- %s" {previous-tag}..HEAD` filtered to non-`chore` and
+  non-`Merge` commits.
+- `CHANGELOG.md` topmost entry, if it matches the new version.
+- The release brief in `mobile/aso/{YYYY-MM}/proposal.md` if a recent ASO proposal
+  exists.
+
+Show the user the draft. AskUserQuestion: accept / edit / replace. Then push the final
+notes to:
+
+- TestFlight: via `fastlane pilot` `--changelog` or App Store Connect API.
+- Play Internal: via `fastlane supply` `--metadata_path` (`fastlane/metadata/android/
+  {locale}/changelogs/{versionCode}.txt`).
+
+### Step 7: Notify testers
+
+Notification channels (use what's configured):
+
+- **Slack** — post to `#mobile-releases` (or the configured webhook). Template: app +
+  version + track + notes link + download instructions.
+- **Email** — send to the tester-list mailing address if configured.
+- **In-app** — for prod, schedule the "What's New" prompt via the existing in-app
+  comms system if one exists.
+
+AskUserQuestion if no notification channel is configured: skip / configure now / use a
+plain console echo.
+
+### Step 8: Write the release record
+
+`mobile/releases/{version}.md`:
+
+```markdown
+# Release {version} ({buildNumber}) — {YYYY-MM-DD}
+Track: {internal | external | prod}
+Stack: {detected stack}
+
+## What shipped
+{release notes — same as Step 6 final}
+
+## Commits
+{git log condensed}
+
+## Artifacts
+- iOS: `ios/build/{App}.ipa` (sha256: {hash})
+- Android: `android/app/build/outputs/bundle/release/app-release.aab` (sha256: {hash})
+
+## Upload status
+- TestFlight: {build-id, processing | ready | failed}
+- Play Internal: {edit-id, draft | in-review | live}
+
+## QA verdict (if run)
+{pass | flaky | fail} — see mobile/qa/runs/{date}/report.md
+
+## Rollback runbook
+
+If a regression appears in the field within {window}:
+
+1. **Stop the rollout.**
+   - iOS: App Store Connect → TestFlight → expire build → notify testers.
+   - Android: Play Console → release dashboard → halt rollout.
+2. **Re-release the previous good build.**
+   - iOS: re-promote `v{previous-version}` build {previous-buildNumber} from TestFlight.
+   - Android: Play Console → "Releases" → "Create new release" → "Add build from library"
+     → pick `v{previous-version}` AAB → re-publish to the same track.
+3. **Triage in `/investigate`.**
+   - Run `/investigate "field regression in v{version}: {symptom}"`.
+   - Capture the crash logs + reproduction steps.
+   - Open a TODO with severity P0.
+4. **Confirm rollback in production.**
+   - Verify Sentry / Crashlytics / Firebase Crashlytics no longer ingests the new
+     crash signature.
+   - Verify the in-app version reported by Mixpanel / Amplitude / your analytics is
+     back at the previous version for new sessions.
+5. **Communicate.**
+   - Post in `#mobile-releases` with the rollback reason + the next steps.
+   - If external users were affected, draft a status-page update.
+
+## Next release
+Scheduled bump: {date} (cadence + 1 week).
+```
+
+Commit:
+
+```bash
+git add mobile/releases/{version}.md
+git commit -m "chore(release): record v{version}"
+git push origin HEAD --tags
+```
+
+## Outputs
+
+- `mobile/releases/{version}.md` — the release record + rollback runbook.
+- Signed `.ipa` and `.aab` artifacts under the platforms' standard build paths.
+- A git tag `v{version}`.
+- Notification posted to the configured channel.
+- TestFlight + Play Internal track upload confirmations.
+
+## Edge cases
+
+- **Apple beta review (external testers)** — 24-48 hour async. The skill submits and
+  exits; it doesn't block on the review. A follow-up `/canary`-style poll could surface
+  the verdict.
+- **Play Store staged rollout** — for prod, default to a 10% rollout, then 50%, then
+  100% over 3-7 days. The skill submits at 10% and writes the next-step dates into the
+  release record.
+- **Signing certificate expiry** — iOS distribution certs expire annually; provisioning
+  profiles too. Pre-flight checks the expiry date and warns if < 30 days remain.
+- **Missing dSYMs / mapping files** — Crashlytics / Sentry need dSYMs (iOS) and
+  ProGuard mapping files (Android) for symbolicated stack traces. The skill uploads them
+  as part of the build step or surfaces a TODO if the upload integration isn't wired up.
+- **Build-number collision** — both stores reject a duplicate build number on the same
+  track. The pre-flight reads the last uploaded build via the store APIs (if creds
+  available) and bumps past it; if creds are missing, the skill warns + uses local state.
+- **Prod release with no prior beta** — disallowed by default. Override with `--allow-
+  cold-prod` and a strong AskUserQuestion confirmation.
+- **Multi-track parallel** — releasing the same version to iOS internal and Android prod
+  simultaneously is supported but flagged as unusual; AskUserQuestion to confirm.
+- **Repo bun.lock / pnpm-lock.yaml dirty after `fastlane`** — fastlane sometimes touches
+  lockfiles via plugin installs; commit those before pushing the tag, or revert.
+
+## Dependencies
+
+- **fastlane** (strongly recommended) — `bundle add fastlane` in a `Gemfile`, or
+  `brew install fastlane`. Set up via `fastlane init` once per platform.
+- **Xcode 15+, `xcodebuild`, `xcrun altool`** — iOS builds + uploads.
+- **Android SDK 34+, Gradle wrapper, JDK 17, `bundletool`** — Android builds.
+- **`fastlane match`** (optional) — manages signing certs + profiles via a git repo.
+- **Google Play Publisher API service account JSON** — Android uploads without fastlane.
+- **Apple ID + app-specific password** OR **App Store Connect API key** — iOS uploads.
+- New `bin/gstack-mobile-release` wrapper that orchestrates the steps above.
+- `/mobile-qa` for the pre-flight QA gate.
+
+## Stop gates
+
+- After Step 0 (clean tree + branch check) — never release from a dirty tree.
+- After Step 1 (parameters) — prod releases need an explicit second confirmation.
+- After Step 2 (QA gate) — failing QA aborts unless explicitly overridden.
+- Before Step 4 (build) if signing is missing — STOP. Don't produce an unsigned artifact.
+- After Step 7 (upload) but before Step 8 (record) — confirm the upload was accepted by
+  the store before writing the release record.
+
+The AskUserQuestion call is a tool_use, not prose — call the tool directly. Loading the
+schema via ToolSearch and writing the recommendation as chat prose is the failure mode
+these gates exist to prevent.
+
+{{LEARNINGS_LOG}}

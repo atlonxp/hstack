@@ -1,0 +1,354 @@
+---
+name: service-mesh
+preamble-tier: 2
+version: 1.0.0
+description: |
+  [Cloud-Native] Decide whether a service mesh actually helps, and if so, generate
+  config for Istio, Linkerd, or Consul Connect. Covers mTLS, traffic policies,
+  retries, timeouts, circuit breakers, canary routing, and fault injection — with
+  a hard audit step that often concludes "you don't need a mesh." Use when:
+  "do we need a service mesh", "istio config", "linkerd setup", "mTLS between
+  services", "canary routing", "fault injection". (gstack)
+allowed-tools:
+  - Read
+  - Write
+  - Edit
+  - Glob
+  - Grep
+  - Bash
+  - AskUserQuestion
+  - WebSearch
+triggers:
+  - do we need a service mesh
+  - istio config
+  - linkerd setup
+  - mtls between services
+  - canary routing
+  - fault injection
+---
+
+{{PREAMBLE}}
+
+{{GBRAIN_CONTEXT_LOAD}}
+
+# /service-mesh — Family E3 — Cloud-Native
+
+A service mesh is a load-bearing piece of infrastructure that adds an operating
+cost in CPU, memory, latency, and on-call burden. **Most teams who adopt one
+shouldn't have, and most teams who actually need one can't tell yet.**
+
+This skill does two things in order:
+
+1. **Audit first.** Walk through the actual problems the team is trying to
+   solve. If a mesh is overkill, say so out loud and recommend lighter tools.
+2. **If a mesh genuinely helps**, pick one and generate complete, opinionated
+   config for: mTLS, traffic policies, retries, timeouts, circuit breakers,
+   canary routing, and fault-injection experiments.
+
+This skill writes config. It does NOT install the control plane (that's a
+cluster bootstrap concern).
+
+## When to use
+
+- "Should we adopt a service mesh?" — run the audit. Often the answer is no.
+- "We have a mesh installed, write the config for service X" — go straight
+  to generation.
+- "Add mTLS / canary routing / fault injection to this service" — targeted
+  config generation.
+
+NOT for: cluster bootstrap, control-plane install, mesh-vs-no-mesh meta-debates
+without a concrete workload.
+
+## Inputs (gather via AskUserQuestion)
+
+1. **Cluster + workload context**
+   - How many services? (< 10 services rarely justifies a mesh.)
+   - Kubernetes only, or hybrid (VMs + k8s)?
+   - Cloud (EKS / GKE / AKS / on-prem)?
+2. **Problem you're trying to solve** (pick the actual ones, not all of them):
+   - A) **mTLS / zero-trust between services**
+   - B) **Observability** (traces, golden signals, per-service metrics)
+   - C) **Traffic management** (canary, blue/green, weighted routing)
+   - D) **Resilience** (retries, timeouts, circuit breakers)
+   - E) **Cross-cluster** (multi-region failover, service federation)
+   - F) **Policy enforcement** (who can call what)
+3. **Mesh choice** (if already decided)
+   - Istio (most features, biggest operating cost)
+   - Linkerd (smallest blast radius, simplest model, Rust data plane)
+   - Consul Connect (good fit if Consul is already core)
+   - Cilium Service Mesh (eBPF, no sidecar — newer, fewer features)
+   - None yet — run the audit.
+4. **Adoption stage**
+   - Greenfield (mesh from day one)
+   - Existing cluster, adding mesh (incremental rollout, namespace by namespace)
+   - Mesh already running (just write the config)
+
+Persist to `CLAUDE.md` under `## Service Mesh`.
+
+## Procedure
+
+### Step 1: The "do you need a mesh" audit
+
+Before generating any config, walk through this. If the team can solve
+their actual problem with a simpler tool, recommend the simpler tool.
+
+| Problem | Simpler alternative before adopting a mesh |
+|---|---|
+| mTLS between 3 services | App-level TLS + a shared CA (cert-manager). Done. |
+| Distributed tracing | OpenTelemetry SDK per service (see `/observability`). |
+| Per-service metrics | Prometheus + app-emitted metrics. |
+| Retries / timeouts on the client | gRPC retry policy, HTTP client config. App-level. |
+| Canary deploy | Argo Rollouts, Flagger with HTTP routing, Kubernetes `Service` weighted to two Deployments. |
+| Per-service rate limiting | Envoy as ingress (no mesh), or in-app rate limiter. |
+| Policy / authz between services | OPA + library, or app-level checks with JWTs. |
+
+**A mesh starts to genuinely earn its keep when:**
+
+- You have **20+ services** (mTLS by hand is painful).
+- You need **L7-aware traffic management** across many services (canary + retry
+  + circuit-breaker policies declared, not coded).
+- You need **uniform observability** without trusting every team to instrument
+  correctly.
+- You need **cross-cluster federation** (single-cluster meshes are easy; this
+  is where Istio multi-primary actually shines).
+
+If none of these apply, OUTPUT a `docs/mesh-decision.md` that says "we
+evaluated, here's why we said no, here's what we'll do instead" and stop.
+
+### Step 2: Pick the mesh (if go)
+
+Use AskUserQuestion to confirm. Default recommendation:
+
+- **Linkerd** if: simplicity matters, you don't need Istio's L7 routing
+  exotica, you want the smallest CPU/memory tax. Rust data plane,
+  ~2-3MB/sidecar, very low operator burden.
+- **Istio** if: you need full L7 routing (header-based, percentage canary
+  with traffic mirroring), multi-cluster federation, or a large existing
+  Envoy / xDS investment. Operator burden is real.
+- **Consul Connect** if: Consul is already the service-discovery / config
+  source of truth, OR if hybrid VM+k8s.
+- **Cilium Service Mesh** if: you already run Cilium CNI and want eBPF
+  (no sidecar) — but feature set is narrower than Istio/Linkerd; check the
+  matrix for your needs.
+
+Cite the current versions you're configuring for (e.g., Istio 1.22+, Linkerd
+2.15+). If unsure, use WebSearch to verify the latest stable.
+
+### Step 3: Generate config per problem
+
+The structure below covers Istio; Linkerd equivalents are noted inline.
+
+#### 3a. mTLS / namespace-wide
+
+**Istio** (STRICT mTLS across the namespace):
+
+```yaml
+apiVersion: security.istio.io/v1
+kind: PeerAuthentication
+metadata: { name: default, namespace: <ns> }
+spec:
+  mtls: { mode: STRICT }
+```
+
+**Linkerd**: mTLS is on by default for any pod with the
+`linkerd.io/inject: enabled` annotation. No extra config needed — verify with
+`linkerd viz tap`.
+
+**Rollout warning:** Going from `PERMISSIVE` to `STRICT` will break any
+plaintext caller (probes from non-mesh sources, legacy clients). Roll out per
+namespace, monitor for 401/connection-reset spikes, THEN flip strict.
+
+#### 3b. Traffic policies — retries, timeouts, outlier detection
+
+**Istio** `DestinationRule` + `VirtualService`:
+
+```yaml
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata: { name: <svc>, namespace: <ns> }
+spec:
+  host: <svc>.<ns>.svc.cluster.local
+  trafficPolicy:
+    connectionPool:
+      tcp: { maxConnections: 100 }
+      http:
+        http1MaxPendingRequests: 50
+        http2MaxRequests: 1000
+        maxRequestsPerConnection: 0   # 0 = unlimited; set when downstream is sticky
+    outlierDetection:
+      consecutive5xxErrors: 5
+      interval: 30s
+      baseEjectionTime: 30s
+      maxEjectionPercent: 50    # NEVER 100; you'll eject every replica during a real outage
+---
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata: { name: <svc>, namespace: <ns> }
+spec:
+  hosts: [<svc>]
+  http:
+    - route:
+        - destination: { host: <svc> }
+      timeout: 5s
+      retries:
+        attempts: 3
+        perTryTimeout: 1s
+        retryOn: "gateway-error,connect-failure,refused-stream,5xx"
+```
+
+**Retry trap:** Retries amplify load during outages. If you retry 3x on a
+service that's already crashing, you 3x the load. ALWAYS pair retries with:
+- Outlier detection (eject unhealthy replicas)
+- Budget-based retries (Linkerd) or `retries.retryRemoteLocalities: false`
+- App-level idempotency (retries on non-idempotent POSTs corrupt data)
+
+#### 3c. Canary / traffic-shifting
+
+**Istio** weighted routing:
+
+```yaml
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata: { name: <svc>, namespace: <ns> }
+spec:
+  hosts: [<svc>]
+  http:
+    - route:
+        - destination: { host: <svc>, subset: stable }
+          weight: 95
+        - destination: { host: <svc>, subset: canary }
+          weight: 5
+```
+
+For automated progressive delivery, hand off to **Argo Rollouts** or **Flagger**,
+which DRIVE this VirtualService based on metrics. Don't write the canary
+state machine yourself.
+
+#### 3d. Circuit breaker — the outlier detection from 3b IS the circuit breaker.
+
+Avoid duplicating it at the app layer (Hystrix, Resilience4j) AND the mesh —
+you'll get cascading ejections at different timescales.
+
+#### 3e. Fault injection — staging only
+
+```yaml
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata: { name: <svc>-fault, namespace: <ns>-staging }
+spec:
+  hosts: [<svc>]
+  http:
+    - match: [{ headers: { x-chaos: { exact: "delay-2s" } } }]
+      fault: { delay: { fixedDelay: 2s, percentage: { value: 100 } } }
+      route: [{ destination: { host: <svc> } }]
+    - match: [{ headers: { x-chaos: { exact: "abort-500" } } }]
+      fault: { abort: { httpStatus: 500, percentage: { value: 50 } } }
+      route: [{ destination: { host: <svc> } }]
+    - route: [{ destination: { host: <svc> } }]
+```
+
+Header-gated so it only triggers when load tests / chaos runs explicitly send
+the header. This pairs with `/chaos`. **Never deploy fault injection to prod
+without `x-chaos` header gating** — it's too easy to forget it's there.
+
+#### 3f. Authorization policy
+
+```yaml
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata: { name: <svc>-allow, namespace: <ns> }
+spec:
+  selector: { matchLabels: { app: <svc> } }
+  rules:
+    - from: [{ source: { principals: ["cluster.local/ns/<ns>/sa/<caller>"] } }]
+      to: [{ operation: { methods: ["GET", "POST"], paths: ["/api/*"] } }]
+```
+
+Start in `action: ALLOW` with explicit principals. Once stable, layer
+`DENY` policies for the truly forbidden paths. NEVER deploy a blanket
+`DENY` first — you'll lock out every caller.
+
+### Step 4: Adoption strategy (if greenfield → mesh, or rolling onto existing cluster)
+
+1. Install control plane in one namespace.
+2. Pick ONE non-critical service to inject first. Verify mTLS, traces, metrics.
+3. Roll mesh per-namespace, NOT per-cluster, NOT all-at-once.
+4. Set `PeerAuthentication` to `PERMISSIVE` for 1-2 weeks per namespace, watch
+   error metrics, THEN flip to `STRICT`.
+5. Document the rollback: how to remove the sidecar from a namespace (label
+   removal + rolling restart) if something breaks under load.
+
+### Step 5: Write outputs
+
+```
+deploy/mesh/
+├── decision.md             # the audit result, including "why we picked X"
+├── istio/  (or linkerd/)
+│   ├── peer-authentication.yaml
+│   ├── authorization-policies/
+│   ├── destination-rules/
+│   ├── virtual-services/
+│   ├── fault-injection/    # staging-only manifests
+│   └── README.md           # rollout order
+└── runbooks/
+    ├── rollback.md
+    └── on-call.md          # what mesh-specific symptoms to look for
+```
+
+### Step 6: Validate
+
+```bash
+# Istio
+istioctl analyze deploy/mesh/istio/ 2>&1 | head -50
+istioctl validate -f deploy/mesh/istio/destination-rules/ 2>&1
+# Linkerd
+linkerd check 2>&1 | head -20
+linkerd viz check 2>&1 | head -10
+```
+
+Report passes and failures. If the control plane isn't reachable, do static
+YAML lint only and say so.
+
+## Outputs
+
+- `deploy/mesh/decision.md` — the audit, what we chose and why, OR
+  "we chose not to adopt a mesh, here's the lighter-weight plan."
+- `deploy/mesh/{mesh}/` — generated CRDs.
+- `deploy/mesh/runbooks/` — rollback procedure + on-call cheat sheet.
+
+## Edge cases
+
+- **No-mesh outcome.** Honor it. Don't generate config "just in case." Write
+  the decision doc and stop.
+- **Multi-cluster.** Istio multi-primary is the most battle-tested. Linkerd
+  multi-cluster works but the federation model is simpler / less powerful.
+  Surface the tradeoff before generating.
+- **Egress traffic.** Default-allow egress through the mesh exposes the cluster
+  to data exfiltration. Define `ServiceEntry` for every external dependency
+  and gate egress with `AuthorizationPolicy`.
+- **gRPC streaming.** Outlier detection on streaming connections is tricky —
+  the 5xx counter doesn't tick the same way. Test before relying on it.
+- **Sidecar resource overhead.** Istio sidecar default is 100m CPU / 128Mi RAM
+  per pod. At 500 pods, that's 50 vCPU / 64GiB just for proxies. Surface this
+  cost in the decision doc.
+- **Probe path through the sidecar.** If `holdApplicationUntilProxyStarts` is
+  not set, probes can hit before sidecar is ready and flap the pod. Set it.
+
+## Dependencies
+
+- **S1 (Hall-mode preamble)** — provided by `{{PREAMBLE}}`.
+- **S5 (cluster access)** — optional; only needed for Step 6 live validation.
+- `/k8s-design` — recommended first; mesh works best when base manifests are
+  already production-grade.
+- `/observability` — mesh metrics flow into the same Prom/Tempo stack.
+- `istioctl` or `linkerd` CLI — optional for validation.
+
+## Important rules
+
+- **Audit first.** "Yes, generate config" is not the default answer.
+- **Permissive before strict.** Always roll mTLS in two phases.
+- **Outlier detection caps at 50%.** A 100% cap turns a real outage into a
+  total ejection.
+- **Header-gated fault injection only.** Never run unconditional fault rules
+  in prod.
+- **No app-level retries AND mesh-level retries.** Pick one tier.

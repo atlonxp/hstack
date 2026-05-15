@@ -1,0 +1,357 @@
+---
+name: blueprint
+preamble-tier: 2
+version: 1.0.0
+description: |
+  [Product Transposition] Structured study of an external target (product, paper, codebase, app, or
+  SDK/API) that produces a domain-agnostic BLUEPRINT.md plus evidence, notes, and citations.
+  Five input modes (`--mode product|paper|code|app|api`) each use the right extractor.
+  Refuses auth-walled targets without ownership declaration. Never copies verbatim
+  text, code, images, or branding — transformative analysis only. First step of Family J's
+  constructive reverse-engineering pipeline (`/blueprint → /transpose → /clone-and-twist → /recipe`).
+  Use when asked to "study this product", "blueprint this paper", "extract the mechanism",
+  "RE this codebase", "study fingerspelling.xyz", or "blueprint supertonic-v3". (gstack)
+benefits-from: [discover]
+allowed-tools:
+  - Read
+  - Write
+  - Edit
+  - Grep
+  - Glob
+  - Bash
+  - AskUserQuestion
+  - WebSearch
+  - WebFetch
+triggers:
+  - blueprint this
+  - study this product
+  - study this paper
+  - extract the mechanism
+  - reverse engineer this
+  - constructive RE
+---
+
+{{PREAMBLE}}
+
+# /blueprint — Family J — Product Transposition
+
+Study a target — a live product, a research paper, an open-source codebase, an app,
+or an API/SDK — and produce a **domain-agnostic BLUEPRINT.md** capturing its
+mechanism. Output is reusable downstream by `/transpose`, `/clone-and-twist`, and
+`/recipe`. Output is **not** a derivative reproduction — it is a transformative
+analysis that lets you build something new in your own domain.
+
+This is the first stop of Hall's constructive reverse-engineering pipeline:
+
+```
+  /blueprint  →  /transpose  →  /clone-and-twist  →  /recipe
+   study           plan the         build the          document
+   THEIRS          bridge           transposed         YOURS
+```
+
+## When to use
+
+- You found a product (fingerspelling.xyz, an ASL pedagogy app) and want to
+  understand its teaching mechanism before transposing to Thai Sign Language.
+- You're studying a research paper + reference code (supertonic-v3) and want
+  to extract the mechanism so you can transpose inference → fine-tuning.
+- You're scouting an open-source repo to learn its architecture before building
+  something adjacent in your own domain.
+- You want a single durable artifact instead of scattered Notion/Obsidian/head-notes.
+
+**Not for:** verbatim cloning (refused), studying auth-walled targets without
+ownership declaration (refused), or adversarial reverse engineering on
+unauthorized targets (use Family F instead).
+
+## Inputs
+
+| Flag | Required | Meaning |
+|---|---|---|
+| `<target>` | yes | URL / arXiv ID / repo URL / app store ID / OpenAPI URL |
+| `--mode` | yes | One of: `product`, `paper`, `code`, `app`, `api` |
+| `--focus <area>` | no | Repeatable. Areas to deepen (`--focus pedagogy --focus prosody`) |
+| `--exclude <area>` | no | Repeatable. Known noise to skip (`--exclude marketing-copy`) |
+| `--owned` | no | Declares you own / have authorization for an auth-walled target |
+| `--slug <name>` | no | Override auto-derived study slug |
+
+If `--mode` is missing, infer from the target shape then **AskUserQuestion** to
+confirm before continuing.
+
+## Modes
+
+### `--mode product` (live web/SaaS product)
+
+Studies a live product end-to-end via `/browse` (observation) and public docs
+(reading). **Refuses to operate behind auth without `--owned`.** Captures:
+
+- UX flow: the screens, the sequence, the affordances, the empty/error states.
+- Behavior probes: how does the product respond to nonsense input, edge cases,
+  rate limits (only on free-tier / public surfaces).
+- Public docs: feature lists, changelog, blog, marketing claims (cited).
+- Pricing / packaging: what tier exposes what behavior.
+
+Extractor: `lib/study-extractors/product.ts` (planned). Uses `/browse` for
+observation, `/scrape` within bounds, `markitdown` for downloaded docs.
+
+### `--mode paper` (research paper)
+
+Ingests one or more papers (PDF, arXiv ID, OpenReview link) via `markitdown`
+and extracts:
+
+- Architecture: model / system structure, with diagrams when available.
+- Method: training procedure, inference procedure, key algorithms.
+- Results + ablations: which design choices mattered, by how much.
+- Data: datasets used (with provenance), preprocessing decisions.
+- Open questions: what the paper didn't ablate, what's load-bearing but unproven.
+
+Every claim cites a page/section. Hooks `huggingface-skills:hugging-face-paper-publisher`
+for citation formatting.
+
+### `--mode code` (open-source codebase)
+
+Static + light dynamic analysis of an OSS repo. **Public repos only.** Captures:
+
+- Entry points (CLI, library API, server routes).
+- Key abstractions: classes, modules, types that carry the mechanism.
+- Call graph for the critical path.
+- Non-obvious design choices surfaced from comments, ADRs, commit messages.
+- Test suite shape — tests reveal intended behavior the README didn't say.
+
+Every described mechanism cites `file:line`. Refuses to operate on a repo
+without a license; warns loudly on copyleft licenses (GPL, AGPL) since
+downstream transposition output could inherit obligations — the user must
+ack the implication via AskUserQuestion before continuing.
+
+### `--mode app` (mobile app)
+
+Mobile app via **public surface only**:
+
+- App store metadata (description, screenshots, reviews surfacing UX).
+- Public marketing site + docs.
+- Behavioral observation against documented endpoints / web APIs the app
+  uses (when present and public).
+- Manifest / public configuration when available.
+
+**Refuses decompilation of proprietary binaries.** If the user wants binary
+analysis of an app they own, route them to Family F (`/binary-analysis`) and
+require the appropriate scope gate.
+
+### `--mode api` (API / SDK)
+
+OpenAPI/SDL spec + behavioral probing of documented endpoints, surfaces:
+
+- Resource model + verbs.
+- Auth model + rate limits as documented.
+- Behavioral surprises: undocumented but observable behavior, surfaced as
+  **hypotheses** (not asserted facts) with replay evidence.
+- Error model: how the API signals each failure class.
+
+Probing stays within the documented surface, respects rate limits, identifies
+itself via User-Agent, and **stops at any signal of unwanted load**.
+
+---
+
+## Procedure
+
+### Step 0: Pre-flight
+
+```bash
+eval $(~/.claude/skills/gstack/bin/gstack-slug 2>/dev/null)
+TARGET_SLUG="<derived-from-target-or---slug>"
+mkdir -p "studies/$TARGET_SLUG/evidence" "studies/$TARGET_SLUG/notes"
+```
+
+Decide:
+1. **What is the target?** Confirm URL/arXiv-ID/repo/app/API.
+2. **What mode?** If user didn't pass `--mode`, infer + confirm via AskUserQuestion.
+3. **Is it auth-walled or proprietary?**
+   - If `product` mode and target is behind login: STOP. AskUserQuestion:
+     "This target appears to require login. Do you own / have written authorization
+     to study it? Answer YES only if you can produce that authorization on request."
+     If the answer is anything but YES (+ `--owned`), refuse and exit with a
+     clear message.
+   - If `app` mode and only proprietary binary is available: refuse, suggest Family F.
+   - If `code` mode and repo has no license: refuse. If GPL/AGPL: warn + AskUserQuestion
+     to confirm the user understands transposition output may inherit obligations.
+
+### Step 1: Scope the study
+
+Use AskUserQuestion:
+
+> What's the scope of this study?
+>
+> **A) Mechanism only** — extract just the core algorithm/architecture. 30 min.
+> **B) Mechanism + UX** — algorithm plus the surface that users touch. 60 min.
+> **C) Full blueprint** — mechanism, UX, data model, edge cases, open questions. 90+ min.
+> **D) Custom** — describe the focus.
+
+If `--focus` was passed, use it to bias the study; still ask the depth question above.
+
+### Step 2: Dispatch to the mode extractor
+
+Pseudo-flow per mode:
+
+- **product**: `/browse` the public surface → screenshot key states → read public
+  docs via `markitdown` → write observations to `studies/<slug>/evidence/`.
+- **paper**: `markitdown <pdf-or-arxiv-url>` → extract architecture / method /
+  results / data / ablations → write per-claim citations to `citations.md`.
+- **code**: `git clone <repo>` to a temp dir (or use repo browser tools) →
+  identify entry points → trace the critical path → record `file:line` cites.
+  Never modify or commit to the studied repo.
+- **app**: pull store metadata, read marketing site, observe public web/API
+  surface via `/browse`. Do not decompile.
+- **api**: fetch spec → probe documented endpoints respectfully → record
+  request/response examples under `evidence/`.
+
+Each extractor writes raw findings to `studies/<slug>/notes/raw-<mode>.md`
+**before** synthesis. Raw notes preserve where each claim came from.
+
+### Step 3: Synthesize the domain-agnostic blueprint
+
+Read all raw notes and produce `studies/<slug>/BLUEPRINT.md` with this YAML
+frontmatter (required by S12):
+
+```yaml
+---
+target: <name + url>
+mode: product | paper | code | app | api
+version: 1
+derived_from: []   # blueprints can chain (e.g., paper-blueprint derived_from a prior product-blueprint)
+extracted_on: <ISO date>
+slug: <target-slug>
+focus: [list]
+excluded: [list]
+---
+```
+
+The body has these sections, in order:
+
+1. **One-paragraph thesis** — what this thing does, in one sentence a smart
+   outsider could understand. No jargon.
+2. **Mechanism** — the core thing that makes it work. Domain-agnostic; do not
+   bake in source-domain vocabulary that would block transposition.
+3. **Data model** — the entities, their relationships, their lifecycles.
+4. **Key algorithms** — named, described, cited. ASCII diagram if non-trivial.
+5. **Edge cases (observed)** — what we saw the target handle and how.
+6. **Edge cases (probed)** — what we tested explicitly; pass/fail.
+7. **Non-obvious design choices** — the "why this, not the obvious thing" calls.
+8. **Open questions** — what we could NOT observe; load-bearing unknowns. These
+   become bridges or stubs in `/transpose`.
+9. **Mechanism properties to preserve** — candidate inputs to the S13 fidelity
+   contract. Each property must be observable / measurable on a transposed version.
+
+### Step 4: Write citations and questions
+
+- `studies/<slug>/citations.md` — every external claim with source URL, page/file:line,
+  retrieval date. Required for legal-review traceability.
+- `studies/<slug>/questions.md` — open questions surfaced during the study,
+  tagged `[answerable]`, `[needs-experiment]`, or `[unresolvable-from-outside]`.
+
+### Step 5: Self-check (do not skip)
+
+Before writing, verify all of the following. If any check fails, fix before
+exiting the skill — do not declare the study done.
+
+- [ ] BLUEPRINT.md has the required YAML frontmatter (S12).
+- [ ] **No verbatim copy:** no source code blocks, no marketing copy, no UI
+      strings, no images, no logos. Reference + cite — do not paste.
+- [ ] Mechanism is described in **domain-agnostic** terms (not "ASL" but
+      "phoneme inventory"; not "Stripe" but "tokenized card object").
+- [ ] Every non-obvious claim has a citation (URL, page, file:line, or
+      observation-log timestamp).
+- [ ] At least 3 candidate mechanism properties listed for S13 fidelity.
+- [ ] `questions.md` lists at least the load-bearing unknowns.
+
+### Step 6: Report
+
+Print summary:
+
+```
+Study complete: studies/<slug>/
+- Mode: <mode>
+- Target: <url>
+- BLUEPRINT.md: <line count> lines, <section count> sections
+- Evidence files: <N>
+- Citations: <N>
+- Open questions: <N>
+- Candidate mechanism properties: <N>
+
+Next steps:
+  /transpose <slug>         — plan the bridge to your target domain
+  /recipe --for paper <slug> — if studying for a literature review
+```
+
+---
+
+## Outputs
+
+Per S12 (Study artifact format):
+
+```
+studies/<target-slug>/
+├── BLUEPRINT.md         # the domain-agnostic spec (this skill's headline output)
+├── evidence/            # screenshots, downloaded docs, response snapshots
+├── notes/               # raw per-mode notes (raw-product.md, raw-paper.md, ...)
+├── questions.md         # open questions, tagged
+└── citations.md         # every external claim with source + retrieval date
+```
+
+`TRANSPOSITION.md`, `BUILD-LOG.md`, and `FIDELITY-EVAL.md` are written by the
+**downstream** Family J skills — do not create empty stubs here.
+
+---
+
+## Edge cases
+
+- **Auth-walled target without ownership declaration.** Refuse. Print:
+  `/blueprint refuses to study auth-walled targets without --owned. If you have
+  authorization, re-run with --owned.`
+- **Proprietary binary (mobile app only).** Refuse decompilation. Suggest `/binary-analysis`
+  (Family F) with the appropriate scope gate.
+- **Repo with no license / restrictive license.** Refuse / AskUserQuestion to confirm.
+- **Target is behind a paywall but content is technical (paper, docs).** Treat as
+  auth-walled. Require `--owned` or an explicit acknowledgement of personal
+  legitimate access (e.g., institutional subscription).
+- **Verbatim-copy temptation.** If you find yourself wanting to quote more than
+  ~25 words consecutively from the target, stop. Paraphrase + cite instead.
+- **Source code in `code` mode.** Cite `file:line`. Do NOT paste large source
+  blocks into BLUEPRINT.md. Small expression-level snippets for clarity are OK
+  with attribution; functions are not.
+- **`app` mode with no public surface.** If the app has no public docs / store
+  description / discoverable API, refuse — there is nothing you can ethically
+  blueprint without binary analysis.
+- **Existing study with same slug.** Bump the `version:` field; never silently
+  overwrite. Old version moves to `studies/<slug>/archive/v<N>/`.
+- **Citation rot.** Snapshot referenced URLs to `evidence/` so future readers
+  aren't blocked by dead links.
+
+---
+
+## Dependencies
+
+- **S12 (study artifact format)** — this skill writes the canonical layout
+  consumed by `/transpose`, `/clone-and-twist`, `/recipe`. Frontmatter fields
+  (`target`, `mode`, `version`, `derived_from`) are load-bearing.
+- **S13 (mechanism-fidelity contract)** — this skill **proposes** candidate
+  mechanism properties in BLUEPRINT.md §9. `/clone-and-twist` finalizes them
+  into the `evals/fidelity/<slug>.jsonl` contract.
+- `/browse` — `product`, `app`, `api` modes.
+- `markitdown` — `paper` mode PDF/HTML ingestion.
+- `/scrape` — within-bounds public-content fetch (`product` mode docs).
+- `huggingface-skills:hugging-face-paper-publisher` — paper-mode citation formatting.
+- `lib/study-extractors/{product,paper,code,app,api}.ts` — per-mode extractors (planned).
+- `lib/study-artifacts.ts` — shared parser for the S12 frontmatter (planned).
+
+---
+
+## Canonical examples to validate the skill on
+
+- **fingerspelling.xyz** with `--mode product` → ASL pedagogy product. Will be
+  transposed to Thai Sign Language by `/transpose` next.
+- **supertonic-v3** with `--mode paper` (paper) plus `--mode code` (reference
+  inference repo) → chained blueprints (the code-blueprint sets `derived_from`
+  to the paper-blueprint via S12 frontmatter). Will be transposed inference →
+  fine-tuning by `/transpose`.
+
+If the user invokes the skill on one of these, prefer to reuse / extend any
+existing `studies/<slug>/` directory rather than starting from scratch.

@@ -3,7 +3,7 @@ name: make-pdf
 preamble-tier: 1
 version: 1.0.0
 description: |
-  Turn any markdown file into a publication-quality PDF. Proper 1in margins,
+  [Tools] Turn any markdown file into a publication-quality PDF. Proper 1in margins,
   intelligent page breaks, page numbers, cover pages, running headers, curly
   quotes and em dashes, clickable TOC, diagonal DRAFT watermark. Not a draft
   artifact — a finished artifact. Use when asked to "make a PDF", "export to

@@ -3,7 +3,7 @@ name: investigate
 preamble-tier: 2
 version: 1.0.0
 description: |
-  Systematic debugging with root cause investigation. Four phases: investigate,
+  [Investigate & Security] Systematic debugging with root cause investigation. Four phases: investigate,
   analyze, hypothesize, implement. Iron Law: no fixes without root cause.
   Use when asked to "debug this", "fix this bug", "why is this broken",
   "investigate this error", or "root cause analysis".

@@ -1,0 +1,329 @@
+---
+name: dep-graph
+preamble-tier: 2
+version: 1.0.0
+description: |
+  [Chief Architect] Builds a cross-service dependency graph from imports, route
+  calls, and IaC topology. Detects cycles, identifies bottleneck nodes, and
+  computes blast radius for any node ("what does this change affect"). Stores
+  the graph in ~/.gstack/projects/{slug}/graph.json for /c4-diagram,
+  /migration-plan, and /service-catalog to consume. Emits Markdown + SVG +
+  JSON. Use when: "dependency graph", "what does this affect", "blast radius",
+  "find cycles", "what imports X", or "build a dep graph". (gstack)
+allowed-tools:
+  - Read
+  - Write
+  - Edit
+  - Grep
+  - Glob
+  - AskUserQuestion
+  - Bash
+triggers:
+  - dependency graph
+  - blast radius
+  - find cycles
+  - what depends on
+  - cross-service deps
+---
+
+{{PREAMBLE}}
+
+{{GBRAIN_CONTEXT_LOAD}}
+
+# /dep-graph — Family D — Chief Architect
+
+"What does this change affect?" should take five seconds, not five hours. This
+skill builds a dependency graph across modules, services, and runtime calls, then
+answers blast-radius queries from it. The graph is cached so other Chief Architect
+skills can consume it without rebuilding.
+
+## When to use
+
+- Pre-PR review of a change in a high-fan-in module ("how many things import
+  this?").
+- Finding circular dependencies before they become impossible to refactor.
+- Pre-migration boundary picking — `/migration-plan` uses this to choose
+  bounded contexts.
+- Onboarding a new engineer — "show me the spine of this codebase."
+- Detecting orphan modules that nothing imports anymore.
+- Spotting bottleneck nodes — modules everything depends on, where a change
+  blocks the whole team.
+
+**Do not use for:**
+
+- Runtime call traces (use APM / distributed tracing).
+- File-by-file code metrics — that's complexity, not dependency.
+- npm package dep trees alone — that's `npm ls` or `pnpm why`.
+
+## Inputs
+
+The skill auto-detects languages and picks the right analyzer per language:
+
+| Language     | Analyzer                          |
+|--------------|-----------------------------------|
+| JavaScript / TypeScript | `madge` (cycles, orphans) + `dependency-cruiser` (rules + visualization) |
+| Python       | `pydeps` or `snakefood`           |
+| Go           | `go list -m all` + `go mod graph` for module-level; `go list -deps ./...` for package-level |
+| Java / Kotlin | JDeps (`jdeps -dotoutput out/ -R *.jar`) |
+| Ruby         | `bundler-graph` (`bundle viz`)    |
+| Rust         | `cargo modules` (`cargo modules generate graph`) |
+| C / C++      | `cinclude2dot`                    |
+| Polyglot monorepo | One analyzer per language + cross-language edges via HTTP/RPC route static analysis |
+
+Cross-service runtime edges come from:
+
+- OpenAPI / GraphQL / proto specs — every client of an API is an inbound edge.
+- HTTP client base URLs in code (search `BASE_URL=`, `baseUrl:`, env vars).
+- gRPC client `Dial` / `NewClient` targets.
+- Queue topic / subject names (Kafka, NATS, SQS, PubSub) — producer/consumer
+  pairs become edges.
+- Service mesh config (Istio VirtualService, Linkerd traffic policy).
+
+## Procedure
+
+### Step 0: Detect languages and tools
+
+```bash
+# Language detection
+LANGS=""
+[ -f package.json ] && LANGS="$LANGS js"
+[ -f tsconfig.json ] && LANGS="$LANGS ts"
+[ -f requirements.txt ] || [ -f pyproject.toml ] && LANGS="$LANGS py"
+[ -f go.mod ] && LANGS="$LANGS go"
+[ -f pom.xml ] || [ -f build.gradle ] || [ -f build.gradle.kts ] && LANGS="$LANGS jvm"
+[ -f Gemfile ] && LANGS="$LANGS rb"
+[ -f Cargo.toml ] && LANGS="$LANGS rs"
+echo "Detected: $LANGS"
+
+# Tool detection (used to know whether to install)
+command -v madge >/dev/null && echo "madge: yes" || echo "madge: no (npm install -g madge)"
+command -v depcruise >/dev/null && echo "dependency-cruiser: yes" || echo "dependency-cruiser: no (npm install -g dependency-cruiser)"
+command -v pydeps >/dev/null && echo "pydeps: yes" || echo "pydeps: no (pip install pydeps)"
+command -v go >/dev/null && echo "go: yes"
+command -v jdeps >/dev/null && echo "jdeps: yes"
+```
+
+State the detected language(s) and which analyzers are available.
+
+### Step 1: AskUserQuestion — scope
+
+One issue per call. Ask:
+
+- **Granularity** — module-level (every file is a node), package-level (every
+  directory / package is a node, recommended), or service-level (every
+  deployable unit is a node, fastest)?
+- **Cross-service edges** — include runtime HTTP / RPC / queue edges (slower
+  but more useful), or static-import edges only?
+- **Scope** — entire repo, or a subdirectory (e.g., `services/auth/`)?
+- **Cache mode** — fresh rebuild or reuse cached graph from
+  `~/.gstack/projects/{slug}/graph.json` if newer than 24h?
+
+Do not proceed until the user responds. Default for new runs: package-level,
+include cross-service edges, full repo, fresh rebuild.
+
+### Step 2: Build per-language graphs
+
+For each detected language, run the appropriate analyzer with JSON output.
+
+**JS / TS:**
+
+```bash
+# Cycles + orphans
+npx madge --circular --json src/ > /tmp/dep-js-cycles.json
+npx madge --orphans --json src/ > /tmp/dep-js-orphans.json
+# Full graph
+npx madge --json src/ > /tmp/dep-js-graph.json
+# Optional: dependency-cruiser with custom rules
+npx depcruise --include-only "^src" --output-type json src > /tmp/dep-js-rules.json
+```
+
+**Python:**
+
+```bash
+pydeps --no-show --json src/ > /tmp/dep-py-graph.json
+# Or for a tree of imports:
+pydeps src/ --max-bacon 2 --noshow -o /tmp/dep-py.svg
+```
+
+**Go:**
+
+```bash
+# Module-level
+go mod graph > /tmp/dep-go-modules.txt
+# Package-level (this repo only, no stdlib)
+go list -deps -f '<.ImportPath> <join .Imports " ">' ./... > /tmp/dep-go-packages.txt
+```
+
+**Java / Kotlin:**
+
+```bash
+# After build, against the compiled artifacts
+jdeps -dotoutput /tmp/jdeps-out -recursive -verbose:class build/libs/*.jar
+```
+
+**Ruby:**
+
+```bash
+bundle viz --without test development --format=svg --file=/tmp/dep-rb
+```
+
+**Rust:**
+
+```bash
+cargo modules generate graph --package "$(basename "$PWD")" > /tmp/dep-rs.dot
+```
+
+### Step 3: Build cross-service edges
+
+```bash
+# OpenAPI client discovery
+grep -rE "(BASE_URL|baseUrl|API_BASE)" --include="*.{ts,js,py,go,rb,java,kt}" \
+  . 2>/dev/null | head -50
+
+# gRPC client targets
+grep -rE "grpc\.(Dial|NewClient)" --include="*.{go,py,ts,js}" . 2>/dev/null | head -50
+
+# Kafka / queue topics
+grep -rE "(topic|subject):\s*['\"]" --include="*.{yaml,yml,ts,js,py,go}" . 2>/dev/null | head -50
+```
+
+For each match, classify as:
+
+- Producer or consumer (queue) / caller or callee (RPC).
+- Source service (the file's package/service).
+- Target service (matched by base URL or topic registry).
+
+Cross-service edges are best-effort. False positives are normal. Mark them
+`confidence: low` in the graph if matched by string heuristic only, `high` if
+matched by typed client construction (e.g., `new BillingClient()`).
+
+### Step 4: Normalize and merge into one graph
+
+Build the unified graph:
+
+```json
+{
+  "nodes": [
+    {"id": "src/auth", "type": "package", "language": "ts", "size": 12, "loc": 1450},
+    {"id": "service:billing", "type": "service", "language": "go"}
+  ],
+  "edges": [
+    {"from": "src/auth", "to": "src/db", "kind": "import", "confidence": "high"},
+    {"from": "service:web", "to": "service:billing", "kind": "http", "confidence": "high", "spec": "openapi:billing-v1"}
+  ],
+  "metadata": {
+    "built_at": "2026-05-16T10:30:00Z",
+    "languages": ["ts", "go"],
+    "node_count": 142,
+    "edge_count": 318,
+    "granularity": "package"
+  }
+}
+```
+
+Persist to `~/.gstack/projects/{slug}/graph.json` for cross-skill use.
+
+### Step 5: Run graph algorithms
+
+Compute and store:
+
+1. **Cycles** — strongly connected components > 1 node. Each cycle: the nodes,
+   the entry/exit edges, recommended cut points.
+2. **Bottleneck nodes** — top 10 by inbound-degree. These are modules where a
+   change has the largest blast radius.
+3. **Orphan nodes** — zero inbound edges (excluding entry points like `main`,
+   `cmd/server`, `bin/`). Candidates for deletion.
+4. **Hub nodes** — high in AND high out — they're the spine.
+5. **Layer violations** — if `dependency-cruiser` rules or a `.depgraphrc` are
+   present, list violations (e.g., `domain/` depends on `infrastructure/`).
+6. **Path queries** — pre-compute paths for any node, on demand at query time.
+
+### Step 6: Blast-radius queries
+
+If the user passed a target (e.g., `dep-graph blast src/auth/middleware.ts`):
+
+1. Compute the set of transitive importers (BFS up the graph).
+2. Show direct importers, distance-2, distance-3.
+3. Cap at 200 — beyond that, show counts not lists.
+4. Cross-reference with `/service-catalog` (if present) to name the owners that
+   would be affected.
+
+Output format:
+
+```
+Blast radius for src/auth/middleware.ts:
+  Direct importers (12):
+    src/api/routes.ts (team: api)
+    ...
+  Distance-2 (47):
+    ...
+  Total reachable: 89 modules, 4 services, 3 teams.
+```
+
+### Step 7: Emit outputs
+
+```bash
+mkdir -p docs
+```
+
+- `docs/dep-graph.md` — narrative report with the headline numbers, cycle list,
+  bottleneck list, orphan list, top blast-radius nodes, and rendered diagrams.
+- `docs/dep-graph.svg` — full graph rendered (Graphviz `dot`). For >500 nodes,
+  emit one SVG per top-level package instead of one giant graph.
+- `docs/dep-graph.json` — the same JSON as the cache, but pretty-printed.
+
+Use Graphviz if available:
+
+```bash
+command -v dot >/dev/null && dot -Tsvg /tmp/dep-graph.dot -o docs/dep-graph.svg \
+  || echo "Install graphviz for SVG rendering: brew install graphviz"
+```
+
+## Outputs
+
+- `docs/dep-graph.md` — markdown report (always).
+- `docs/dep-graph.svg` — rendered graph (if `dot` available).
+- `docs/dep-graph.json` — pretty-printed graph.
+- `~/.gstack/projects/{slug}/graph.json` — cached graph for cross-skill use.
+- `~/.gstack/projects/{slug}/dep-history.jsonl` — append-only log of every
+  build (date, node count, edge count, cycle count) for drift tracking.
+
+## Edge cases
+
+- **Monorepos with many packages** — emit one SVG per top-level package. A
+  single graph of 5000 nodes is unreadable.
+- **Generated code** — exclude generated directories (`generated/`, `gen/`,
+  `dist/`, `node_modules/`, `vendor/`, `target/`, `build/`). False edges from
+  generated code distort everything.
+- **Test files** — keep them but tag them `kind: test`. They're often the
+  ones with the highest fan-out and skew bottleneck rankings.
+- **Dynamic imports / reflection** — `import()`, `require()` with computed
+  strings, Java reflection, Python `__import__`. Static analysis misses these.
+  Note this limitation.
+- **Cross-language polyglot** — the language-specific analyzers produce
+  per-language sub-graphs. Cross-language edges (TS frontend → Go API) come
+  from Step 3's runtime-edge analysis, not from imports.
+- **Vendored / submoduled code** — exclude by default. Add via `.depgraphrc`
+  if needed.
+- **Confidence reporting** — surface low-confidence edges separately. A blast
+  radius that includes 30 low-confidence inferred edges should say so.
+- **Very large graphs** — > 10k nodes, the JSON cache crosses 50MB. Compress
+  with `zstd` for storage; decompress on read.
+
+## Dependencies
+
+- **S1 (Hall-mode preamble)** for trust-gated outputs.
+- Per-language analyzer (madge, pydeps, jdeps, etc.) — install on demand.
+- `graphviz` (`dot`) for SVG rendering.
+- `jq` for JSON manipulation.
+- `/service-catalog` (optional, recommended) — maps nodes to owners.
+
+## Stop gates
+
+- After Step 1 (scope) — do not proceed without user response.
+- Refuse to compute blast radius on a graph older than 7 days without first
+  asking the user to rebuild — stale graphs give false confidence.
+
+If a service exists in the codebase but no analyzer covers its language, say
+so explicitly. A graph that silently omits 1/3 of the codebase is worse than
+no graph.

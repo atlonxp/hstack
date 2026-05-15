@@ -1,0 +1,423 @@
+---
+name: sre-slo
+preamble-tier: 2
+version: 1.0.0
+description: |
+  [Cloud-Native] Define SLIs, SLOs, and error budgets per service — as engineering
+  contracts, not marketing copy. Picks the right SLI shape (request-based,
+  window-based, count-based) per workload, generates Prometheus recording +
+  alerting rules with multi-window burn-rate alerts, and writes a quarterly
+  review template. Use when: "define SLOs", "error budget", "set up SLIs",
+  "burn-rate alerts", "quarterly SLO review". (gstack)
+allowed-tools:
+  - Read
+  - Write
+  - Edit
+  - Glob
+  - Grep
+  - Bash
+  - AskUserQuestion
+  - WebSearch
+triggers:
+  - define slos
+  - error budget
+  - set up slis
+  - burn rate alerts
+  - slo review
+---
+
+{{PREAMBLE}}
+
+{{GBRAIN_CONTEXT_LOAD}}
+
+# /sre-slo — Family E3 — Cloud-Native
+
+SLOs in most companies are aspirational marketing copy: "99.99% uptime"
+posted on a status page, with no measurement, no error budget, no consequence
+when missed. That's not an SLO; it's a vibe.
+
+This skill defines SLIs (the measurement), SLOs (the target with a window),
+and error budgets (the consequence) as **engineering contracts** the team
+can actually run on. It picks the right SLI **shape** per workload, emits
+the Prometheus rules to compute it, and generates multi-window
+multi-burn-rate alerts so people get paged BEFORE the budget is gone, not
+after.
+
+## When to use
+
+- New service that needs SLOs before launch.
+- Existing service with "uptime numbers" but no real SLI definition.
+- Quarterly SLO review (use the review template).
+- After `/observability` is in place but before `/chaos` runs.
+
+NOT for: status-page copywriting, executive-only dashboards, or vanity
+five-nines on services that don't need it.
+
+## Inputs (gather via AskUserQuestion)
+
+1. **Service workload type** (drives SLI shape):
+   - A) **Request-driven** (HTTP / gRPC / GraphQL) — request-based SLI
+   - B) **Pipeline / stream** (Kafka consumer, ETL) — freshness or
+     throughput SLI, window-based
+   - C) **Batch / cron** — success-count SLI, count-based
+   - D) **Stateful storage** (DB, queue, cache) — durability + latency SLI
+   - E) **Dependency-only** (this service is called BY others; no end-user) —
+     internal SLO, different stakeholder
+2. **Who is the consumer of this SLO?**
+   - End user (paying customer) — strictest target, public communication.
+   - Internal team — looser target, internal-only.
+   - Compliance contract — target dictated by contract; check the SLA wording.
+3. **What's the user-facing failure mode?**
+   - "Request returned 5xx"
+   - "Request was too slow" (define "too slow")
+   - "Data was stale by more than N minutes"
+   - "Job didn't complete in its window"
+4. **Current measurement.** Do we have the metrics? If not, route to
+   `/observability` first — you can't SLO what you can't measure.
+
+Persist to `CLAUDE.md` under `## SLOs`.
+
+## Procedure
+
+### Step 1: Pick the SLI shape — this is the single most-important decision
+
+Most SLOs go wrong here. Pick wrong and you'll measure something that doesn't
+correlate with user pain.
+
+| Workload | SLI shape | Formula |
+|---|---|---|
+| HTTP / gRPC API | **Request-based** | `good_requests / total_requests` over rolling window |
+| Streaming pipeline (Kafka, Kinesis) | **Window-based** | "% of 1-min windows where lag < N" |
+| Batch / cron job | **Count-based** | `successful_runs / total_runs` over N runs |
+| Database (storage) | **Compound**: durability (count-based) + read latency (request-based) |
+| Cache | Window-based on hit ratio, OR request-based on response latency |
+| Long-running session (WebSocket, video) | Window-based on "minutes-of-good-session / total-minutes" |
+
+**The trap:** for streaming pipelines, people use request-based ("% of
+messages processed") which papers over the fact that consumer lag is
+30 minutes. The user experience is staleness, not throughput. Use
+window-based.
+
+For batch, request-based ("% of records processed") similarly hides "the
+3am job didn't run at all yesterday." Use count-based on the JOB, not the
+record.
+
+### Step 2: Define "good" precisely
+
+A "good request" is not "returned 200." Pick all that apply:
+
+- **Status code**: typically `2xx`, `3xx`, `4xx` (4xx is usually NOT
+  server-side bad — the user sent bad input. EXCEPT 429 in some contexts,
+  408 in others. Decide explicitly.)
+- **Latency**: `< threshold_ms` measured at p95 / p99. Define the threshold.
+  A "good" request that took 30 seconds is not actually good.
+- **Correctness**: did the response include valid data? Usually not measured
+  in the SLI directly (caught by eval suites and integration tests), but
+  surface it if you have a way.
+
+Write this down. "Good = HTTP status in [200-499] AND duration < 1000ms"
+is a real SLI definition. "Good = no errors" is not.
+
+### Step 3: Pick the SLO target + window
+
+Don't reach for 99.99%. Two reasons:
+
+1. Every nine costs ~10x more to maintain (infrastructure, on-call, complexity).
+2. If your upstream dependencies are 99.9%, you CANNOT be more reliable than
+   they are. Math it out.
+
+| Tier | Target | When |
+|---|---|---|
+| Best-effort | 99% (3.65d/yr budget) | Internal tools, batch, low-stakes |
+| Standard | 99.5% (1.83d/yr) | Most B2B SaaS user-facing |
+| High | 99.9% (8.77h/yr) | Paid SaaS, critical user paths |
+| Very high | 99.95% (4.38h/yr) | Payments, infra-tier services |
+| Extreme | 99.99% (52.6min/yr) | Only with dedicated SRE org and dependencies that meet it |
+
+**Window**: 28-day rolling is the default. Shorter (7d) for rapidly-changing
+services; longer (90d) for stable infra. Use a rolling window, not a
+calendar month — calendar windows reset the budget on the 1st and create
+end-of-month gambling.
+
+### Step 4: Generate Prometheus recording rules
+
+Recording rules pre-compute the ratio so dashboards and alerts are cheap.
+
+```yaml
+# deploy/prometheus/slo-rules/{service}.yaml
+groups:
+  - name: <service>.slo
+    interval: 30s
+    rules:
+      # Numerator: good events
+      - record: slo:<service>_http_good:rate5m
+        expr: |
+          sum by (service) (
+            rate(http_server_request_duration_seconds_count{
+              service="<service>",
+              status_code!~"5..",
+              le="1.0"
+            }[5m])
+          )
+      # Denominator: total events (exclude infra failures we don't count)
+      - record: slo:<service>_http_total:rate5m
+        expr: |
+          sum by (service) (
+            rate(http_server_request_duration_seconds_count{service="<service>"}[5m])
+          )
+      # Multi-window ratios for burn-rate alerting
+      - record: slo:<service>_http_error_ratio:rate1h
+        expr: |
+          (1 - (
+            sum_over_time(slo:<service>_http_good:rate5m[1h])
+            / sum_over_time(slo:<service>_http_total:rate5m[1h])
+          ))
+      - record: slo:<service>_http_error_ratio:rate6h
+        expr: |
+          (1 - (
+            sum_over_time(slo:<service>_http_good:rate5m[6h])
+            / sum_over_time(slo:<service>_http_total:rate5m[6h])
+          ))
+```
+
+### Step 5: Generate multi-burn-rate alerts (the Google SRE workbook pattern)
+
+Single-threshold alerts ("error rate > 5%") are too noisy or too slow. Use
+**two-window** alerts: a fast burn detector AND a slow burn detector. Both
+must fire to page.
+
+For a 99.9% SLO (0.1% error budget) over 28 days:
+
+```yaml
+groups:
+  - name: <service>.slo.alerts
+    rules:
+      # Fast burn: 2% of budget in 1h (would burn full budget in ~2 days)
+      - alert: <service>SLOFastBurn
+        expr: |
+          slo:<service>_http_error_ratio:rate1h > (14.4 * 0.001)
+          and
+          slo:<service>_http_error_ratio:rate5m > (14.4 * 0.001)
+        for: 2m
+        labels: { severity: page, service: "<service>" }
+        annotations:
+          summary: "<service> burning SLO budget fast (14.4x rate)"
+          runbook: "https://runbooks.example.com/<service>/slo-fast-burn"
+      # Slow burn: 10% of budget in 6h (would burn full budget in ~3 days)
+      - alert: <service>SLOSlowBurn
+        expr: |
+          slo:<service>_http_error_ratio:rate6h > (6 * 0.001)
+          and
+          slo:<service>_http_error_ratio:rate30m > (6 * 0.001)
+        for: 15m
+        labels: { severity: ticket, service: "<service>" }
+        annotations:
+          summary: "<service> burning SLO budget steadily (6x rate)"
+```
+
+Numbers: `14.4` and `6` come from the Google SRE workbook's standard
+multi-window table. Don't fiddle with them without reading why first.
+
+### Step 6: Window-based SLI for pipelines
+
+For a streaming consumer where "good = lag < 60s in a 1-min window":
+
+```yaml
+- record: slo:<pipeline>_window_good:rate5m
+  expr: |
+    (
+      sum_over_time(
+        ((kafka_consumer_lag_seconds{topic="<topic>"} < bool 60))[5m:1m]
+      )
+    ) / 5
+```
+
+The `[5m:1m]` subquery samples every minute over 5 minutes, the `< bool 60`
+gives 1/0 per sample, sum-over-time counts good minutes, divide by 5 = ratio.
+
+Burn-rate alerts work the same way against this ratio.
+
+### Step 7: Count-based SLI for batch
+
+For a daily cron job where "good = exit 0 within 30 minutes":
+
+```yaml
+- record: slo:<job>_batch_good:30d
+  expr: |
+    count_over_time(
+      (kube_job_status_succeeded{job_name=~"<job>-.*"} == 1)[30d:1h]
+    )
+- record: slo:<job>_batch_total:30d
+  expr: |
+    count_over_time(
+      (kube_job_status_completion_time{job_name=~"<job>-.*"} > 0)[30d:1h]
+    )
+```
+
+Burn rate isn't the same shape for count-based — page on `total - good >
+budget` instead.
+
+### Step 8: Write the SLO doc (the contract)
+
+```markdown
+# docs/slos/{service}.md
+
+## SLO: <service> Request Availability + Latency
+
+**Owner:** <team>
+**Consumers:** <who breaks if this is violated>
+**Effective date:** <date>
+**Review cadence:** Quarterly
+
+### SLI
+
+A user request is **good** if all of:
+- HTTP status in [200-499]
+- Duration < 1000ms (measured server-side, at the request handler boundary,
+  not at the LB)
+- Path NOT in the exclusion list: `/internal/*`, `/health`, `/metrics`
+
+### SLO
+
+99.9% of user requests are good over a rolling 28-day window.
+
+### Error budget
+
+0.1% of requests × 28 days = ~43 minutes of full outage equivalent per
+window. Spent on:
+- Real failures
+- Planned risky changes
+- Chaos experiments (`/chaos`)
+
+### Burn-rate policy
+
+- Fast burn (14.4×): pages on-call. Treat as incident.
+- Slow burn (6×): tickets. Investigated within 1 business day.
+
+### Out-of-scope failures
+
+These do NOT count against the budget:
+- Force-majeure dependencies (cloud-region outage with no failover path —
+  document separately)
+- Authenticated-with-401 — that's a 4xx, not a server failure.
+- Synthetic monitoring requests from internal pingers.
+
+### Consequences
+
+When error budget < 25% remaining:
+- Feature freeze on this service. Reliability work only.
+- Post-mortem any 5xx incident.
+
+When budget burned (negative):
+- Halt all non-reliability changes for the remainder of the window.
+- VP / director-level approval to ship anything to this service.
+```
+
+### Step 9: Write the quarterly review template
+
+```markdown
+# docs/slos/{service}-review-{quarter}.md
+
+## SLO Quarterly Review — <service> — <quarter>
+
+### Numbers
+- SLO target: 99.9%
+- Achieved: __%
+- Budget consumed: __%
+- Incidents during window: __
+
+### Was the target right?
+- Did we miss it because we under-invested, or because the target is wrong?
+- Are users complaining at the rate of measured failure, or higher (target
+  too loose), or lower (target too strict)?
+
+### Adjustment proposal
+- Keep | Raise | Lower the target — with rationale.
+- Add or remove SLIs.
+- Change window length.
+
+### Lessons
+- Which incidents consumed the most budget?
+- Which classes of failure are NOT in the SLI but should be?
+
+### Decisions
+- _Recorded by:_ <name>, <date>
+```
+
+### Step 10: Write outputs
+
+```
+docs/slos/
+├── {service}.md                     # the contract (Step 8)
+├── {service}-review-{quarter}.md    # quarterly review template (Step 9)
+├── INDEX.md                          # one row per service, current attainment
+deploy/prometheus/
+├── slo-rules/
+│   ├── {service}.yaml                # recording rules
+│   └── {service}-alerts.yaml         # burn-rate alerts
+└── runbooks/
+    ├── {service}-slo-fast-burn.md
+    └── {service}-slo-slow-burn.md
+```
+
+### Step 11: Verify
+
+```bash
+# Validate Prometheus rules
+promtool check rules deploy/prometheus/slo-rules/*.yaml
+# Replay against historical data if PromQL is available
+promtool test rules deploy/prometheus/slo-tests/ 2>/dev/null || echo "no replay harness yet"
+```
+
+Report what passes. If the recording rule references a metric that doesn't
+exist in Prometheus yet, FLAG IT — silent miss is worse than an obvious red.
+
+## Outputs
+
+- `docs/slos/{service}.md` — the SLO contract.
+- `docs/slos/{service}-review-{quarter}.md` — quarterly review template.
+- `deploy/prometheus/slo-rules/` — recording + alerting rules.
+- `deploy/prometheus/runbooks/` — runbook stub per alert.
+
+## Edge cases
+
+- **Cold service (low traffic).** A service with 100 req/day can't have a
+  request-based SLO — one error is 1%. Either aggregate to "weekly errors"
+  or move to availability-window-based (heartbeat ping per minute).
+- **Dependency-bounded targets.** If your downstream is 99.5%, you cannot
+  promise 99.9%. Always do the dependency math (multiply availabilities) and
+  cap target accordingly.
+- **Multi-region failover.** SLO is measured PER user request, not per
+  region. A region failing over to another counts as "still good" if the
+  user got a good response. Don't double-count regional incidents.
+- **Mobile clients.** Client-side errors (network drops on cellular) are
+  NOT your SLO failures unless you control the client. Define the SLI at
+  the LB / API gateway, not from RUM.
+- **Asymmetric load.** If 95% of requests are cheap reads, an SLO on
+  "all requests" hides expensive-write failures. Consider separate SLOs
+  per request class.
+- **Soft launch / canary.** Don't enforce SLO on day 1. Run in shadow mode
+  for one window, tune the target, THEN flip enforcement.
+
+## Dependencies
+
+- **S1 (Hall-mode preamble)** — provided by `{{PREAMBLE}}`.
+- **/observability** — required. SLOs need metrics in Prometheus; without
+  them, this skill has nothing to compute over. Run `/observability` first.
+- **S5 (cluster access)** — optional; needed only to apply
+  PrometheusRule CRDs.
+- `promtool` — optional for rule validation.
+
+## Important rules
+
+- **No SLOs without measurements.** If the metric doesn't exist yet, send
+  the user to `/observability` first.
+- **Pick the right SLI shape.** Request-based for APIs, window-based for
+  streams, count-based for batch. Pick wrong and the SLO measures the
+  wrong thing.
+- **Dependencies cap your target.** Math the upstream availability before
+  promising 99.99%.
+- **Burn-rate alerts > threshold alerts.** Always use multi-window
+  multi-burn-rate.
+- **Out-of-scope clauses are mandatory.** Be explicit about what does NOT
+  count against the budget. Vague SLOs are unenforceable.

@@ -1,0 +1,272 @@
+---
+name: agent-ux-review
+preamble-tier: 3
+version: 1.0.0
+description: |
+  [Cognitive Computing / HMC] Reviews an AI feature's interaction flow against agent-UX
+  principles — predictability, repair, attention budget, surfaced uncertainty, escape
+  hatches, mode visibility. Rates each principle 0-10 with concrete examples and edits
+  the plan or component spec to close gaps. Complement to /plan-ux-review, which covers
+  non-AI workflows. Surfaces tradeoffs (e.g., predictability vs. usefulness, repair
+  affordances vs. attention budget) rather than enforcing one style.
+  Use when asked to "review the agent UX", "AI feature UX review", "agent interaction
+  review", "is this AI feature usable", or "trust UX for this AI feature". (gstack)
+allowed-tools:
+  - Read
+  - Edit
+  - Grep
+  - Glob
+  - Bash
+  - AskUserQuestion
+---
+
+{{PREAMBLE}}
+
+{{BASE_BRANCH_DETECT}}
+
+# /agent-ux-review: AI-Feature Interaction Review — Family H — Cognitive Computing / Human-Machine Collaboration
+
+You are a senior researcher in human-AI interaction reviewing the UX of an AI
+feature — not a general workflow. Your job is to find the agent-specific
+interaction failures (unpredictable behavior, missing repair affordances,
+under-surfaced uncertainty, invisible modes, no escape hatches, attention
+overload) and ADD THE FIXES TO THE PLAN or component spec before implementation.
+
+The output of this skill is a better plan, not a paper about agents.
+
+## When to use
+
+Use `/agent-ux-review` when the feature under review is **AI-mediated**:
+- The system makes a decision, generation, or recommendation the user must trust.
+- Behavior is probabilistic, learned, or context-dependent.
+- The user may be in a different "mode" (read-only suggestion vs. write-through
+  action vs. fully autonomous) depending on configuration or context.
+- Failure modes are distributional, not deterministic.
+
+Use `/plan-ux-review` for non-AI workflows (forms, dashboards, role handoffs).
+Use both when an AI feature is embedded in a multi-persona workflow.
+
+## Inputs
+
+| Input | Required | Notes |
+|-------|----------|-------|
+| AI feature spec, plan file, or PR diff | yes | The thing being reviewed |
+| Target personas | yes | Either declared or pulled via `/discover-personas` |
+| Decision scope | yes | What does the AI decide / generate / recommend? |
+| Failure cost | yes | What breaks if the model is wrong? (reversible / costly / catastrophic) |
+| Current mode model | yes | Is this a suggestion, a co-pilot, an autonomous agent? |
+
+If any input is missing, `AskUserQuestion` to elicit it. Do not assume.
+
+## Agent-UX Principles (six, framed as tradeoffs)
+
+These are not rules. They are tensions. Every AI feature trades one against another.
+Your job is to surface which tradeoffs the plan has made and whether they fit the
+feature's failure cost and persona mix.
+
+1. **Predictability** — Same input + same context produces a stable enough output
+   that the user can form a working mental model. *Tradeoff:* maximally
+   predictable agents are less useful on edge cases; maximally adaptive agents
+   leave users guessing. (Amershi et al., *Guidelines for Human-AI Interaction*,
+   CHI 2019, G3: "Time services based on context").
+
+2. **Repair** — When the agent gets it wrong, the user has a low-cost way to
+   correct, redirect, or undo. *Tradeoff:* rich repair surfaces (edit, regen,
+   refine, undo) consume screen real estate and add cognitive load; minimal
+   repair leaves users stuck. (Amershi G9: "Support efficient correction";
+   Suchman, *Plans and Situated Actions*, 1987, on repair as the core of
+   human-machine communication).
+
+3. **Attention budget** — Each surfaced thought, suggestion, or notification
+   spends a finite resource. *Tradeoff:* explaining everything destroys flow;
+   explaining nothing destroys trust. (Wickens, *Multiple Resources and
+   Performance Prediction*, 2002; Horvitz, *Principles of Mixed-Initiative User
+   Interfaces*, CHI 1999, on the cost of interruption).
+
+4. **Surfaced uncertainty** — The agent communicates how confident it is, in a
+   form the user can act on. *Tradeoff:* a confidence number is precise but
+   uncalibrated and ignored; verbal hedges are calibrated but unactionable.
+   (Doshi-Velez & Kim, *Towards A Rigorous Science of Interpretable Machine
+   Learning*, 2017; Bansal et al., *Beyond Accuracy*, AAAI 2019, on the cost of
+   mis-calibrated confidence).
+
+5. **Escape hatches** — Every agent-driven flow has a clear, always-available
+   way to stop, take over, or fall back to a non-AI path. *Tradeoff:* prominent
+   escape hatches reduce trust ("they don't trust their own product?"); buried
+   ones produce learned helplessness. (Shneiderman, *Human-Centered AI*, 2020,
+   on user control as one of the four pillars).
+
+6. **Mode visibility** — The user always knows which mode the agent is in:
+   suggesting, acting on its own, observing, paused. *Tradeoff:* persistent
+   mode badges are visually heavy; implicit modes are deniable. (Norman,
+   *The Design of Everyday Things*, on mode errors as one of the deadliest
+   interaction failures; Amershi G1: "Make clear what the system can do",
+   G2: "Make clear how well the system can do what it can do").
+
+Key references: Amershi et al., *Guidelines for Human-AI Interaction*, CHI 2019.
+Suchman, *Plans and Situated Actions*, 1987. Horvitz, *Principles of
+Mixed-Initiative User Interfaces*, CHI 1999. Shneiderman, *Human-Centered AI*,
+2020. Bansal et al., *Beyond Accuracy: The Role of Mental Models in Human-AI
+Team Performance*, AAAI 2019.
+
+## Procedure
+
+### Step 0: Scope assessment
+
+```bash
+git log --oneline -15
+git diff <base> --stat
+```
+
+Read the plan file or component spec. Map:
+- What is the AI feature? (decision / generation / recommendation / agent)
+- What are the personas?
+- What is the failure cost? (reversible action / costly action / irreversible)
+- What is the current mode model? (suggestion / co-pilot / autonomous)
+
+Rate the feature's overall agent-UX completeness 0-10. Explain what a 10 looks
+like for THIS feature. Then `AskUserQuestion`:
+
+> "I've rated this feature {N}/10 on agent-UX completeness. The dominant gaps
+> are around {principle X} and {principle Y}. I see {N} personas with
+> {failure-cost level}. Want me to review all six principles, focus on the
+> dominant gaps, or only the ones that match this feature's failure cost?"
+
+**STOP.** Wait for the user.
+
+### Step 1-6: One pass per principle
+
+For each principle in order — predictability, repair, attention budget, surfaced
+uncertainty, escape hatches, mode visibility:
+
+1. **Rate 0-10** with one-sentence rationale.
+2. **Surface the tradeoff** the plan has implicitly chosen. Name what the plan
+   gains and what it gives up.
+3. **Cite the source** (Amershi guideline number, Suchman repair, Horvitz
+   interruption cost, etc.).
+4. **Edit the plan** to add what's missing — a concrete affordance, copy
+   pattern, mode indicator, repair flow, confidence surface, or escape hatch.
+5. **Re-rate.** If still below the user-chosen target, `AskUserQuestion` with
+   2-3 concrete options labeled NUMBER+LETTER (e.g., "3A", "3B"). One issue per
+   question. Never batch.
+6. **STOP.** Wait for the user before moving to the next principle.
+
+### Step 7: Cross-principle tension audit
+
+List the tradeoffs the plan has made across principles:
+- Did the plan over-prescribe (heavy mode badges + verbose explanations + four
+  repair surfaces + always-visible escape hatch)? That's noise.
+- Did the plan under-prescribe (no mode indicator, no confidence surface, no
+  repair affordance, no escape hatch)? That's a black box.
+
+Surface one or two concrete tensions and `AskUserQuestion` how to resolve.
+
+### Step 8: Completion summary
+
+Produce the table below, then persist the review.
+
+## Outputs
+
+Primary output: edits to the plan file or component spec.
+
+Optional review report at `ux/agent-review/{feature}-{YYYY-MM-DD}.md` with:
+- Rated principles (before/after).
+- Tradeoffs the plan made, with citations.
+- Unresolved decisions.
+- Recommended downstream skills (`/explanation-design`, `/mental-model-trace`,
+  `/collaboration-pattern`).
+
+Completion summary table:
+
+```
++============================================================+
+|        AGENT-UX REVIEW — COMPLETION SUMMARY                |
++============================================================+
+| Feature              | <name>                              |
+| Personas             | <count> identified                  |
+| Failure cost         | reversible / costly / irreversible  |
+| Mode model           | suggestion / co-pilot / autonomous  |
++------------------------------------------------------------+
+| Predictability       | __/10 -> __/10                      |
+| Repair               | __/10 -> __/10                      |
+| Attention budget     | __/10 -> __/10                      |
+| Surfaced uncertainty | __/10 -> __/10                      |
+| Escape hatches       | __/10 -> __/10                      |
+| Mode visibility      | __/10 -> __/10                      |
++------------------------------------------------------------+
+| Tradeoffs surfaced   | __                                  |
+| Decisions made       | __ added to plan                    |
+| Decisions deferred   | __ (listed below)                   |
+| Overall agent-UX     | __/10 -> __/10                      |
++============================================================+
+```
+
+## Edge cases
+
+- **Not actually AI-mediated.** If the feature is a deterministic form with an
+  AI sticker on it, exit early: "This isn't an AI feature in the agent-UX
+  sense. Run `/plan-ux-review` instead."
+- **Over-prescription.** Six principles applied with maximum strictness produces
+  a UI that looks like a cockpit. The cross-principle tension audit (Step 7) is
+  the brake. If the user is shipping an inline autocomplete, the mode badge and
+  the escape hatch and the four repair flows are all wrong.
+- **Reversibility flips priorities.** Low failure cost (autocomplete, search
+  rerank) prioritizes attention budget and predictability over escape hatches.
+  High failure cost (auto-trades, code commits, send-email) prioritizes mode
+  visibility, repair, and escape hatches over attention budget. Make this
+  explicit in Step 0 before rating.
+- **Multiple modes in one feature.** If the feature has suggestion-mode and
+  autonomous-mode, rate each separately. Mode visibility becomes the highest
+  priority.
+- **Persona divergence.** A power user wants minimal explanation; a first-time
+  user wants every surface. Note the tension and propose progressive disclosure
+  rather than picking one.
+- **Don't enforce a house style.** Surface the tradeoff, name the source, let
+  the user choose. The skill is a researcher, not a stylebook.
+
+## Dependencies
+
+- `/discover-personas` — for persona inputs if not declared.
+- `/plan-ux-review` — pairs with this for the non-AI parts of the same plan.
+- `/ux-audit` — live-app version of this review (run after ship to check
+  whether shipped affordances actually work).
+- `/explanation-design` — direct downstream; designs the explanation surfaces
+  this skill scopes.
+- `/mental-model-trace` — direct downstream; tests whether users form the
+  correct mental model of the agent behavior.
+- `/collaboration-pattern` — direct upstream; if the pattern (pair / supervised
+  / delegated / autonomous) hasn't been chosen yet, run that first.
+
+## CRITICAL RULE — How to ask questions
+
+Follow the AskUserQuestion format from the Preamble above. Additional rules:
+- **One issue = one AskUserQuestion call.** Never combine principles.
+- Describe the agent-UX gap concretely — what user, in what mode, hits what
+  surface, gets what result.
+- Present 2-3 options. For each: effort to specify now, risk if deferred.
+- **Map each option to a principle and a citation.** One sentence.
+- Label with NUMBER + LETTER (e.g., "4A", "4B").
+- **Escape hatch:** if a principle has no gap for this feature, say so and move
+  on. Don't ask for the sake of asking.
+
+## Review Log
+
+After producing the Completion Summary, persist the review:
+
+```bash
+eval $(~/.claude/skills/gstack/bin/gstack-slug 2>/dev/null)
+mkdir -p ~/.gstack/projects/$SLUG
+echo '{"skill":"agent-ux-review","timestamp":"TIMESTAMP","status":"STATUS","overall_score":N,"unresolved":N,"feature":"FEATURE","failure_cost":"COST"}' >> ~/.gstack/projects/$SLUG/$BRANCH-reviews.jsonl
+```
+
+- **STATUS**: "clean" if overall 8+ AND 0 unresolved; otherwise "issues_open".
+
+{{REVIEW_DASHBOARD}}
+
+## Formatting Rules
+
+- NUMBER issues, LETTER options.
+- One sentence per option.
+- Pause and wait for feedback after each principle.
+- Rate before and after each pass for scannability.
+- Surface tradeoffs, never enforce style.

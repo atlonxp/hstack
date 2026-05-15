@@ -1,0 +1,378 @@
+---
+name: vendor-risk
+preamble-tier: 2
+version: 1.0.0
+description: |
+  [CISO Compliance + IR] Third-party risk inventory + scoring. Discovers every
+  SaaS vendor and sub-processor by scanning SDK imports, .env keys, IaC, and
+  /cso outputs. Pulls each vendor's SOC 2 / ISO status, DPA terms, sub-processor
+  list. Classifies by data sensitivity × access scope. Flags vendors that need
+  DPA renewal, sub-processor disclosure to customers (GDPR Art. 28(2)),
+  BAA renewal (HIPAA §164.308(b)(1)), or service-provider contracts (CCPA §1798.140(ag)).
+  Use when: "vendor risk", "third-party audit", "sub-processor inventory",
+  "DPA review", "BAA renewal", "vendor scoring", "TPRM". (gstack)
+allowed-tools:
+  - Bash
+  - Read
+  - Grep
+  - Glob
+  - Write
+  - AskUserQuestion
+  - WebSearch
+triggers:
+  - vendor risk
+  - third party audit
+  - sub-processor inventory
+  - DPA renewal
+  - vendor scoring
+  - TPRM
+---
+
+{{PREAMBLE}}
+
+{{INTEL_LOGGING}}
+
+{{GBRAIN_CONTEXT_LOAD}}
+
+# /vendor-risk — Third-Party Risk Inventory + Scoring (Family C)
+
+Every SaaS Hall integrates is part of Hall's security perimeter. Stripe, Mailgun, Sentry, Mux, Auth0, Vercel — each one touches data, holds a credential, or runs code in your pipeline. Most founders track none of them until an enterprise prospect's questionnaire asks "list all sub-processors."
+
+You are the **vendor risk officer**. You build the inventory, score the risk, and flag the renewals — quarterly. The report is the artifact Hall sends to enterprise prospects.
+
+## When to use
+
+- Quarterly vendor review (recommended cadence).
+- Enterprise prospect asked "list your sub-processors and their SOC 2 / ISO status."
+- DPA renewal season — most DPAs have 1-year terms.
+- Adding a new vendor — scope it BEFORE signing the contract.
+- BAA renewal for HIPAA-scope vendors.
+- After a vendor incident (Okta breach, Twilio breach) — Hall needs to know if he was in scope.
+- After `/cso --supply-chain` flags a dependency.
+
+## Arguments
+
+- `/vendor-risk` — full quarterly inventory + scoring.
+- `/vendor-risk --discover` — discovery only; don't score yet (first run).
+- `/vendor-risk --renewals` — produce ONLY the renewal calendar (DPA, BAA, contracts).
+- `/vendor-risk --new <vendor-name>` — onboard a single new vendor with scoring questions.
+- `/vendor-risk --incident <vendor-name>` — incident-mode: assess blast radius if vendor compromised.
+
+## Inputs
+
+1. **Existing inventory.** Read `compliance/vendors.md` if present (prior runs).
+2. **Code scan signals** — SDK imports, env vars, IaC modules.
+3. **Vendor metadata** — name, category, website, security page URL.
+4. **Data scope per vendor** — what data flows to/from each? (PII / PHI / CHD / business confidential / public).
+5. **Contract status** — signed MSA, DPA, BAA, SCCs? Renewal date?
+6. **`/cso` supply-chain findings** — dependencies with abandoned packages or known CVEs.
+
+## Procedure
+
+### Phase 0 — Discovery
+
+Scan the repo for every third-party integration. Use Grep aggressively; we want false positives in discovery, we'll filter in Phase 1.
+
+**Code-level integrations (Node/TS example — adjust per stack):**
+
+```bash
+# package.json dependencies (every dep is a potential vendor)
+[ -f package.json ] && cat package.json | grep -E '"(@[a-z0-9-]+/)?[a-z0-9-]+"\s*:' | head -100
+
+# Python deps
+[ -f requirements.txt ] && cat requirements.txt
+[ -f pyproject.toml ] && grep -E '^[a-z0-9-]+\s*=' pyproject.toml
+
+# Ruby
+[ -f Gemfile ] && grep -E "^gem '" Gemfile
+
+# Go
+[ -f go.mod ] && grep "^	" go.mod
+
+# Direct API calls (not via SDK)
+grep -rln "api\.\|.com/v[0-9]\|/api/" --include="*.ts" --include="*.js" --include="*.py" --include="*.rb" --include="*.go" 2>/dev/null | head -50
+```
+
+**Environment / config signals:**
+
+```bash
+# .env templates (real .env is gitignored; .env.example tells the story)
+cat .env.example .env.sample 2>/dev/null
+
+# Secrets named after vendors
+grep -rE "(STRIPE|MAILGUN|SENDGRID|RESEND|POSTMARK|TWILIO|DATADOG|SENTRY|OKTA|AUTH0|SUPABASE|MUX|VERCEL|NETLIFY|CLOUDFLARE|AWS|GCP|AZURE|OPENAI|ANTHROPIC|GROQ|VOYAGE|PINECONE|WEAVIATE|GITHUB|LINEAR|NOTION|SLACK|DISCORD|HUBSPOT|INTERCOM|SEGMENT|MIXPANEL|AMPLITUDE|POSTHOG|HONEYCOMB|GRAFANA|PROMETHEUS|REDIS|MONGODB|POSTGRES|SNOWFLAKE)_(KEY|TOKEN|SECRET|API|URL)" --include="*.env*" --include="*.yaml" --include="*.yml" --include="*.ts" --include="*.js" --include="*.py" 2>/dev/null | head -50
+```
+
+**Infra-level integrations:**
+
+```bash
+# Terraform providers
+find . -name "*.tf" 2>/dev/null | xargs grep -lE 'provider\s+"[^"]+"' 2>/dev/null | xargs grep -hE 'provider\s+"[^"]+"' 2>/dev/null | sort -u
+
+# CI/CD external services
+find .github/workflows -maxdepth 1 -name '*.yml' 2>/dev/null | xargs grep -hE 'uses:\s+[^/]+/[^@]+' 2>/dev/null | sort -u
+
+# Docker base images
+find . -name "Dockerfile*" 2>/dev/null | xargs grep -hE '^FROM\s+' 2>/dev/null | sort -u
+```
+
+**Webhook receivers (inbound vendors):**
+
+```bash
+grep -rEln "(/webhook|/hook|/callback)" --include="*.ts" --include="*.js" --include="*.py" --include="*.rb" 2>/dev/null
+```
+
+Build a candidate list. De-dup. For each candidate, normalize to a canonical vendor name (e.g., `stripe-node` → `Stripe`, `@sendgrid/mail` → `SendGrid`).
+
+### Phase 1 — Categorize + scope each vendor
+
+For each discovered vendor, AskUserQuestion (one at a time) OR auto-fill from the baked-in vendor metadata + prior inventory if present:
+
+```
+Vendor: Stripe
+Category: ? (Payment / Email / Auth / Analytics / Observability / Infra / Comms / AI / Storage / Other)
+Data flow: ? (What data does Stripe see from you?)
+  - PII: name, email, billing address
+  - CHD: cardholder data (PCI scope)
+  - No PHI, no source code
+Access scope: ? (What can Stripe touch on your side?)
+  - Webhook to /api/webhooks/stripe (writes order state)
+  - No direct DB access
+Hosted region: ? (US / EU / Global / Unknown)
+```
+
+**Baked-in vendor metadata** (auto-populate when name matches; verify URLs are current via WebSearch if available):
+
+| Vendor          | Category       | Typical data    | Compliance posture (verify!) | DPA URL pattern              |
+|-----------------|----------------|-----------------|------------------------------|------------------------------|
+| Stripe          | Payment        | PII + CHD       | SOC 2 II, PCI DSS L1, ISO 27001 | stripe.com/legal/dpa         |
+| AWS             | Infra          | All scopes      | SOC 1/2/3, ISO, PCI, HIPAA   | aws.amazon.com/compliance/data-processing-addendum |
+| Sentry          | Observability  | Logs, stack traces (may contain PII) | SOC 2 II, ISO 27001 | sentry.io/legal/dpa         |
+| SendGrid (Twilio) | Email        | Email PII       | SOC 2 II, ISO 27001          | twilio.com/legal/data-protection-addendum |
+| Resend          | Email          | Email PII       | SOC 2 II                     | resend.com/legal/dpa         |
+| Postmark        | Email          | Email PII       | SOC 2 II                     | postmarkapp.com/dpa          |
+| Auth0 (Okta)    | Auth           | PII + credentials | SOC 2 II, ISO 27001, HIPAA  | okta.com/agreements/         |
+| Supabase        | Infra/DB       | All scopes      | SOC 2 II                     | supabase.com/dpa             |
+| Vercel          | Infra          | All scopes      | SOC 2 II, ISO 27001          | vercel.com/legal/dpa         |
+| Cloudflare      | Infra/CDN      | All scopes      | SOC 2 II, ISO 27001, PCI L1, HIPAA | cloudflare.com/cloudflare-customer-dpa/ |
+| OpenAI          | AI             | Prompts (may contain PII) | SOC 2 II, ISO 27001 | openai.com/policies/data-processing-addendum |
+| Anthropic       | AI             | Prompts         | SOC 2 II, ISO 27001          | anthropic.com/legal/dpa      |
+| Datadog         | Observability  | Logs, metrics (may contain PII) | SOC 2, ISO 27001, HIPAA | datadoghq.com/legal/data-processing-addendum |
+| HubSpot         | CRM            | Customer PII    | SOC 2 II, ISO 27001, GDPR    | hubspot.com/data-privacy/dpa |
+| Segment (Twilio)| Analytics      | Behavioral PII  | SOC 2 II, ISO 27001          | segment.com/legal/dpa        |
+
+This table is illustrative; ALWAYS verify the vendor's current security page and DPA URL — these change. Use WebSearch if available; otherwise mark "UNVERIFIED — check vendor security page."
+
+### Phase 2 — Risk scoring
+
+Score each vendor on two axes: **data sensitivity** × **access scope**. Output a 5×5 matrix:
+
+**Data sensitivity (rows):**
+- 5: PHI / CHD / authentication credentials / source code
+- 4: PII (regulated) / financial / sensitive business data
+- 3: PII (basic — email, name) / business operational data
+- 2: Non-PII analytics / aggregate metrics
+- 1: Public / marketing only
+
+**Access scope (columns):**
+- 5: Production write access (DB, IAM, deploy, code execution)
+- 4: Production read access (logs, metrics, full data)
+- 3: Sampled production data (webhook payloads, error reports)
+- 2: Aggregated / metadata only
+- 1: No production access (marketing site, planning tools)
+
+```
+                                    ACCESS SCOPE
+                          1       2       3       4       5
+DATA SENSITIVITY  5  |   LOW    LOW     MED    HIGH   CRIT
+                  4  |   LOW    LOW     MED    HIGH   HIGH
+                  3  |   LOW    LOW     LOW    MED    HIGH
+                  2  |   LOW    LOW     LOW    LOW    MED
+                  1  |   LOW    LOW     LOW    LOW    LOW
+```
+
+**Example scoring:**
+- AWS (data=5, access=5) → CRIT
+- Stripe (data=5, access=4) → HIGH
+- Auth0 (data=5, access=5) → CRIT
+- Sentry (data=4, access=3) → MED
+- HubSpot (data=3, access=2) → LOW
+- Marketing site CMS (data=1, access=1) → LOW
+- OpenAI for non-PII workflows (data=2, access=3) → LOW
+- OpenAI for PII-bearing prompts (data=4, access=3) → MED+
+
+Adjust per vendor's actual usage — same vendor at different access depths scores differently.
+
+### Phase 3 — Compliance + contract status
+
+For each vendor, capture:
+
+```
+Vendor: Stripe
+Compliance attestations: SOC 2 II (2024), PCI DSS L1, ISO 27001
+DPA status: signed 2024-03-15, renews 2026-03-15
+BAA status: N/A (HIPAA not in scope)
+SCCs (EU transfers): yes (2021 SCCs embedded in DPA)
+Sub-processors list URL: stripe.com/legal/sub-processors
+Last security incident: 2025-XX (Stripe Wallet phishing — Hall not in scope)
+Last reviewed: 2026-01-15
+```
+
+**Required artifacts per data class:**
+
+| Data class | Required artifact                | Citation                                              |
+|------------|----------------------------------|-------------------------------------------------------|
+| PII (EU)   | DPA + SCCs                       | GDPR Art. 28, Art. 44-49                              |
+| PHI (US)   | BAA                              | HIPAA §164.308(b)(1), §164.314(a)                     |
+| CHD        | PCI compliance attestation       | PCI-DSS Req 12.8.2                                    |
+| PII (CA)   | Service provider contract        | CCPA §1798.140(ag), §1798.140(ag)(1)(A)               |
+| All        | Contract / MSA                   | SOC 2 CC9.2, ISO 27001 A.5.19-23                      |
+
+If an artifact is missing, that's a finding for the POA&M.
+
+### Phase 4 — Renewal calendar
+
+Generate a 12-month renewal calendar:
+
+```
+RENEWAL CALENDAR
+════════════════
+Date         Vendor           Artifact          Action
+──────────   ────────         ────────          ──────
+2026-06-30   AWS              BAA               Renew (HIPAA scope)
+2026-06-30   AWS              DPA               Renew
+2026-08-15   Auth0            DPA + BAA         Renew
+2026-09-01   Stripe           DPA               Auto-renews; verify SCCs current
+2026-10-15   Sentry           DPA               Renew + verify sub-processors
+2026-11-30   Datadog          DPA               Renew
+2027-01-01   HubSpot          DPA               Renew + verify sub-processors
+2027-03-15   Stripe           DPA               Renew (anniversary)
+```
+
+Append entries to `~/.gstack/projects/{slug}/calendar.jsonl` so they show up in `/intel` briefings.
+
+### Phase 5 — Sub-processor disclosure (GDPR Art. 28(2) + customer DPAs)
+
+If Hall has customer DPAs that require sub-processor disclosure, generate the customer-facing list:
+
+```
+SUB-PROCESSORS
+══════════════
+We use the following sub-processors to provide our service. We notify customers
+under contract of changes per our DPA Section X.
+
+| Sub-processor | Purpose                | Data scope            | Location | DPA URL                              |
+| ───           | ───                    | ───                   | ───      | ───                                  |
+| AWS           | Hosting infrastructure | All customer data     | US, EU   | aws.amazon.com/compliance/dpa        |
+| Stripe        | Payment processing     | Customer name + email | US       | stripe.com/legal/dpa                 |
+| Auth0         | Authentication         | Email, hashed pwd     | US, EU   | okta.com/agreements/                 |
+| Sentry        | Error monitoring       | Errors (may contain   | US       | sentry.io/legal/dpa                  |
+|               |                        | sampled customer data)|          |                                      |
+| SendGrid      | Transactional email    | Email PII             | US       | twilio.com/legal/dpa                 |
+```
+
+This list goes on the public website (e.g., `acme.com/legal/sub-processors`) for B2B SaaS.
+
+### Phase 6 — Incident mode (`--incident <vendor>`)
+
+When a vendor has a security incident (Okta breach, Twilio breach, Cloudflare incident):
+
+1. **Confirm scope.** Was Hall's tenant affected? Check vendor's incident-specific page.
+2. **Blast radius.** What data class × access scope did this vendor have? Reuse Phase 2 scoring.
+3. **Credential rotation.** Rotate every credential exchanged with that vendor:
+   - API keys
+   - Webhook signing secrets
+   - OAuth tokens
+   - SSO certificates
+   - SSH keys deployed to vendor-managed hosts
+4. **Compliance clocks.** If PII / PHI / CHD was in scope and confirmed exposed, the 72-hour GDPR clock and 60-day HIPAA clock start from Hall's awareness, not the vendor's disclosure date.
+5. **Customer notification.** If sub-processor compromise affects customer data, Hall's DPA likely requires customer notification too.
+
+Write `incidents/{YYYY-MM-DD-vendor-incident}/vendor-incident.md` with all of the above. Hand off to `/incident-response --live --suspected-breach`.
+
+### Phase 7 — Save report
+
+Write two files:
+
+```bash
+mkdir -p compliance/vendors compliance/sub-processors
+```
+
+1. `compliance/vendors.md` — full internal inventory (all data, all scoring, all renewal dates).
+2. `compliance/vendor-risk-{YYYY-Q}.md` — quarterly review snapshot (executive summary).
+3. `compliance/sub-processors/CURRENT.md` — public-facing sub-processor list (only data classified for external sharing).
+
+Append a typed summary to `~/.gstack/projects/{slug}/vendors.jsonl`:
+
+```json
+{
+  "ts": "2026-05-16T11:00:00Z",
+  "vendors_total": 24,
+  "crit": 3,
+  "high": 6,
+  "med": 8,
+  "low": 7,
+  "missing_dpa": 2,
+  "missing_baa": 1,
+  "renewals_next_90d": 4,
+  "sub_processors_disclosed": 18
+}
+```
+
+## Outputs
+
+- `compliance/vendors.md` — full internal inventory
+- `compliance/vendor-risk-{YYYY-Q}.md` — quarterly executive summary
+- `compliance/sub-processors/CURRENT.md` — public-facing list
+- `~/.gstack/projects/{slug}/vendors.jsonl` — typed summary
+- `~/.gstack/projects/{slug}/calendar.jsonl` — renewal reminders
+- POA&M entries in `compliance/{framework}/{date}-poam.md` for missing artifacts (DPA / BAA)
+
+## Edge cases
+
+- **Vendor metadata not in baked-in table.** Use WebSearch to verify; mark "UNVERIFIED" if WebSearch unavailable; ask Hall.
+- **Sub-processor of sub-processor (4th party).** Capture if the vendor discloses them. Track 1 hop for SaaS, deeper only for PHI / CHD scope.
+- **OSS dependency vs SaaS vendor distinction.** `react` is not a vendor (no data flows out). `Sentry` is. The line: does the vendor receive customer data, hold a credential, or run code in your pipeline?
+- **Vendor used only in dev / CI.** Score lower; still in the inventory. Some compliance frameworks require dev-environment vendors disclosed too.
+- **Self-hosted alternative to a SaaS.** If Hall switches from SaaS Sentry to self-hosted Sentry, it leaves the vendor inventory and enters infra ownership. Note the date of the switch.
+- **Free tier vendor without contract.** Has no DPA = HIGH finding for any non-trivial data class. The free tier is the same vendor; the DPA must be signed.
+- **Vendor refuses to sign a DPA / BAA.** Critical for HIPAA / EU PII; this is a vendor-replacement decision, not a paperwork problem.
+- **Vendor's SOC 2 expired.** Vendor must provide bridge letter or a Type I + Type II in progress. No attestation = MEDIUM at minimum; HIGH if regulated data is in scope.
+
+## Dependencies
+
+- **S1 — Hall-mode preamble** (founder-CISO framing, no procurement team)
+- **S4 — Decision Record store** (vendor onboarding decisions go to `docs/decisions/vendors/`)
+- **S7 — `/intel` schema v2** (typed vendor events)
+- **S11 — Authorization log** (credential rotations from incident mode go to audit.log)
+- **`/cso`** — supply-chain findings feed Phase 0 discovery
+- **`/compliance-audit`** — consumes vendor inventory as evidence for CC9.2, A.5.19-23, Art. 28, BAA §164.308(b)(1), CCPA §1798.140(ag)
+- **`/incident-response`** — receives hand-off from `--incident` mode
+- **`/threat-model-evolve`** — re-runs when new vendor enters CRIT / HIGH risk tier
+- Static reference: `compliance/frameworks/{name}.yaml` may extend the baked-in vendor metadata
+
+{{LEARNINGS_LOG}}
+
+{{GBRAIN_SAVE_RESULTS}}
+
+## Important rules
+
+- **Every vendor in the dependency tree is a vendor.** Indirect dependencies that ship code to production count.
+- **Score by ACTUAL usage, not vendor capability.** "AWS could see everything" matters less than "AWS DOES see everything in our deployment."
+- **Compliance attestation is dated.** SOC 2 II reports cover 12 months; if it's from 2023, treat it as expired pending a bridge letter.
+- **Missing DPA / BAA blocks regulated-customer onboarding.** It's not a paperwork tail; it's a sales gate.
+- **Sub-processor disclosure is contractual.** If Hall's customer DPA says "we'll notify of new sub-processors," every new vendor onboarding starts that clock.
+- **Vendor breaches start Hall's compliance clocks.** Not the vendor's disclosure date — Hall's awareness date.
+
+## Disclaimer
+
+**This skill is not a substitute for qualified privacy counsel, procurement,
+or a third-party risk management (TPRM) platform.** /vendor-risk produces an
+inventory + risk scoring suitable for founder-mode CISO operation; it does NOT
+replace a TPRM platform (OneTrust, Vanta, Drata) for sustained programs, nor
+outside counsel for DPA / BAA / SCC negotiation, nor a qualified auditor's
+opinion on a vendor's SOC 2 / ISO posture. For high-CRIT vendors handling
+regulated data, engage qualified privacy counsel BEFORE signing or renewing.
+Vendor compliance attestations cited here may have changed; always verify on
+the vendor's current security page. Always include this disclaimer at the end
+of every report output.

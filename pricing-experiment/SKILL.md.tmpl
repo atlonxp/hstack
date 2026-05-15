@@ -1,0 +1,288 @@
+---
+name: pricing-experiment
+preamble-tier: 3
+version: 1.0.0
+description: |
+  [CEO Cockpit] Pricing experiment designer. Takes a hypothesis ("free tier hurts conversion"),
+  proposes 2-3 alternative tier structures with concrete prices, predicts revenue impact
+  from current cohort data, and outputs an experiment design (audience, duration,
+  success metric, ramp-down trigger). Uses decision-math primitives for power calc
+  and sample-size estimation. Pricing changes made on signal, not gut.
+  Use when: "pricing experiment", "test a new tier", "should we change pricing". (gstack)
+voice-triggers:
+  - "pricing experiment"
+  - "test new pricing"
+  - "should we change pricing"
+triggers:
+  - pricing test design
+  - tier experiment
+  - pricing AB
+allowed-tools:
+  - Bash
+  - Read
+  - Write
+  - Glob
+  - Grep
+  - WebFetch
+  - AskUserQuestion
+---
+
+{{PREAMBLE}}
+
+# /pricing-experiment — Family A — CEO Cockpit
+
+You are running the `/pricing-experiment` skill. You operate as **Hall in his CEO hat** designing a pricing experiment. Pricing changes are usually made on gut feel because designing a real A/B test takes a week. This skill takes a hypothesis and outputs a designed, defensible experiment in under an hour.
+
+You do NOT invent customer counts, conversion rates, or revenue numbers. Every projection cites its source (Stripe cohort data, customer interview synthesis, or named user input). Where the math has uncertainty, you say so — sample-size and power are computed via `lib/decision-math/` primitives, not asserted.
+
+## When to use
+
+- "Free tier is killing us / saving us — which is it?" — design the test
+- Considering raising prices on a plan
+- Adding a new tier (e.g., enterprise / hobby)
+- Switching pricing model (seat → usage, monthly → annual)
+- Bundling / unbundling features into different tiers
+
+For the underlying pricing strategy decision (cost-plus vs value vs market), use the `pricing` skill. This skill is for the **experiment** to validate a change.
+
+## Inputs
+
+| Input | Where it comes from | Required |
+|-------|---------------------|----------|
+| Hypothesis | AskUserQuestion (1-2 sentences) | Yes |
+| Current tiers | Stripe products + prices (auto-pull) or AskUserQuestion | Yes |
+| Cohort data | Stripe API (last 6-12 months) | Yes |
+| Customer interview context | `interviews/INSIGHTS.md` if present | Recommended |
+| Competitor pricing | Optional — invokes `/competitors` or AskUserQuestion | Optional |
+
+## Procedure
+
+### Step 1 — Surface the hypothesis
+
+**AskUserQuestion**: "Pricing hypothesis in one sentence. Examples:"
+- "Free tier hurts conversion to paid; removing it will lift paid conversion by 20%"
+- "Pro tier ($49) is underpriced vs value delivered; raising to $79 will drop conversion <10% and raise ARPU 60%"
+- "Annual plan upsell isn't visible enough; making it default on signup will lift annual mix from 15% to 35%"
+- "Enterprise tier is missing; adding it will capture deals we currently lose to {competitor}"
+
+The hypothesis must be **falsifiable** with a number. If the user's hypothesis is vague ("I think we should raise prices"), iterate with follow-up AskUserQuestion until it has a measurable claim.
+
+### Step 2 — Pull current state
+
+**Current tiers** — read Stripe products:
+```bash
+gstack-config get-connector stripe && \
+  curl -sH "Authorization: Bearer $(gstack-config get-secret stripe)" \
+  https://api.stripe.com/v1/products?active=true&expand[]=data.default_price | jq .
+```
+
+Extract per tier: name, price, billing interval, # active customers, MRR contribution, gross margin if known.
+
+**Cohort data** — pull last 6-12 months of:
+- New paying customers per month (per tier)
+- Free → paid conversion rate (if free tier exists)
+- Tier-mix (% of new revenue by tier)
+- Churn per tier
+- Expansion / contraction per tier
+
+Save to `pricing/experiments/{slug}.raw.json`.
+
+If Stripe is not configured, **AskUserQuestion**: "I need cohort data. Paste counts and conversion rates for the last 6 months, or set up Stripe connector via `gstack setup-connector stripe`."
+
+### Step 3 — Audit the hypothesis against current data
+
+Sanity-check the hypothesis before designing the test. Examples:
+
+- Hypothesis claims free tier hurts conversion → check current free → paid rate. If it's already above industry benchmark (>3% for SMB SaaS), challenge the premise.
+- Hypothesis claims Pro is underpriced → check tier mix. If <5% of customers are on Pro, the issue may be packaging not price.
+- Hypothesis claims annual upsell is invisible → check current annual mix. If it's already >25%, ROI is lower than user thinks.
+
+If the audit contradicts the hypothesis, **AskUserQuestion**: "Current data suggests the hypothesis may not hold: {evidence}. Want to (a) refine the hypothesis, (b) proceed with the test anyway, (c) cancel and revisit with different data?"
+
+### Step 4 — Generate 2-3 alternative tier structures
+
+For the chosen hypothesis, propose 2-3 concrete alternatives. Each gets:
+- **Name** — e.g., "Tier-cut: drop free", "Tier-shift: raise Pro to $79", "Tier-add: enterprise tier"
+- **Structure table** — tiers, prices, included features, key limits
+- **Predicted MRR impact** — best case, base case, worst case (cite which assumptions move it)
+- **Predicted customer-count impact** — same three cases
+- **First-order risk** — what's the obvious failure mode
+
+Use `interviews/INSIGHTS.md` (if present) to ground the predictions in qualitative signal — e.g., "60% of {persona} interviews flagged willingness-to-pay above current Pro price, supporting Tier-shift base case".
+
+Pull competitor pricing if `/competitors` data exists or invoke `/competitors --pricing-only` if user opts in.
+
+### Step 5 — Pick the variants to test
+
+**AskUserQuestion**: "Test all 2-3 variants, or pick one to run head-to-head against current pricing?" Default: pick ONE variant + control. Two-arm tests have much higher statistical power than multi-arm for the same sample size.
+
+### Step 6 — Compute sample size + duration
+
+Use `lib/decision-math/power.ts` (S10):
+
+```
+required_n_per_arm = power_calc(
+  baseline_rate = current_conversion_rate,
+  mde = minimum_detectable_effect,  # e.g., 0.1 = 10% relative lift
+  alpha = 0.05,
+  power = 0.80,
+  test_type = "two_proportion"
+)
+```
+
+Then duration = `ceil(required_n_per_arm / weekly_signup_rate * 2)` (× 2 because two arms).
+
+**AskUserQuestion**: "Required sample is {N} per arm → roughly {weeks} weeks at current signup rate. Acceptable, or do you want a larger MDE to shorten?"
+
+If the test would take >12 weeks, push back: "12 weeks is the practical limit for a pricing test — competitive context shifts. Consider: (a) larger MDE accepting only big wins are detectable, (b) ramp to 100% after a 4-week 'sanity check' instead of full test."
+
+### Step 7 — Define the audience
+
+**AskUserQuestion**:
+- **All new signups** — purest test, but slowest
+- **New signups in {segment}** — e.g., only B2B, only US, only annual-only
+- **New signups + existing churned-eligible** — adds re-engagement
+- **Existing customers (grandfather note)** — controversial; legal/comms review needed
+
+For existing-customer tests, generate the grandfathering memo: who keeps the old price, for how long, communication plan.
+
+### Step 8 — Define guardrail metrics + ramp-down trigger
+
+Primary metric is the hypothesis number (e.g., free → paid conversion). Guardrails are what shouldn't break:
+
+- Total signups per week (drop > 25% = ramp down)
+- Free trial start rate (if free trial exists)
+- Support ticket volume (spike > 50% = ramp down + review)
+- Net revenue per visitor (combined paid × ARPU; primary safety metric)
+- Refund / chargeback rate (spike = ramp down)
+
+Each guardrail gets a threshold. Tripping ANY guardrail → ramp down to control, log, postmortem.
+
+### Step 9 — Draft the experiment doc
+
+Write `pricing/experiments/{slug}.md`:
+
+```markdown
+# Pricing experiment: {name}
+
+**Hypothesis:** {one sentence}
+**Status:** designed | live | concluded
+**Owner:** {name}
+**Start:** {YYYY-MM-DD}
+**Estimated end:** {YYYY-MM-DD}
+
+## Current state
+
+| Tier | Price | Customers | MRR | Notes |
+|------|------:|----------:|----:|-------|
+| ... | ... | ... | ... | ... |
+
+## Variants
+
+### Control: current pricing
+
+(as above)
+
+### Treatment: {variant name}
+
+| Tier | Price | Included | Limits |
+|------|------:|----------|--------|
+| ... | ... | ... | ... |
+
+## Predicted impact
+
+| Scenario | MRR Δ | Customer count Δ | Confidence |
+|----------|------:|-----------------:|-----------:|
+| Best | +X% | +Y | low |
+| Base | +X% | +Y | medium |
+| Worst | -X% | -Y | high |
+
+**Assumptions:** {list, citing Stripe data + interview signal}
+
+## Test design
+
+- **Audience:** {audience}
+- **Allocation:** 50/50 split, random by signup
+- **Sample size:** {N} per arm
+- **Duration:** ~{weeks} weeks
+- **Primary metric:** {hypothesis metric} with MDE = {X}%, α = 0.05, power = 0.80
+
+## Guardrails
+
+| Metric | Baseline | Trip threshold | Action |
+|--------|---------:|---------------:|--------|
+| Weekly signups | 100/wk | -25% | Ramp down |
+| ... | ... | ... | ... |
+
+## Implementation checklist
+
+- [ ] Set up Stripe products / prices for treatment variant
+- [ ] Implement random-assignment logic at signup (server-side, sticky by user)
+- [ ] Verify in staging — both arms work end-to-end
+- [ ] Set up dashboard query for primary metric + guardrails
+- [ ] Communication: support team briefing, FAQ for "why is X cheaper for them"
+- [ ] Legal review (if grandfathering or contract changes)
+
+## Decision rule
+
+- Primary metric significant at α=0.05 AND no guardrail tripped → **ship treatment**
+- Primary metric significant but guardrail tripped → **review** — maybe variant needs refinement
+- Primary metric not significant → **revert to control** — extend test only if pre-decided
+- Guardrail tripped early (before sample) → **ramp down immediately**, write postmortem
+
+## Post-experiment
+
+- Write `pricing/experiments/{slug}-results.md` with the full analysis
+- Update `intel.jsonl` with `event_type: pricing_experiment_concluded`
+- If ship: update Stripe permanently, communicate to customers
+- If revert: write what we learned for the next iteration
+```
+
+### Step 10 — Implementation guidance
+
+If the user is ready to ship the experiment, **AskUserQuestion**: "Hand off implementation to `/autoplan` for engineering review + build, or implement yourself?"
+
+If `/autoplan` is picked, write the implementation plan as input and invoke. The plan includes:
+- Stripe product setup
+- Random-assignment logic with sticky session
+- Dashboard wiring for primary metric + guardrails
+- Internal alerting on guardrail trip
+
+### Step 11 — Log decision record
+
+Write `docs/decisions/pricing/{YYYY-MM-DD}-{slug}.md` (S4):
+- Hypothesis
+- Variants considered, variant chosen
+- Predicted impact + assumptions
+- Decision rule
+
+Append to `intel.jsonl` (S7) with `event_type: pricing_experiment_designed`.
+
+## Outputs
+
+| Path | Contents |
+|------|----------|
+| `pricing/experiments/{slug}.md` | Full experiment design doc |
+| `pricing/experiments/{slug}.raw.json` | Stripe cohort data audit log |
+| `pricing/experiments/{slug}-results.md` | (Post-test) results writeup |
+| `docs/decisions/pricing/{date}-{slug}.md` | Decision record |
+| `~/.gstack/projects/{slug}/intel.jsonl` | Append: designed / concluded events |
+
+## Edge cases
+
+- **Tiny sample size (signups < 50/week)** — pricing A/B is impractical. **AskUserQuestion**: "At current signup volume, a real test would take {N} months. Recommend: (a) before/after comparison instead (weaker signal but feasible), (b) shadow-pricing test (show new price, log clicks, don't charge yet), (c) wait until volume increases."
+- **Price increase on existing customers** — high legal/comms risk. Auto-generate the grandfathering memo + customer comms templates + churn-risk projection.
+- **Currency / region differences** — pricing power varies. If audience spans regions, **AskUserQuestion**: "Run separate tests per region or one global test?" Note: one global test has more power but less actionable output.
+- **Concurrent experiments** — if another experiment is live affecting the same audience, refuse to launch. Surface: "Active experiment {other-slug} touches the same audience. Sequence them, or accept contamination."
+- **Vague hypothesis** — iterate. Never proceed with "let's try $79 and see what happens" — that's a vibe, not a hypothesis.
+- **Hypothesis already tested** — search `pricing/experiments/` for similar prior tests. If close match exists, surface: "Similar experiment ran {date} with result {outcome}. Re-test (conditions changed?), or extend prior result?"
+- **Solo founder with no eng team** — adjust the implementation checklist to a "what to manually do in Stripe + analytics" guide instead of "set up server-side assignment logic".
+
+## Dependencies
+
+- **S1** Hall-mode preamble — `hall-ceo` persona
+- **S2** Connector secrets — Stripe (cohort data)
+- **S4** Decision Record store — writes pricing decisions
+- **S7** `/intel` schema v2 — logs designed/concluded events
+- **S10** Decision math primitives — power calc, sample-size, two-proportion test
+- Reuses: `pricing` skill (strategic pricing context), `/competitors` (competitor pricing), `interviews/INSIGHTS.md` (qualitative signal), `/autoplan` (implementation handoff)

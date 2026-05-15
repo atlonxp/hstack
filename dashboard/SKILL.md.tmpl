@@ -1,0 +1,311 @@
+---
+name: dashboard
+preamble-tier: 3
+version: 1.0.0
+description: |
+  [Build & Autonomy] Multi-agent dashboard for hstack. Launches several review/QA skills
+  in parallel via Claude Code Agent Teams (or sequential fallback), renders
+  live progress as a terminal box-drawing table, then merges per-skill output
+  into a unified scorecard. Three built-in presets: review (cso + review +
+  codex), qa (qa + design-review), full (all reviews + qa + audit). Resource-
+  capped at 3 parallel agents; one crash never takes the others down.
+  Use when asked to "run dashboard", "parallel review", "review everything",
+  "dashboard preset", or "multi-agent review". (gstack)
+voice-triggers:
+  - "dashboard"
+  - "parallel review"
+  - "run them all"
+allowed-tools:
+  - Bash
+  - Read
+  - Write
+  - Agent
+  - AskUserQuestion
+triggers:
+  - run dashboard
+  - parallel review
+  - multi-agent review
+---
+
+{{PREAMBLE}}
+
+# /dashboard — Multi-Agent Review Dashboard
+
+You orchestrate multiple hstack skills in parallel, render live progress, and
+merge their findings into a single scorecard. The point is wall-clock speed
+plus a clean unified report — instead of running /cso, then /review, then
+/codex sequentially over twenty minutes, you fan them out and watch them
+finish on one screen.
+
+```
+  +-------------------------------------------------+
+  |         hstack PARALLEL REVIEW DASHBOARD        |
+  +--------------+--------+---------+---------------+
+  | Skill        | Status | Score   | Findings      |
+  +--------------+--------+---------+---------------+
+  | /cso         | ###### | 8/10    | 2 medium      |
+  | /review      | ###... | running | ...           |
+  | /qa-only     | ...... | queued  | ...           |
+  +--------------+--------+---------+---------------+
+```
+
+## When to use
+
+Use `/dashboard` when:
+
+1. The user is about to ship and wants every review skill in one pass.
+2. The user has finished a feature and wants security + code review + QA
+   without doing three serial invocations.
+3. The user explicitly asks for "parallel review" or names a preset.
+
+Do NOT use `/dashboard` when:
+
+- Only one skill is needed — just invoke that skill directly.
+- The user is mid-implementation and wants fast feedback on one file — use
+  `/review` directly.
+- The plan/spec needs review (no code exists yet) — use `/autoplan` instead.
+
+## Inputs
+
+| Input | Default | Notes |
+|-------|---------|-------|
+| Preset | `review` | One of: `review`, `qa`, `full`, or `custom` |
+| Skills (if `custom`) | -- | Comma-separated skill names |
+| Parallelism | 3 | Max concurrent agents; cap is 3 even if user asks higher |
+| Mode | `parallel` | Falls back to `sequential` if Agent Teams unavailable |
+| Output dir | `.gstack/dashboard-reports/` | Where the unified report lands |
+
+### Presets
+
+| Preset  | Skills                                  | Rough duration |
+|---------|-----------------------------------------|----------------|
+| review  | `/cso` (daily), `/review`, `/codex`     | 3-6 min        |
+| qa      | `/qa-only`, `/design-review`            | 4-8 min        |
+| full    | all of: `/cso` (daily), `/review`,      | 8-15 min       |
+|         | `/codex`, `/qa-only`, `/design-review`, |                |
+|         | `/investigate-workflow`                 |                |
+
+Adding a new preset is a one-line edit: append to the `PRESETS` table in
+Step 0 below. Each preset entry is `{name, skills[], description, expected_minutes}`.
+
+## Procedure
+
+### Step 0: Resolve preset and parallelism
+
+If the user's invocation includes a preset name, use it directly. Otherwise
+use AskUserQuestion:
+
+```
+Which review do you want to run?
+
+Options:
+  A) review — security + code review + codex second opinion (3-6 min)
+  B) qa — QA report + design review (4-8 min)
+  C) full — everything (8-15 min)
+  D) custom — you pick the skills
+```
+
+Parallelism is hard-capped at 3 regardless of input. The CC documented limit
+is 10, but we stay conservative: each subagent gets meaningful token budget,
+and 3 is enough for our largest preset to finish in two waves.
+
+### Step 1: Probe Agent Teams availability
+
+Before fanning out, check whether the Agent tool with parallel spawning is
+available in this session. Heuristic: attempt a single trivial Agent call.
+If it returns within 5 seconds, parallel mode is available. If it errors,
+fall back to sequential.
+
+Sequential fallback runs the same skill list one at a time; the dashboard
+still renders the same table, but only one row at a time is in the running
+state. Total wall-clock is the sum, not the max.
+
+State the chosen mode to the user explicitly: `Running in parallel (3 concurrent)` or `Running sequentially (Agent Teams unavailable)`.
+
+### Step 2: Build the agent plan
+
+For each skill in the preset, construct a subagent task:
+
+| Field | Value |
+|-------|-------|
+| Skill | `/cso`, `/review`, etc. |
+| Working dir | Current repo root |
+| Output channel | A unique tempfile per agent: `/tmp/dashboard-<skill>-<ts>.json` |
+| Time budget | Per-skill default (e.g. `/cso` ~3 min, `/qa-only` ~5 min) |
+| Status channel | A separate progress file the main agent polls |
+
+The subagent prompt for each skill is constructed like:
+
+```
+You are running /<skill> as part of an hstack dashboard.
+
+1. Run the skill normally.
+2. Emit a final JSON summary to <output-path>:
+   {
+     "skill": "<skill>",
+     "status": "OK" | "FAIL" | "PARTIAL",
+     "score": "N/10" or null,
+     "findings": { "critical": 0, "high": 0, "medium": 0 },
+     "summary": "one-paragraph result",
+     "report_path": "path to full report (optional)"
+   }
+3. Periodically write progress (0-100) to <status-path>.
+```
+
+### Step 3: Launch agents
+
+Dispatch agents in waves of up to 3. Track each agent's: pid (or agent id),
+status path, output path, start time, current state (`queued`, `running`,
+`done`, `failed`, `timeout`).
+
+Crash handling: if one agent fails (non-zero exit, exception, or no output
+within the time budget), mark it `failed` and continue with the others. A
+crashed agent does NOT prevent siblings from completing or the dashboard from
+finishing.
+
+### Step 4: Live render loop
+
+Every 2 seconds, redraw the table to stdout. Use ANSI cursor-up to overwrite
+instead of appending new tables to the scrollback. The renderer uses ASCII
+box-drawing chars (`+`, `-`, `|`) for portability — no UTF-8 dependency.
+
+State -> visual mapping:
+
+| State    | Bar (6 chars) | Score column |
+|----------|---------------|--------------|
+| queued   | `......`      | `queued`     |
+| running  | `###...`      | `running...` |
+| done     | `######`      | `N/10`       |
+| failed   | `XXXXXX`      | `FAIL`       |
+| timeout  | `TTTTTT`      | `timeout`    |
+
+Bar progress for `running` reads from the status file (0-100 -> 0-6 hashes).
+If the status file is missing or stale (>30s), show the bar as `###...` and
+note `unknown progress`.
+
+Exit the render loop when every agent is in a terminal state (`done`,
+`failed`, `timeout`).
+
+### Step 5: Aggregate results
+
+Read each agent's output JSON. Build the unified scorecard:
+
+```
+DASHBOARD SCORECARD — <preset>
+================================
+Duration:      00:08:42 (wall clock)
+Total skills:  5  | OK: 4  | FAILED: 1  | TIMEOUT: 0
+Findings:      C: 1  H: 3  M: 9
+
+Per-skill summary:
+  /cso          OK     8/10   2H 5M   .gstack/security-reports/...
+  /review       OK     9/10   1H 2M   (inline)
+  /codex        OK     ---    ---     (inline)
+  /qa-only      OK     7/10   0C 1H   .gstack/qa-reports/...
+  /design-review FAIL  ---    ---     crashed - see log
+
+Critical findings:
+  1. [/cso] AWS access key in .env:3 - CRITICAL
+
+Recommended next:
+  - Address the critical finding from /cso before shipping
+  - Re-run /design-review (it crashed - see /tmp/dashboard-design-review-...)
+```
+
+Score aggregation is best-effort because skills emit different formats. Rules:
+
+- If a skill emits a numeric score, show it. Otherwise show `---`.
+- Findings counts are summed across all skills that emit them. Skills that
+  don't emit findings (like `/codex` which gives qualitative feedback) are
+  excluded from the sum, not zeroed.
+- An OK skill with no findings is still OK; not all skills produce findings.
+
+### Step 6: Write the unified report
+
+Save the scorecard + each per-skill report to:
+
+```
+.gstack/dashboard-reports/<preset>-<YYYY-MM-DD>-<HHMMSS>/
+├── scorecard.md          # The aggregate view (shown above)
+├── cso.json              # Raw per-skill outputs
+├── review.json
+├── codex.txt
+└── ...
+```
+
+Also write a top-level marker `.gstack/dashboard-reports/latest.txt`
+containing the path of the most recent run for easy retrieval.
+
+### Step 7: Handle failures
+
+For any agent that ended in `failed` or `timeout`:
+
+1. Log the per-agent stderr/stdout to the report directory.
+2. Surface the failure in the scorecard "Crashes" section with a hint at the
+   cause (subprocess exit code, timeout reached, output JSON malformed).
+3. Do NOT mark the dashboard run as failed unless ALL agents failed. A 4-of-5
+   pass is still useful.
+
+Use AskUserQuestion only after the dashboard completes:
+
+```
+1 skill failed (/design-review). What do you want to do?
+
+Options:
+  A) Re-run only the failed skill
+  B) Ignore - the other findings are enough
+  C) Show the failure log
+```
+
+## Outputs
+
+- Live terminal dashboard (ANSI table, overwritten each tick)
+- `.gstack/dashboard-reports/<preset>-<ts>/scorecard.md`
+- Per-skill raw outputs in the same directory
+- `.gstack/dashboard-reports/latest.txt`
+
+## Edge cases
+
+- **Agent tool unavailable.** Fall back to sequential. Render the same
+  dashboard but one row at a time enters `running`. Wall-clock is the sum.
+- **One skill crashes mid-run.** Others continue. Final scorecard flags the
+  crash; user is asked whether to re-run it.
+- **Skill emits non-JSON output.** Try a regex-tolerant fallback parse. If
+  that fails, mark `score=---`, treat as OK with the raw output captured.
+- **All skills timeout.** Mark the dashboard as FAILED and recommend smaller
+  scope (e.g. switch from `full` to `review`).
+- **Output directory not writable.** Fail before launching agents — there's
+  no point starting work we can't save.
+- **User aborts mid-run (Ctrl-C).** Subagents continue if Agent Teams is
+  detached; reap them on next dashboard run. The render loop catches SIGINT
+  and shows the partial scorecard.
+- **Repo not a git repo.** Some skills (e.g. /review) need diff context. Skip
+  those skills and tell the user why.
+
+## Dependencies
+
+- Claude Code with Agent tool (parallel preferred; sequential fallback OK).
+- The skills referenced by the chosen preset must be installed. If a
+  preset names a skill that isn't installed, skip it with a warning and
+  continue with the rest.
+- A terminal that supports ANSI cursor movement. If not detected (e.g.
+  stdout is a pipe), render the table once at the end instead of live.
+
+## Customizing presets
+
+Presets are defined inline in this skill (Step 0). To add or modify one:
+
+1. Edit the PRESETS table in Step 0 with the new entry.
+2. Add the skill name to the `skills[]` array.
+3. The renderer and aggregator pick it up automatically — no other code
+   changes needed.
+
+For one-off custom runs, pick the `custom` option in Step 0 and list the
+skill names.
+
+## Related skills
+
+- `/autoplan` — pre-implementation plan reviews (different lifecycle stage).
+- `/autoaudit` — post-build verification (sequential, no dashboard).
+- `/review`, `/cso`, `/qa-only`, `/design-review`, `/codex` — the underlying
+  skills the dashboard orchestrates.

@@ -1,0 +1,353 @@
+---
+name: incident-response
+preamble-tier: 2
+version: 1.0.0
+description: |
+  [CISO Compliance + IR] Generates an incident response runbook tuned to Hall's
+  stack (web / mobile / API), and runs in live war-room mode during an actual
+  incident. Walks the operator through declaration, triage, mitigation, comms,
+  and resolution. Includes severity rubric (SEV-1 to SEV-4), comms templates
+  (customer, internal, status page), on-call rotation suggestions, and a clean
+  hand-off to /postmortem. Maps to SOC 2 CC7.3-7.5, ISO 27001 A.5.24-A.5.27,
+  HIPAA §164.308(a)(6), PCI-DSS Req 12.10, GDPR Art. 33-34 (72-hour breach clock).
+  Use when: "incident response", "we have an outage", "we're breached",
+  "incident runbook", "war room", "SEV-1", "page the on-call". (gstack)
+allowed-tools:
+  - Bash
+  - Read
+  - Grep
+  - Glob
+  - Write
+  - Edit
+  - AskUserQuestion
+  - WebSearch
+triggers:
+  - incident response
+  - incident runbook
+  - we have an incident
+  - war room
+  - SEV-1
+  - production is down
+---
+
+{{PREAMBLE}}
+
+{{INTEL_LOGGING}}
+
+{{GBRAIN_CONTEXT_LOAD}}
+
+# /incident-response — IR Runbook + Live War-Room (Family C)
+
+You are the **Incident Commander** until the incident is resolved. Your job is to keep the response coordinated when the founder is also the operator, the comms lead, and the engineer. Slow, deliberate, evidence-preserving — even when the system is on fire.
+
+This skill has two modes:
+
+1. **Template mode** (default) — generates an IR runbook customized to Hall's stack. Run during peacetime.
+2. **Live mode** (`/incident-response --live`) — walks Hall through an active incident, step by step, capturing the timeline as it happens.
+
+## When to use
+
+**Template mode:**
+- First time setting up IR. Skill produces `ops/runbooks/incident-response.md`.
+- After a `/postmortem` surfaces a runbook gap.
+- After major architecture change (new region, new service, new vendor).
+- Quarterly review against SOC 2 CC7.3 / HIPAA §164.308(a)(6).
+
+**Live mode:**
+- Anything's wrong in production that wasn't planned.
+- Customer reported "everything's broken."
+- Page fired. PagerDuty / Opsgenie / direct phone call.
+- Suspected security incident (breach, leaked credential, ransomware).
+
+## Arguments
+
+- `/incident-response` — generate or refresh the runbook (template mode).
+- `/incident-response --live` — start the war room. Skill creates `incidents/{YYYY-MM-DD-slug}/` immediately.
+- `/incident-response --live --sev 1` — declare severity up front.
+- `/incident-response --live --suspected-breach` — security-incident track (extra evidence preservation, legal hold).
+- `/incident-response --drill` — tabletop exercise mode. Runs the runbook without actual mitigation.
+
+## Inputs
+
+### Template mode
+
+1. **Stack inventory.** Detect what's deployed:
+   ```bash
+   ls deploy/ Dockerfile* docker-compose*.yml 2>/dev/null
+   find .github/workflows -maxdepth 1 -name '*.yml' 2>/dev/null
+   ls infra/ terraform/ pulumi/ 2>/dev/null
+   ```
+2. **Communication channels.** AskUserQuestion: Slack workspace? Discord? Status page (Statuspage.io / Instatus / Atlassian)? Customer comms via email or in-app?
+3. **On-call setup.** Is there an on-call rotation already (PagerDuty, Opsgenie, Better Stack)? Or is Hall the single on-call?
+4. **Compliance scope.** Which frameworks apply? GDPR (72-hour clock), HIPAA (60-day notification), PCI-DSS (Req 12.10.3), SOC 2 (CC7.3-7.5)?
+5. **Vendor contacts.** Cloud support tier (AWS Business / Enterprise), DDoS mitigation (Cloudflare), payment processor incident contact (Stripe), email provider (Postmark / Resend).
+
+### Live mode
+
+1. **What's the symptom?** One sentence.
+2. **When did it start?** Timestamp; UTC preferred.
+3. **Who reported it?** Customer, alert, internal user, Hall noticed.
+4. **What changed recently?** Last deploy, last config change, last vendor incident.
+5. **Suspected category.** Outage / degradation / security / data / billing / vendor.
+
+## Procedure
+
+### Phase 0 — Mode dispatch
+
+If `--live` flag is absent → template mode (Phase T1+).
+If `--live` is present → live mode (Phase L1+).
+
+### Template mode
+
+#### Phase T1 — Severity rubric
+
+Generate a stack-specific rubric. Default schema:
+
+```
+SEV-1  Hard down.
+       Customer-facing service unavailable for any customer.
+       Data loss in progress. Confirmed security breach.
+       Page on-call. Engage Incident Commander. War room open within 15 minutes.
+       Customer comms within 30 minutes. Status page red.
+
+SEV-2  Partial down or significant degradation.
+       Subset of customers affected, or one feature broken for all.
+       Performance > 3x baseline. Auth failures > 5% of attempts.
+       Page on-call. War room within 30 minutes. Status page yellow.
+       Customer comms within 1 hour if not resolved.
+
+SEV-3  Minor degradation. Workaround exists.
+       Background job lag. Non-critical feature broken. Single-customer issue.
+       Slack-only response. No war room. Status page green with note.
+       Fix in next business day.
+
+SEV-4  Known issue. Cosmetic. Documentation-only.
+       File in TODOS.md. No on-call action.
+```
+
+Adjust thresholds per stack (e.g., e-commerce SEV-1 includes "checkout broken"; B2B SaaS SEV-1 includes "auth broken for any enterprise tenant").
+
+#### Phase T2 — Roles
+
+For founder-mode (Hall alone), define how to wear the hats:
+
+```
+Incident Commander (IC)  Hall — decides severity, declares incident, owns timeline.
+Operator                 Hall — runs commands, applies mitigation. SEPARATE Slack thread.
+Scribe                   This skill in --live mode — writes timeline as Hall types.
+Comms Lead               Hall — drafts customer + internal updates. Uses comms templates.
+Subject Matter Expert    AskUserQuestion → Hall or external (Stripe support, AWS TAM).
+```
+
+For team-mode, swap in named owners.
+
+#### Phase T3 — Comms templates
+
+Generate four pre-approved templates Hall can paste under stress:
+
+1. **Internal Slack channel kickoff.** "SEV-{N} declared. Symptom: ___. IC: ___. War room: this thread. Updates every 30 min."
+2. **Status page — investigating.** "We are investigating reports of {symptom}. Affected: {scope}. We'll update by {time + 30min}."
+3. **Status page — identified.** "We identified the cause of {symptom} as {root cause in 1 sentence, no internals}. Mitigation in progress. ETA: {time}."
+4. **Status page — resolved + customer email.** "{Symptom} is resolved as of {timestamp}. Duration: {hh:mm}. Cause: {1 sentence}. Postmortem: {link}." Customer email adds: "If you experienced {specific impact}, here's what to do: {action}. Email {support} with questions."
+
+Add legal-required templates by compliance scope:
+- **GDPR Art. 33** — supervisory-authority notification template if personal data breach (72-hour clock from awareness).
+- **GDPR Art. 34** — data-subject notification template if "high risk" to rights/freedoms.
+- **HIPAA §164.404** — individual notification within 60 days if PHI breach.
+- **State breach laws (US)** — California / NY / Texas / Mass notification templates; ping `/compliance-audit --framework ccpa` for current language.
+- **PCI-DSS** — card brand notification within 24 hours (Visa, Mastercard, Amex).
+
+#### Phase T4 — Runbook generation
+
+Write `ops/runbooks/incident-response.md` containing:
+- Severity rubric (Phase T1)
+- Roles (Phase T2)
+- Activation steps ("call this number, post in this channel, page this rotation")
+- Comms templates (Phase T3)
+- Stack-specific mitigation playbooks for each top-5 risk (informed by `/cso` reports + `/threat-model-evolve` if present)
+- Hand-off to `/postmortem` checklist (what to capture before closing the war room)
+- Compliance notification checklist (GDPR / HIPAA / PCI as applicable)
+
+#### Phase T5 — Drill schedule
+
+AskUserQuestion: "How often should we drill? Quarterly is the SOC 2 / ISO recommendation."
+Options: monthly, quarterly, semi-annually, after major arch change only.
+
+Record the schedule. Add a reminder in `~/.gstack/projects/{slug}/calendar.jsonl`.
+
+### Live mode
+
+#### Phase L1 — Declare
+
+Create the war-room directory immediately:
+
+```bash
+SLUG="$(date -u +%Y-%m-%d)-$(echo "$SYMPTOM" | tr ' ' '-' | tr -dc 'a-zA-Z0-9-' | cut -c1-30)"
+mkdir -p "incidents/${SLUG}"
+```
+
+Write `incidents/{slug}/declaration.md` with:
+- Timestamp (UTC)
+- Symptom (one sentence)
+- Reporter
+- Initial severity guess (will refine)
+- IC (Hall)
+- War-room channel
+
+Open `incidents/{slug}/timeline.md` and start logging. Every action gets a timestamped line:
+
+```
+14:23:11Z  IC declared SEV-2. Symptom: checkout 500s for ~30% of traffic.
+14:23:42Z  Operator: checking last 3 deploys.
+14:24:18Z  Operator: deploy at 14:08Z bumped stripe-js minor version. Rolling back.
+14:25:55Z  Operator: rollback complete. Checking error rate.
+```
+
+#### Phase L2 — Triage
+
+AskUserQuestion (one at a time, fast):
+
+1. **Severity confirmation.** Show the rubric, ask Hall to confirm. Default to higher severity if unsure — "if I'm wrong about SEV-1 I get yelled at; if I'm wrong about SEV-3 a customer churns silently."
+2. **Scope.** Single customer? Percentage of traffic? Region? Feature? Data type?
+3. **Evidence preservation.** If suspected breach: STOP, preserve logs/disk before mitigating. Hall must say "preserve" or "go" — log the answer.
+
+If suspected breach (`--suspected-breach` flag or Hall confirms):
+- DO NOT wipe affected systems.
+- Snapshot disk / EBS volume / VM image NOW.
+- Pull logs to the war-room directory: `aws logs filter-log-events ... > incidents/{slug}/logs/`.
+- Note the IAM principal that may be compromised. Rotate the credential AFTER snapshotting.
+- Engage legal counsel BEFORE breach notification. Notification timing is regulated.
+
+#### Phase L3 — Mitigation
+
+Walk Hall through:
+
+1. **What's the smallest reversible change** that restores service? Always rollback before forward-fix.
+2. **What's the blast radius** of the proposed mitigation? Could it make things worse?
+3. **Apply mitigation.** Hall runs the commands, this skill logs them and the output to `incidents/{slug}/timeline.md`.
+4. **Verify.** Did error rate drop? Did the symptom resolve? Pause; don't declare resolved on first green check — wait 10 minutes minimum.
+5. **If not resolved:** loop. State new hypothesis. State next change. Apply. Verify.
+6. **If three mitigations fail:** AskUserQuestion to escalate — wake a vendor TAM, page a former colleague, page a contractor. Hall as solo founder cannot debug alone past hour 2 of a SEV-1.
+
+#### Phase L4 — Comms
+
+In parallel with mitigation, draft outgoing messages using Phase T3 templates. AskUserQuestion before sending each one:
+
+```
+Ready to post status page update?
+A) Yes — paste this exact text to status page
+B) Edit first
+C) Skip — too early
+```
+
+Cadence for SEV-1 / SEV-2: update every 30 minutes even if "still investigating." Silence kills trust faster than bad news.
+
+For suspected breach: do NOT post public comms about the breach until legal counsel approves. "Investigating performance issue" is acceptable interim language only if technically accurate.
+
+#### Phase L5 — Resolution + hand-off
+
+When the symptom has been gone for 30+ minutes:
+
+1. Mark incident resolved in `incidents/{slug}/declaration.md` with `resolved_at: {timestamp}`.
+2. Post resolution status update.
+3. Run the **clean hand-off checklist** for `/postmortem`:
+   - Timeline captured fully (every action logged)
+   - Symptoms, scope, duration recorded with numbers (% affected, exact minutes)
+   - Logs preserved at `incidents/{slug}/logs/`
+   - Commands run captured (Hall's terminal history snapshot)
+   - Mitigation steps that worked AND that didn't
+   - Customer reports linked (Intercom ticket IDs, email subjects)
+4. Schedule `/postmortem` within 5 business days for SEV-1/2. SEV-3 within 10 days. SEV-4 no formal postmortem (TODOS.md entry suffices).
+5. Compliance clock check:
+   - **GDPR Art. 33:** if personal data breach with "risk to rights and freedoms," 72-hour clock from awareness to supervisory authority. Set a calendar alarm in `~/.gstack/projects/{slug}/calendar.jsonl`.
+   - **GDPR Art. 34:** if "high risk," notify affected data subjects without undue delay.
+   - **HIPAA §164.404:** if PHI breach, 60-day clock from discovery to individuals.
+   - **PCI Req 12.10.3:** 24-hour clock to card brands if CHD compromised.
+   - **State breach laws:** consult `/compliance-audit` for current per-state requirements.
+
+### Phase L6 — Save artifacts
+
+`incidents/{slug}/` final contents:
+- `declaration.md` — initial declaration + final resolution
+- `timeline.md` — full timestamped event log
+- `logs/` — preserved system logs
+- `comms/` — every customer-facing message sent
+- `compliance.md` — which clocks started, when notifications are due, what was sent
+- `handoff.md` — pointers to next steps (postmortem, follow-ups, action items)
+
+Append to `~/.gstack/projects/{slug}/incidents.jsonl`:
+
+```json
+{
+  "ts": "2026-05-16T14:23:11Z",
+  "slug": "2026-05-16-checkout-500s",
+  "severity": "SEV-2",
+  "duration_min": 47,
+  "scope": "30% of EU traffic",
+  "category": "deploy regression",
+  "suspected_breach": false,
+  "postmortem_due": "2026-05-23",
+  "compliance_clocks": []
+}
+```
+
+## Outputs
+
+**Template mode:**
+- `ops/runbooks/incident-response.md` — the runbook
+- `~/.gstack/projects/{slug}/calendar.jsonl` — drill schedule
+
+**Live mode:**
+- `incidents/{YYYY-MM-DD-slug}/` directory with declaration, timeline, logs, comms, compliance, handoff
+- `~/.gstack/projects/{slug}/incidents.jsonl` — typed summary entry
+- Reminder set for `/postmortem` within SLA
+
+## Edge cases
+
+- **Hall is the only on-call and is asleep.** PagerDuty / phone wake-up is outside this skill's scope, but the runbook MUST document the wake-up mechanism. If none exists, that's a SEV-1 in waiting; recommend Better Stack / Opsgenie free tier as minimum.
+- **No status page exists.** Recommend Instatus (free tier) or a simple `status.html` static page. Don't run an incident with no public-facing comms surface.
+- **Vendor incident, not ours.** Stripe is down → page in vendor's status page, post our own status page referencing theirs, hold customer comms 15 min to confirm we don't have an additional fault, then post.
+- **False alarm.** Mark declaration with `resolved_at` and `category: false-alarm`. Still write a brief timeline; near-misses are postmortem candidates.
+- **Conflicting evidence.** Two metrics disagree (latency dashboard green, customer reports timeouts). Default to customer reports being right; metrics often lie about edge cases.
+- **Hall starts forward-fixing instead of rolling back.** This skill MUST surface "rollback first" as a question every time forward-fix is proposed during SEV-1/2. The bias toward forward-fix is the #1 cause of incidents getting longer.
+- **Live mode invoked but no recent deploy / change.** Investigate vendor side first (cloud provider status pages, payment processor, email provider). 40%+ of "our incidents" are upstream.
+
+## Dependencies
+
+- **S1 — Hall-mode preamble** (founder-IC framing)
+- **S4 — Decision Record store** (post-incident decisions go to `docs/decisions/`)
+- **S7 — `/intel` schema v2** (typed incident events)
+- **S11 — Authorization log** (every action in live mode is signed + hash-chained)
+- **`/postmortem`** — REQUIRED downstream skill for SEV-1/2
+- **`/cso`** — informs Phase T4 stack-specific mitigation playbooks
+- **`/compliance-audit`** — provides current breach-notification clocks per framework
+- **`/threat-model-evolve`** — informs Phase T4 with known attack paths
+- Optional: Slack / Discord webhook for war-room kickoff; status page API key (S2 connector layer)
+
+{{LEARNINGS_LOG}}
+
+{{GBRAIN_SAVE_RESULTS}}
+
+## Important rules
+
+- **Severity bias up, not down.** Wrong about SEV-1 = embarrassment. Wrong about SEV-3 = customer churn.
+- **Evidence before mitigation if breach suspected.** Snapshot first. Mitigate second.
+- **One change at a time.** Multiple simultaneous mitigations = no signal on which one worked.
+- **Wait 10 min before declaring resolved.** First green check is often deceptive.
+- **Customer comms cadence beats customer comms eloquence.** 30-min "still investigating" beats 90-min silence.
+- **The compliance clocks start at AWARENESS, not at confirmation.** GDPR 72-hour clock began when the customer reported it, not when you finished triage.
+- **The IC owns the timeline. The operator owns the keyboard.** Even when they're the same person, the cognitive role-switch matters.
+- **Hand off to `/postmortem` is not optional for SEV-1/2.** SOC 2 CC7.4, ISO A.5.27, HIPAA §164.308(a)(6)(ii), PCI Req 12.10.6 all require it.
+
+## Disclaimer
+
+**This skill is not a substitute for trained incident commanders, legal counsel,
+or licensed compliance professionals.** /incident-response is an AI-assisted
+runbook generator and live-mode scribe — it helps a founder-CISO stay organized,
+preserve evidence, and meet basic compliance clocks. It does NOT replace
+qualified outside counsel for breach notification decisions, a forensics firm
+for confirmed breaches, or an incident management vendor (PagerDuty/Opsgenie)
+for paging and on-call rotations. For confirmed security breaches, engage
+qualified incident response firms (CrowdStrike Services, Mandiant, Stroz Friedberg)
+and breach-notification counsel BEFORE notifying anyone external. Always include
+this disclaimer at the end of every report output.

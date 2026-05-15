@@ -1,0 +1,347 @@
+---
+name: gesture-synth
+preamble-tier: 2
+version: 1.0.0
+description: |
+  [Avatar & Embodiment] Speech-to-gesture synthesis designer. Picks the right
+  co-speech-gesture model (GENEA SOTA / Audio2Gestures / GestureDiffusion /
+  ZeroEGGS / DiffuseStyleGesture) per use case (conversational / presenter /
+  character), builds a cultural-gesture vocabulary (beats / deictics / iconic /
+  metaphoric), and writes a build-ready plan with retargeting strategy to the
+  avatar body rig. Outputs MODEL + VOCAB + STYLE + EVAL docs.
+  Use when: "co-speech gestures", "gesture synthesis", "speech-to-motion",
+  "presenter gestures", or "audio-to-body animation". (gstack)
+voice-triggers:
+  - "co speech gestures"
+  - "gesture synthesis"
+  - "speech to gesture"
+  - "presenter gestures"
+triggers:
+  - gesture synthesis
+  - speech-to-gesture
+  - co-speech motion
+  - audio-to-body
+allowed-tools:
+  - Bash
+  - Read
+  - Write
+  - Glob
+  - Grep
+  - AskUserQuestion
+---
+
+{{PREAMBLE}}
+
+# /gesture-synth — Family P — Avatar & Embodiment
+
+You are running the `/gesture-synth` skill. This is a **speech-to-gesture synthesis
+designer**. Input: avatar body rig + speech audio (with optional transcript) +
+cultural-style spec. Output: a four-doc plan — MODEL, VOCAB, STYLE, EVAL — that
+`/autoplan-full` and `/finetune --domain gesture` consume, and that
+`/cognitive-load-audit` reads to flag gestures that fight speech for attention.
+
+You are NOT a gesture-model trainer. You pick the model, design the cultural-gesture
+vocabulary, write the retargeting plan, and hand off. Do not train. Do not download
+checkpoints. Do not retarget mocap.
+
+The gesture-synth space is mid-2020s mature: GENEA Challenge winners (2020-2023)
+established the SOTA leaderboard; ZeroEGGS, Audio2Gestures, GestureDiffusion,
+DiffuseStyleGesture each took different lanes (style transfer, diversity, control).
+Pin checkpoints by version. If user wants absolute latest, run
+`/discover --domain gesture` first.
+
+---
+
+## When to use
+
+- Avatar architecture is set (via `/avatar-design`) and the body rig is non-trivial
+  (more than head-and-shoulders).
+- Existing avatar feels "talking-head dead" — no body motion to support speech.
+- Cultural-vocab change (e.g., adding Thai gesture inventory to an English-only
+  stack — Thai pointing, wai gesture, head-tilt agreement are not English).
+- Latency budget changed (real-time conversational vs offline cinematic — different
+  model classes).
+- Sign-language performance — STOP, route to `/avatar-sign` (sign is parameterized
+  linguistically, not co-speech).
+
+Do NOT use for:
+- Whole avatar architecture → use `/avatar-design`.
+- Lip-sync or mouth animation → use `/lip-sync`.
+- Facial expression / FACS surface → use `/expression-synth`.
+- Sign-language gestures → use `/avatar-sign` (sign hands are linguistic
+  parameters, not co-speech beats).
+- Body-only mocap retargeting (no audio) → use a generic retargeting tool, not this.
+
+---
+
+## Inputs
+
+| Input | Required? | Format |
+|---|---|---|
+| Avatar body rig | yes | From `/avatar-design` (SMPL-X / SMPL-X + MANO / VRM / 2D rigged) |
+| Use case | yes | "conversational (turn-taking, back-channel)" / "presenter (one-way to audience)" / "character (scripted, stylized)" / "mixed" |
+| Speech input | yes | "streaming audio (real-time)" / "audio file (offline)" / "audio + transcript" / "audio + transcript + emotion tags" |
+| Cultural context | yes | List of cultures/locales (e.g., `en-US`, `th-TH`, `ja-JP`, `mixed`). Gesture vocab is culture-conditional |
+| Style | yes | "neutral conversational" / "energetic presenter" / "formal/reserved" / "expressive teacher" / "scripted-character (with reference clips)" |
+| Target latency | yes | ms per chunk (e.g., 200ms streaming, 2s turn, "offline OK") |
+| Hardware envelope | yes | "cloud GPU" / "consumer GPU" / "edge / mobile" |
+| Cognitive-load constraint | optional | "gestures must not compete with speech load" (default: yes for teaching / accessibility contexts) |
+| License posture | yes | "permissive only" / "research OK" / "commercial w/ attribution" |
+| Existing baseline | optional | If migrating, current model + observed limitation |
+
+Spec mode: `--spec gesture-spec.yaml`. Interactive: AskUserQuestion in order.
+
+---
+
+## Procedure
+
+### Step 0: Locate plan root + slug
+
+```bash
+PLAN_ROOT="${CLAUDE_PLANS_DIR:-$HOME/.gstack/projects/$(basename "$PWD")}/avatars"
+mkdir -p "$PLAN_ROOT"
+echo "PLAN_ROOT: $PLAN_ROOT"
+```
+
+Use the avatar slug from `/avatar-design`. Outputs land at
+`$PLAN_ROOT/{slug}/gestures/`.
+
+### Step 1: Confirm intent + check avatar-design upstream
+
+AskUserQuestion (preamble format):
+- **Re-ground:** project + branch + avatar slug.
+- **Simplify:** "Co-speech gestures are the difference between a 'talking head' and
+  an avatar that feels alive. But they break in three ways: wrong cultural vocab,
+  too-many gestures (cognitive overload), or stiff retargeting. The skill picks the
+  model, designs the vocab per culture, and writes the retargeting plan."
+- **RECOMMENDATION:** A — read `/avatar-design` ARCHITECTURE.md first so body rig
+  + use case + latency budget are consistent.
+- **Options:**
+  - A) `/avatar-design` is done, design the gesture layer. Completeness: 10/10.
+  - B) No architecture yet — design gestures standalone (rework risk). Completeness: 7/10.
+  - C) Re-pick existing gesture model (current failing). Completeness: 9/10.
+
+### Step 2: Gather the spec (interactive or `--spec`)
+
+For each input row, AskUserQuestion. Gloss the tricky fields:
+
+- **use case**: "conversational means the avatar gestures while listening AND
+  speaking — turn-taking, back-channel nods, brief beat gestures. Presenter is
+  one-way — more deliberate, larger amplitude, deictics matter. Character means
+  scripted, possibly stylized."
+- **cultural context**: "Gesture grammar is culture-bound. American 'thumbs up'
+  is rude in parts of West Asia. Thai pointing uses the chin, not the index
+  finger. Japanese formal speech has reduced gesture amplitude. We design a
+  per-culture vocabulary."
+- **cognitive-load**: "When gestures and speech compete for attention (teaching,
+  accessibility), gestures must reinforce, not compete. We'll route through
+  `/cognitive-load-audit` if you say yes."
+
+### Step 3: Model recommendation
+
+Apply the decision matrix below, then write
+`$PLAN_ROOT/{slug}/gestures/MODEL.md`.
+
+**Decision matrix (illustrative — re-verify against current GENEA challenge SOTA):**
+
+| If user needs... | Recommended model | Rationale | License |
+|---|---|---|---|
+| Real-time conversational, lightweight beats | **Audio2Gestures (lightweight)** / **DiffGesture (distilled)** | <200ms latency, beats + light deictics, SMPL-X output | Apache 2.0 / per repo |
+| Cinematic presenter, full body, max quality | **GENEA Challenge 2023 SOTA winner** (DiffuseStyleGesture+, ZeroEGGS variants) | Diffusion-based, high diversity, full-body SMPL-X, offline | per repo (often MIT/Apache) |
+| Style transfer (presenter style → conversational) | **ZeroEGGS** | Style embedding from reference clip; transfers to new audio | per repo |
+| Highly controllable (specify amplitude, frequency, lateral bias) | **DiffuseStyleGesture+** | Diffusion + classifier-free guidance on style + amplitude | per repo |
+| Character / stylized / scripted | Hybrid: model emits beats, animator overlays scripted deictics | Pure-ML loses scripted clarity; hybrid keeps both | n/a |
+| Edge / mobile | **MotionGPT (distilled)** / **lightweight audio2beat** | Limited inventory but real-time on CPU | per repo |
+| Sign-context — DO NOT USE THIS SKILL | Route to `/avatar-sign` | Sign hands are linguistic, not co-speech | n/a |
+| Mocap-retargeting (no ML) | Pure retargeter (e.g., **Mixamo-style** + animator) | When ML quality is below your bar and you have a mocap library | n/a |
+
+For each recommendation include in MODEL.md:
+- Picked backbone + version pin (commit SHA / release tag / GENEA challenge year).
+- Framework: PyTorch (default).
+- Body skeleton format: SMPL-X (most ML models), VRM (game engines), BVH (mocap-style).
+- Hardware envelope: training + inference.
+- What it CAN'T do: e.g., GestureDiffusion is offline-only; lightweight Audio2Gestures
+  has narrow inventory; ZeroEGGS needs a reference clip.
+
+### Step 4: Cultural-gesture vocab
+
+Write `$PLAN_ROOT/{slug}/gestures/VOCAB.yaml` with one section per cultural context.
+Each section enumerates the gesture inventory the model is allowed / encouraged /
+forbidden to emit.
+
+**Inventory categories** (per culture):
+- **Beats** — non-meaningful rhythmic motion synced to prosodic stress.
+- **Deictics** — pointing / referencing in space. Culture-specific: index-finger
+  (Western), chin-point (Thai, Indigenous Amazonian), open-palm (formal Japanese).
+- **Iconic** — gestures that depict the referent (small/large, fast/slow, the
+  shape of an object).
+- **Metaphoric** — gestures that depict an abstract concept (time as flowing
+  forward in English speakers; backward in some Andean languages).
+- **Emblems** — culture-specific gestures with conventional meaning (OK, peace,
+  thumbs up — high taboo risk; flag for review).
+- **Adaptors** — self-touching / object-touching, usually filtered out in
+  presenter contexts.
+
+Per-culture section format:
+```yaml
+culture: th-TH
+beats:
+  amplitude: small_to_medium
+  frequency: prosodic_stress_aligned
+  lateral_bias: slight_left_right_symmetry
+deictics:
+  primary_form: chin_point
+  index_finger_point: avoid (impolite in formal contexts)
+  open_palm_point: OK for indicating self or audience
+iconic:
+  permitted: yes
+  size_metaphors: vertical_axis_matches_value (high/low)
+metaphoric:
+  permitted: yes
+  notes: |
+    Thai time-flow is horizontal-forward like English; safe to share metaphors.
+emblems_forbidden:
+  - thumbs_up (informal, fine in casual; flag for formal contexts)
+  - OK_sign (neutral)
+  - wai_gesture (cultural; only with explicit prompt)
+adaptors:
+  filter: yes (default for presenter; allow some for conversational)
+sources:
+  - linguistic_anthropology_reference: "Kita 2003 — Pointing"
+  - cultural_consultation_required: yes for emblems
+```
+
+For mixed-culture contexts, list cultures in order of dominance and write a
+disambiguation rule (e.g., "default to en-US; override emblems with th-TH set
+when transcript contains Thai text").
+
+### Step 5: Style adaptation strategy
+
+Write `$PLAN_ROOT/{slug}/gestures/STYLE.md`:
+
+- **Style embedding source:** reference clip / textual style prompt / fixed style
+  config / learned per-speaker embedding.
+- **Amplitude / frequency / lateral-bias control:** how the model is told "be more
+  energetic" or "more formal."
+- **Retargeting strategy:** model emits SMPL-X / BVH / VRM → avatar body rig.
+  - SMPL-X to SMPL-X = direct.
+  - SMPL-X to VRM = bone-mapping table + scale calibration.
+  - SMPL-X to custom rig = manual joint mapping + IK solver.
+- **MANO hands integration** (if hand articulation matters for fine deictics): SMPL-X
+  + MANO drives hands; co-speech models rarely fine-tune hands well, so hands often
+  get a separate fine-tune pass.
+- **Audio feature pre-processing:** mel-spectrogram + prosodic features + (optional)
+  transcript-aligned phonemes + (optional) emotion tags from `/expression-synth`.
+- **Beat extraction:** how prosodic beats are detected (forced-aligned phoneme
+  boundaries / energy peaks / pitch-accent detector).
+
+### Step 6: Eval plan
+
+Write `$PLAN_ROOT/{slug}/gestures/EVAL.md`:
+
+- **FGD (Fréchet Gesture Distance)** — primary auto metric (GENEA-standard).
+- **Diversity (avg per-clip joint variance)** — gestures should not collapse to
+  the mean pose.
+- **Beat alignment** — % of motion beats within ±N ms of prosodic stress.
+- **Cultural-vocab compliance** — auto-check: forbidden emblems must not appear.
+- **Human MOS** for production tier — at least 30 raters per cultural context,
+  rate: appropriateness, naturalness, expressiveness.
+- **Cognitive-load probe** (if enabled): show clip pairs (with/without gestures),
+  ask raters: did gestures help or hurt comprehension? `/cognitive-load-audit`
+  consumes this.
+- **Retargeting quality** — joint-angle distortion after retargeting to user's rig.
+
+Eval cadence: per-culture before adding new culture; nightly during training; full
+human panel before release.
+
+### Step 7: Hand-off
+
+Print the four file paths. AskUserQuestion:
+- **Simplify:** "Gesture plan is on disk. Next is `/autoplan-full`, OR continue with
+  `/expression-synth` for the face-expression layer, OR (if sign-language is in
+  scope) `/avatar-sign`."
+- **RECOMMENDATION:** B — design `/expression-synth` next so the face + body
+  expressivity surfaces line up.
+- **Options:**
+  - A) Run /autoplan-full on this plan. Completeness: 10/10.
+  - B) Continue with `/expression-synth`. Completeness: 10/10.
+  - C) Stop here — review docs first. Completeness: 9/10.
+
+---
+
+## Outputs
+
+```
+$PLAN_ROOT/{slug}/gestures/
+├── MODEL.md   # Backbone + version + hardware envelope + can't-do list
+├── VOCAB.yaml # Per-culture gesture inventory: beats/deictics/iconic/metaphoric/emblems/adaptors
+├── STYLE.md   # Style embedding source, amplitude control, retargeting strategy
+└── EVAL.md    # FGD / diversity / beat alignment / cultural compliance / MOS / cognitive load
+```
+
+YAML frontmatter on every file with `target`, `version`, `derived_from`.
+
+---
+
+## Edge cases
+
+- **Mixed-culture context with conflicting emblems:** the same gesture is
+  innocuous in one culture and offensive in another (thumbs-up). Flag, ask user
+  to set a default culture, and forbid the gesture in the others.
+- **Sign-language context bleeds in:** if the user starts asking about ASL/TSL
+  hand shapes, STOP. Route to `/avatar-sign`. Sign hands are NOT co-speech.
+- **Real-time + diffusion model:** GestureDiffusion at full denoising steps is
+  not real-time. Recommend distilled / few-step variant or lightweight
+  Audio2Gestures.
+- **Body rig has no hands:** fine deictics need hands. Either downgrade the
+  vocab (broad arm pointing only) or upgrade the rig.
+- **Cognitive-load-sensitive context (teaching, accessibility):** route through
+  `/cognitive-load-audit` mandatorily. Beats are usually fine; iconic / metaphoric
+  during dense speech is risky.
+- **License conflict:** GENEA challenge winners have varied licenses; check each.
+- **Style reference clip required but unavailable:** ZeroEGGS falls back to a
+  prompt or fixed config; quality drops noticeably.
+- **Retargeting to a stylized 2D body:** ML models output SMPL-X; 2D rigs need a
+  whole separate retargeter. Recommend keyframe-based or skeleton-cell-shaded
+  pipelines instead; this skill's ML recommendations don't fit.
+- **Hall's TSL teaching avatar:** mixed Thai-English content, teaching context.
+  Recommend: DiffuseStyleGesture+ trained on Thai presenter data + per-culture
+  vocab (Thai dominant, English fallback for code-switch) + `/cognitive-load-audit`
+  enabled. Note: TSL fingerspelling and sign content go through `/avatar-sign`,
+  NOT this skill.
+
+---
+
+## Dependencies
+
+- **Family P upstream:** `/avatar-design` ARCHITECTURE.md (body rig, use case,
+  latency budget).
+- **Family P parallel:** `/lip-sync`, `/expression-synth`, `/avatar-sign`.
+- **Family L:** `/tts-design` (speech is upstream input), `/prosody-control`
+  (pitch / stress features improve beat alignment).
+- **Family G:** pose detection for mocap-retargeting alternates.
+- **HMC (`/cognitive-load-audit`):** gates gesture density in accessibility /
+  teaching contexts.
+- **S9 / S12:** eval-store task_ids (`gesture-{slug}-{metric}`) + frontmatter.
+- **`/discover --domain gesture`:** refresh SOTA before recommending.
+- **`/autoplan-full`:** expands into a build pipeline.
+- **`/finetune --domain gesture`:** downstream executor.
+- **lib/gesture-retarget.ts** (new): SMPL-X ↔ VRM / custom-rig retargeter.
+- Checkpoints (downloaded downstream, NOT here): GENEA SOTA winners, Audio2Gestures,
+  GestureDiffusion, ZeroEGGS, DiffuseStyleGesture / +, MotionGPT.
+
+---
+
+## Important Rules
+
+- **Never train.** Plan-on-disk ends this skill.
+- **Never download a checkpoint.** Downstream skills do that.
+- **Per-culture vocab is mandatory.** A single en-US gesture inventory on a
+  multicultural deployment is a known failure mode.
+- **Refuse sign-language context.** Route to `/avatar-sign`.
+- **Refuse physics-impossible specs.** Real-time + diffusion = clarify.
+- **Refuse license conflicts.** Surface and re-pick.
+- **Cite specific versions / GENEA challenge years.** "GENEA SOTA" alone is not
+  enough.
+- **Plan must reference S9 task_ids and `/voice-eval` for prosodic-beat alignment.**
+- **Cognitive-load review is mandatory for teaching/accessibility contexts.**

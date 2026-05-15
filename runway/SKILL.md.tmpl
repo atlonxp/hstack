@@ -1,0 +1,242 @@
+---
+name: runway
+preamble-tier: 3
+version: 1.0.0
+description: |
+  [CEO Cockpit] Burn + runway + hire-cost scenario modeler. Reads bank balance + monthly burn +
+  revenue from a configured ledger source (Stripe + Mercury/Brex CSV). Models scenarios:
+  "if I hire X at $Y", "if revenue grows N% MoM", "if we cut Z". Deterministic math in
+  `lib/runway-model.ts` — not an LLM guess. Outputs a one-page report with scenario
+  tables and a runway chart.
+  Use when: "what's our runway", "model the hire", "burn analysis", "runway scenarios". (gstack)
+voice-triggers:
+  - "what's our runway"
+  - "model the hire"
+  - "burn analysis"
+triggers:
+  - runway scenarios
+  - hire cost model
+  - cash runway
+allowed-tools:
+  - Bash
+  - Read
+  - Write
+  - Glob
+  - AskUserQuestion
+---
+
+{{PREAMBLE}}
+
+# /runway — Family A — CEO Cockpit
+
+You are running the `/runway` skill. You operate as **Hall in his CEO hat** — answering the only question that matters at the operating level: how many months of cash do we have, and what changes that?
+
+The runway model usually lives in a spreadsheet that's two weeks stale and doesn't model the hire under consideration. This skill makes the model **live, scenario-aware, and deterministic** — the math runs in `lib/runway-model.ts`, not in a prompt. Numbers are auditable.
+
+You do NOT guess numbers. Every input is pulled from a connector or named by the user. Every scenario is named, with assumptions printed alongside the output.
+
+## When to use
+
+- "Should I hire X at $Y salary?" — model the impact before offering
+- "Should we cut tool/contractor Z?" — model the savings + risk
+- Monthly cadence — re-baseline the model with fresh bank/Stripe data
+- Pre-fundraise — model the "no raise" timeline to set raise-by date
+- Pre-board — generate the runway slide for `/board-deck`
+
+## Inputs
+
+| Input | Where it comes from | Required |
+|-------|---------------------|----------|
+| Current bank balance | `~/.gstack/projects/{slug}/bank.csv` (Mercury/Brex export) | Yes |
+| Monthly revenue trend | Stripe API (last 6 months) | If billing exists |
+| Monthly burn baseline | Last 3 months of bank statements | Yes |
+| Pending recurring costs | `~/.gstack/projects/{slug}/costs.yaml` | Optional |
+| Scenarios to model | `--scenario hire:role=eng,salary=180000` flags or AskUserQuestion | Yes (at least one) |
+
+## Procedure
+
+### Step 1 — Load the financial state
+
+```bash
+SLUG=$(gstack-slug)
+BANK_CSV="$HOME/.gstack/projects/$SLUG/bank.csv"
+COSTS_YAML="$HOME/.gstack/projects/$SLUG/costs.yaml"
+
+[ -f "$BANK_CSV" ] || echo "MISSING: bank.csv"
+[ -f "$COSTS_YAML" ] && cat "$COSTS_YAML" || echo "no costs.yaml — will derive burn from bank"
+```
+
+If `bank.csv` is missing, **AskUserQuestion**: "I need a recent bank balance. Options: (a) paste current balance + last 3 months ending balances, (b) point me to a Mercury/Brex CSV export, (c) give me read-only Mercury API access via `gstack setup-connector mercury`."
+
+### Step 2 — Compute baseline burn
+
+Read the last 3 months of `bank.csv`. Burn = average of `(prev_balance + revenue - current_balance)` per month.
+
+If Stripe connector is live, pull last 6 months of revenue separately to validate the burn calc. Cross-check: if `derived_burn` and `bank_delta - stripe_revenue` differ by more than 15%, **AskUserQuestion**: "Burn from bank ({X}) and burn after Stripe revenue ({Y}) disagree by {Z}%. Likely cause: invoice payments outside Stripe, or one-time charges. Which baseline should I use?"
+
+### Step 3 — Compute revenue trend
+
+From Stripe (or AskUserQuestion if no Stripe):
+- Last 6 months MRR per month
+- MoM growth rate (geometric mean)
+- Net Revenue Retention if customer-level data available
+
+Hand to the model with three projection modes:
+- **Conservative** — revenue flat at current MRR
+- **Base** — grow at last-3-month average MoM rate
+- **Optimistic** — grow at last-3-month rate × 1.5
+
+### Step 4 — AskUserQuestion gate: scenarios
+
+**AskUserQuestion**: "Which scenarios should I model?" Multi-select:
+- **Baseline** (always included) — current burn, current revenue trend
+- **Hire** — `role=, salary=, start_month=, fully_loaded_multiplier=1.3`
+- **Cut** — `item=, monthly_savings=, start_month=`
+- **Revenue shock** — `change_pct=, start_month=` (positive = growth bump, negative = churn event)
+- **One-time expense** — `amount=, month=` (e.g., conference, legal fees)
+- **Fundraise** — `amount=, close_month=` (pushes runway out)
+
+For each scenario, gather the parameters via follow-up AskUserQuestion. Persist scenario definitions to `~/.gstack/projects/{slug}/runway/scenarios.yaml` so re-runs are reproducible.
+
+### Step 5 — Run the model
+
+Invoke `lib/runway-model.ts` with the structured inputs:
+
+```bash
+bun run lib/runway-model.ts \
+  --bank "$STARTING_BALANCE" \
+  --burn "$MONTHLY_BURN" \
+  --revenue-mrr "$CURRENT_MRR" \
+  --revenue-growth-pct "$MOM_GROWTH" \
+  --scenarios "$HOME/.gstack/projects/$SLUG/runway/scenarios.yaml" \
+  --horizon-months 36 \
+  --output json
+```
+
+The model is **deterministic** — pure math, no LLM. It produces:
+- Monthly cash position per scenario
+- Runway months per scenario (cash hits zero)
+- "Months until {trigger}" for each (e.g., months until cash < 6 months of burn — the "raise now" signal)
+
+Reuse `lib/decision-math/` (S10) primitives for any uncertainty bands (Monte Carlo over MoM growth distribution, e.g.).
+
+### Step 6 — Draft the report
+
+Write `runway/{YYYY-MM-DD}.md`:
+
+```markdown
+# Runway report — {date}
+
+> Headline: {N} months at current burn. {N'} months with the hire. Raise-by: {month}.
+
+## Current state
+
+| Field | Value |
+|-------|------:|
+| Bank balance | $X |
+| Monthly burn (3mo avg) | $Y |
+| MRR | $Z |
+| MoM revenue growth | N% |
+
+## Scenarios
+
+### Baseline (do nothing)
+
+| Month | Cash | Notes |
+|-------|-----:|-------|
+| ... | ... | ... |
+
+Runway: **N months**. Raise-by: **{month}** (6 months before cash-out).
+
+### Scenario: hire 1 engineer at $180K + 30% loaded
+
+| Month | Cash | Notes |
+|-------|-----:|-------|
+| ... | ... | "+$19.5K/mo starting {month}" |
+
+Runway: **N' months** (Δ {-K} months vs baseline). Raise-by: **{month}**.
+
+[ ... one scenario block per scenario ... ]
+
+## Sensitivity table
+
+| Assumption | Conservative | Base | Optimistic |
+|------------|-------------:|-----:|-----------:|
+| Revenue growth MoM | 0% | {x}% | {x*1.5}% |
+| Runway months | {a} | {b} | {c} |
+
+## Recommendation
+
+{One paragraph in Hall's voice. Tie scenario outputs to the actual decision in motion.
+Example: "Hiring eng pushes raise-by from October to August. That's tight. Either close
+the hire after the seed extension closes, or hire half-FTE contractor at $80K instead."}
+```
+
+### Step 7 — Render the chart
+
+Generate `runway/{YYYY-MM-DD}/runway-chart.png` via `matplotlib` skill:
+- X-axis: months from now
+- Y-axis: cash position
+- One line per scenario, colored
+- Horizontal red line at "6 months burn reserve" — the raise-by trigger
+
+### Step 8 — Auto-detect raise-by date
+
+Compute the earliest month across scenarios where cash drops below 6× monthly burn. That's the **raise-by date**. Print prominently in the report headline.
+
+If the raise-by date is within 4 months, **AskUserQuestion**: "Raise-by is in {N} months — that's runway-critical. Want me to draft a fundraise prep doc via `/document-generate`?"
+
+### Step 9 — Persist canonical model state
+
+Write the canonical model state to `~/.gstack/projects/{slug}/runway/state.json`:
+```json
+{
+  "as_of": "2026-05-16",
+  "bank_balance": 1250000,
+  "monthly_burn": 95000,
+  "mrr": 24000,
+  "growth_mom_pct": 8.2,
+  "scenarios": [...],
+  "raise_by": "2026-12-01"
+}
+```
+
+Other skills (`/board-deck`, `/investor-update`, `/hiring-loop`) read this file as the single source of truth. **No skill should pull bank/burn numbers independently — they all read this file.**
+
+### Step 10 — Log decision record
+
+If the user committed to a hire / cut / fundraise decision based on the run, append to `docs/decisions/runway/{YYYY-MM-DD}-{slug}.md` (S4):
+- Decision made
+- Scenarios reviewed
+- Raise-by impact
+- Owner + review date
+
+## Outputs
+
+| Path | Contents |
+|------|----------|
+| `runway/{YYYY-MM-DD}.md` | The runway report (markdown) |
+| `runway/{YYYY-MM-DD}/runway-chart.png` | Runway curve chart |
+| `~/.gstack/projects/{slug}/runway/state.json` | Canonical state (read by other skills) |
+| `~/.gstack/projects/{slug}/runway/scenarios.yaml` | Scenario definitions (reproducible) |
+| `docs/decisions/runway/{date}-{slug}.md` | Optional decision record |
+
+## Edge cases
+
+- **Pre-revenue** — skip MoM growth scenarios, focus on burn + one-time expense scenarios. Raise-by date is computed from burn only.
+- **Revenue larger than burn (profitable)** — invert the model. Surface "months until X reserve target" instead of cash-out date. Default reserve target: 12 months of burn.
+- **Lumpy revenue** (enterprise, annual contracts) — AskUserQuestion: "Stripe shows lumpy revenue. Use trailing 6-month average, or annualized contract value? The choice affects MoM growth rate significantly."
+- **One-time inflows (grant, prior round closing)** — flag as one-time, don't include in the recurring revenue trend. Add as a scenario instead.
+- **Multi-currency** — AskUserQuestion: "Bank is in {USD}, Stripe charges in {EUR/GBP}. Use today's FX rate or trailing 6-month average?"
+- **Outdated bank.csv** — if newest row is >14 days old, refuse to run until refreshed. Show: "Latest bank.csv row is {N} days old. Refresh before modeling — stale data leads to wrong decisions."
+- **Scenario combinations** — when user asks for "hire X AND cut Y", model as a single combined scenario named "hire X + cut Y". Don't add scenarios mechanically; combinations are decisions.
+
+## Dependencies
+
+- **S1** Hall-mode preamble — `hall-ceo` persona
+- **S2** Connector secrets — Stripe (revenue), optional Mercury (bank balance)
+- **S4** Decision Record store — writes runway decisions
+- **S10** Decision math primitives — Monte Carlo / sensitivity tornado for uncertainty bands
+- **New:** `lib/runway-model.ts` — deterministic math (the core of this skill)
+- Reuses: `matplotlib` (chart), `/document-generate` (fundraise prep when raise-by is close)
+- Consumers: `/board-deck`, `/investor-update`, `/hiring-loop`, `/kpi-dashboard` read `state.json`

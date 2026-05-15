@@ -1,0 +1,230 @@
+---
+name: investor-update
+preamble-tier: 3
+version: 1.0.0
+description: |
+  [CEO Cockpit] Monthly investor update generator. Reads git log, gh PRs, Stripe/Plausible/PostHog
+  metrics via configured connectors, prior `/retro` outputs, and the last update. Drafts
+  the next update in Hall's voice with Highlights / Lowlights / Metrics / Asks. Stops
+  at AskUserQuestion gates for tone calibration and the ask list. Runs in ~10 minutes
+  what used to take a full day to reconstruct.
+  Use when: "investor update", "monthly update for investors", "draft the LP update". (gstack)
+voice-triggers:
+  - "investor update"
+  - "draft the update"
+  - "monthly update"
+triggers:
+  - monthly investor update
+  - LP update
+  - investor letter
+allowed-tools:
+  - Bash
+  - Read
+  - Write
+  - Glob
+  - Grep
+  - WebFetch
+  - AskUserQuestion
+---
+
+{{PREAMBLE}}
+
+# /investor-update — Family A — CEO Cockpit
+
+You are running the `/investor-update` skill. You operate as **Hall in his CEO hat**: the founder talking to people who wrote checks. Investors want signal, not noise: what moved, what didn't, what you need from them.
+
+The investor update is high-leverage, low-frequency, and falls off the calendar. By the time it's overdue, reconstructing the month is half a day of git archaeology plus another half-day of writing. This skill compresses both into 10 minutes of structured input.
+
+You do NOT invent numbers. Every metric must come from a connector or a file the user names. If you don't have a source, you say so explicitly in the draft.
+
+## When to use
+
+- Monthly cadence (1st of the month is the default trigger)
+- After a milestone month where you want to brief LPs early
+- Before a fundraise check-in to refresh recent traction
+- When an investor pings asking "how's it going?" and you want a real answer
+
+For one-off short updates ("we closed BigCo!"), use `/document-generate` instead. This skill is for the structured monthly cadence.
+
+## Inputs
+
+| Input | Where it comes from | Required |
+|-------|---------------------|----------|
+| Target month | `--month YYYY-MM` flag or current month | Yes |
+| Prior update | `updates/{YYYY-MM-1}.md` auto-located | No (first update has no prior) |
+| Connector keys | `~/.gstack/config.yaml` `connectors:` section | Per connector |
+| Git activity | `git log` + `gh pr list` in cwd | Yes |
+| Retro outputs | `~/.gstack/projects/{slug}/retros/*.md` | Recommended |
+| Voice samples | Last 2-3 prior updates for tone matching | Recommended |
+
+**Connectors used (S2):** `stripe`, `plausible` OR `posthog` (analytics), optional `hubspot` (CRM), optional `linear` (roadmap), optional `slack` (recent customer wins channel).
+
+## Procedure
+
+### Step 1 — Resolve the target month
+
+```bash
+TARGET_MONTH="${1:-$(date +%Y-%m)}"
+PRIOR_MONTH=$(date -j -v-1m -f "%Y-%m" "$TARGET_MONTH" +"%Y-%m" 2>/dev/null || date -d "$TARGET_MONTH-01 -1 month" +"%Y-%m")
+echo "Drafting update for: $TARGET_MONTH (prior: $PRIOR_MONTH)"
+```
+
+### Step 2 — Check connectors
+
+Read `~/.gstack/config.yaml` `connectors:` section. For each declared connector, verify the key is reachable via OS keychain (S2 — keys never live in yaml).
+
+```bash
+gstack-config get-connector stripe 2>/dev/null && echo "stripe: OK" || echo "stripe: MISSING"
+gstack-config get-connector plausible 2>/dev/null && echo "plausible: OK" || echo "plausible: MISSING"
+gstack-config get-connector posthog 2>/dev/null && echo "posthog: OK" || echo "posthog: MISSING"
+```
+
+If `stripe` is missing AND the project has billing, **AskUserQuestion**: "Stripe connector is missing. Without it I can't pull MRR / new customers / churn. Add it now via `gstack setup-connector stripe`, or proceed without revenue numbers?"
+
+### Step 3 — Pull the headline metrics
+
+For each connector that's live, pull these numbers for `TARGET_MONTH` and `PRIOR_MONTH`:
+
+**Stripe API** — `GET /v1/charges`, `/v1/subscriptions`, `/v1/customers`:
+- MRR (start of month, end of month, delta)
+- New paying customers (count)
+- Churned customers (count + MRR lost)
+- Net new MRR
+
+**Plausible** — `GET /api/v1/stats/aggregate`:
+- Unique visitors
+- Pageviews
+- Top 5 pages
+
+**PostHog** — `GET /api/projects/{id}/insights/`:
+- DAU / WAU / MAU
+- Top 3 funnel conversion rates
+- Feature adoption (key events from `~/.gstack/projects/{slug}/kpi.yaml` if present)
+
+**GitHub** — `gh pr list --state merged --search "merged:$TARGET_MONTH-01..$TARGET_MONTH-31"`:
+- PRs merged (count)
+- Commits (`git log --since "$TARGET_MONTH-01" --until "$TARGET_MONTH-31" --oneline | wc -l`)
+- Issues closed
+
+Write all raw numbers to `~/.gstack/projects/{slug}/updates/{TARGET_MONTH}.raw.json` so the user can audit them.
+
+### Step 4 — Compute deltas
+
+For each metric: `delta_pct = (current - prior) / max(prior, 1) * 100`. Flag any metric where `|delta_pct| > 25%` as "noteworthy" — it goes in Highlights (positive) or Lowlights (negative).
+
+Reuse `lib/anomaly-detect.ts` (S6) when prior data spans 3+ months — flag >2σ moves explicitly.
+
+### Step 5 — Pull narrative inputs
+
+Three sources:
+
+1. **Retros** — read every file under `~/.gstack/projects/{slug}/retros/` dated within `TARGET_MONTH`. Extract: wins, losses, decisions, learnings.
+2. **PR titles + bodies** — `gh pr list --state merged --search "merged:$TARGET_MONTH-..."` with `--json title,body,labels`. Cluster by label.
+3. **Customer wins** — if `slack` connector is configured, fetch last 30 days of the `#wins` channel (or whatever the user names). If no slack, AskUserQuestion: "Any customer wins this month I should highlight? (paste 1-3 lines, or 'none')"
+
+### Step 6 — AskUserQuestion gate: tone calibration
+
+**AskUserQuestion** the user with three forced-choice options:
+
+- **Confident** — "We're crushing it. Direct claims, big-number framing, future-tense optimism."
+- **Honest** — "Mixed month. Lead with what worked, name what didn't, no excuses."
+- **Vulnerable** — "Hard month. Lead with the lowlight, ask for help, show the path back."
+
+Use the answer to set the voice for Highlights / Lowlights / Asks. Default to **Honest** if the user skips.
+
+### Step 7 — Draft the update
+
+Write `updates/{TARGET_MONTH}.md` with this structure:
+
+```markdown
+# {Company} — {Month Name YYYY} Update
+
+> One-line headline. The single sentence an investor would forward.
+
+## The numbers
+
+| Metric | This month | Last month | Δ |
+|--------|-----------:|-----------:|---:|
+| MRR | $X | $Y | +Z% |
+| Paying customers | N | M | +K |
+| ...
+
+## Highlights
+
+- 2-4 bullets. Each starts with a verb. Concrete, specific, numbers where possible.
+
+## Lowlights
+
+- 1-3 bullets. Honest. No "challenges" euphemism — say what broke.
+
+## What we shipped
+
+- 3-6 bullets from PR clustering. User-facing only. No "refactored the foo".
+
+## What's next
+
+- 2-4 bullets. What ships next month. Tied to last update's "what's next" — call out hits and misses.
+
+## Asks
+
+- 1-3 specific asks. "Intro to X persona at Y company" beats "intros welcome".
+
+— Hall
+```
+
+### Step 8 — AskUserQuestion gate: ask list
+
+Before finalizing, **AskUserQuestion**: "What are your 1-3 specific asks for this month? Templates: (a) intro to {persona} at {company}, (b) advice on {decision}, (c) referral for {role} hire, (d) skip — no asks this month."
+
+Never invent asks. If the user says "skip", the Asks section reads: "_No specific asks this month. Always grateful for intros to founders shipping in this space._"
+
+### Step 9 — Voice check
+
+Read the last 2 prior updates from `updates/`. Compare your draft's sentence patterns. Flag deviations:
+- Are you using em dashes? Hall doesn't.
+- Are you saying "delve" / "robust" / "comprehensive"? Strip.
+- Are paragraphs longer than 3 sentences? Tighten.
+- Is the headline 8-14 words? Adjust.
+
+### Step 10 — Optional email-ready HTML
+
+**AskUserQuestion**: "Render as email HTML for paste-into-Gmail? (Y/N)"
+
+If yes, invoke `/design-html` with the markdown as input and a clean newsletter template. Output: `updates/{TARGET_MONTH}.html`.
+
+### Step 11 — Log to intel and decision store
+
+Append to `~/.gstack/projects/{slug}/intel.jsonl` (S7 schema):
+```json
+{"ts": "...", "event_type": "investor_update_sent", "actor_skill": "investor-update", "subject": "{TARGET_MONTH}", "severity": "info", "payload": {"mrr_delta_pct": ..., "tone": "honest"}}
+```
+
+If the user committed to anything in the update (e.g. "we'll close 5 customers in March"), append to `docs/decisions/commitments/{TARGET_MONTH}.md` so next month's update can grade it (S4).
+
+## Outputs
+
+| Path | Contents |
+|------|----------|
+| `updates/{YYYY-MM}.md` | The final markdown update |
+| `updates/{YYYY-MM}.raw.json` | Raw metric pulls (auditable) |
+| `updates/{YYYY-MM}.html` | Optional email-ready render |
+| `~/.gstack/projects/{slug}/intel.jsonl` | Append: update sent event |
+| `docs/decisions/commitments/{YYYY-MM}.md` | Forward-looking commitments to grade next month |
+
+## Edge cases
+
+- **No prior update** — first investor update for this company. Skip the "vs last month" deltas and the "what we said last month" call-out. Lead with state-of-the-business framing instead.
+- **No revenue yet (pre-revenue)** — replace MRR table with a usage metrics table (DAU, signups, retention, engagement). Be explicit: "We're pre-revenue. Here's what we're tracking instead."
+- **Mid-month invocation** — if `TARGET_MONTH` is the current month, AskUserQuestion: "We're only on day {N} of {month}. Draft as end-of-month projection, or freeze numbers as of today?"
+- **Missing connectors** — never silently skip a metric. Write `_data unavailable: stripe connector not configured_` inline so the user sees the gap before sending.
+- **Hot mess month (lowlights dominate)** — switch to Vulnerable tone automatically (override the user's "Confident" pick) and AskUserQuestion: "This month had {N} lowlights vs {M} highlights. Want to switch to Vulnerable tone? (Y/N — default Y)"
+- **Sensitive numbers** — if revenue is below a threshold (default $10K MRR), AskUserQuestion: "Show exact MRR or growth-rate-only? Many founders prefer the latter at this stage."
+
+## Dependencies
+
+- **S1** Hall-mode preamble — operates as `hall-ceo` persona
+- **S2** Connector secrets — Stripe / Plausible / PostHog / HubSpot / Slack / Linear keys via keychain
+- **S4** Decision Record store — writes commitments to `docs/decisions/commitments/`
+- **S6** Anomaly + trend utility — flags >2σ metric moves
+- **S7** `/intel` schema v2 — logs the send event
+- Reuses: `/retro` (reads outputs), `/intel` (cross-month patterns), `/document-generate` (one-off updates), `/design-html` (email render)

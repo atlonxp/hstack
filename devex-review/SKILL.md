@@ -3,7 +3,7 @@ name: devex-review
 preamble-tier: 3
 version: 1.0.0
 description: |
-  Live developer experience audit. Uses the browse tool to actually TEST the
+  [UX Audit] Live developer experience audit. Uses the browse tool to actually TEST the
   developer experience: navigates docs, tries the getting started flow, times
   TTHW, screenshots error messages, evaluates CLI help text. Produces a DX
   scorecard with evidence. Compares against /plan-devex-review scores if they

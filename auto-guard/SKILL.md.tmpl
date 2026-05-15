@@ -1,0 +1,264 @@
+---
+name: auto-guard
+preamble-tier: 3
+version: 1.0.0
+description: |
+  [Tools] Automatic security + QA hooks for git events. Installs Claude Code
+  hooks that run a lightweight /cso scan on staged files before each commit
+  (OWASP Top 10, offline, <5s) and an async /qa-only smoke test after each
+  push. Critical secrets block the commit by default; everything else warns.
+  Use when asked to "install auto-guard", "auto security check", "pre-commit
+  scan", "qa on push", or "automate security hooks". (gstack)
+voice-triggers:
+  - "auto guard"
+  - "install hooks"
+  - "pre commit security"
+allowed-tools:
+  - Bash
+  - Read
+  - Write
+  - Edit
+  - AskUserQuestion
+triggers:
+  - install auto-guard
+  - pre-commit security scan
+  - qa on push
+---
+
+{{PREAMBLE}}
+
+# /auto-guard — Automatic Security + QA Hooks
+
+You install lightweight, fast, fail-open hooks that run security and QA checks
+on git events without slowing developers down. The model is: catch the obvious
+stuff at commit time, run deeper QA asynchronously after push, and never block
+on internal tool failures.
+
+What this skill does:
+
+- Installs a **PreToolUse** hook on `Bash` matching `git commit*` that runs
+  `bin/auto-security-check.sh` (OWASP Top 10 scan on staged files, offline,
+  <5s budget with self-kill).
+- Installs a **PostToolUse** hook on `Bash` matching `git push*` that runs
+  `bin/auto-qa-check.sh` (async smoke QA — never blocks).
+- Writes its configuration to `~/.claude/settings.json` (user level) or to
+  `.claude/settings.local.json` (project level — user picks).
+- Maintains an opt-out story: `GSTACK_AUTOGUARD_OFF=1` skips both hooks for one
+  invocation; `gstack-config set autoguard off` disables them permanently.
+
+What this skill does NOT do:
+
+- It does NOT run /cso. /cso is the comprehensive audit; auto-guard is the
+  pre-commit smoke test using bash regex patterns. They are complementary.
+- It does NOT auto-fix findings. Only reports.
+- It does NOT do anything online. CVE lookups, dependency audits, etc. are
+  out of scope — they belong in /cso.
+
+## When to use
+
+Use `/auto-guard` when:
+
+1. The user wants secrets / credentials caught before they hit git history.
+2. The user is onboarding hstack into a team and wants a consistent guardrail.
+3. The user asks for "automatic security" or "pre-commit hooks for security".
+
+Do NOT use `/auto-guard` when:
+
+- The user wants a full security audit — use `/cso` instead.
+- The user wants to fix vulnerabilities — use `/cso` then `/investigate`.
+- The user wants browser-based bug testing — use `/qa`.
+
+## Inputs
+
+| Input | Default | Notes |
+|-------|---------|-------|
+| Scope | user-level | `--project` writes to `.claude/settings.local.json` instead |
+| Block on critical | true | Set false to warn-only (`GSTACK_AUTOGUARD_BLOCK=0`) |
+| Budget seconds | 5 | Hard cap; self-kill if exceeded |
+| QA timeout | 120 | Async background timeout for post-push QA |
+| Target URL for QA | auto-detect | From `GSTACK_QA_URL`, `.gstack/qa-target`, or CLAUDE.md |
+
+## Procedure
+
+### Step 1: Confirm scope and intent
+
+Use AskUserQuestion to confirm:
+
+```
+Where should auto-guard install hooks?
+
+Options:
+  A) User-level (~/.claude/settings.json) — applies to ALL projects
+  B) Project-level (.claude/settings.local.json) — this repo only
+  C) Print the snippet only, don't install (manual review first)
+```
+
+If the user has not yet decided whether to block on criticals, also ask:
+
+```
+What should happen when a critical secret is detected in a staged file?
+
+Options:
+  A) Block the commit (default) — developer must remove the secret or bypass
+  B) Warn but allow — log to ~/.gstack/projects/{slug}/auto-guard.log only
+```
+
+### Step 2: Detect the install path
+
+The scripts live in the hstack skill directory. We need their absolute path
+because the hook command is invoked from arbitrary working directories.
+
+```bash
+# Find where hstack/gstack is installed.
+for candidate in \
+  "${HOME}/.claude/skills/gstack/bin" \
+  "${HOME}/.claude/skills/hstack/bin" \
+  "$(git rev-parse --show-toplevel 2>/dev/null)/bin"; do
+  if [ -x "${candidate}/auto-security-check.sh" ]; then
+    echo "AUTO_GUARD_BIN=${candidate}"
+    break
+  fi
+done
+```
+
+If none resolves, surface that as an error and stop: the scripts must exist
+before the hook can reference them.
+
+### Step 3: Generate the settings.json snippet
+
+Write the snippet to a temp file and show it to the user before merging:
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "filter": "git commit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash <AUTO_GUARD_BIN>/auto-security-check.sh",
+            "statusMessage": "Running pre-commit security scan...",
+            "blocking": true
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "filter": "git push",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash <AUTO_GUARD_BIN>/auto-qa-check.sh",
+            "statusMessage": "Scheduling post-push QA...",
+            "blocking": false
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+Replace `<AUTO_GUARD_BIN>` with the absolute path detected in Step 2.
+
+### Step 4: Merge into the target settings file
+
+Use Read to load the target settings file (creating it if it doesn't exist),
+then Edit to merge the hook block. NEVER overwrite the whole file — only add
+or update the `hooks` key.
+
+If `hooks` already has entries:
+
+- Skip silently if a matching `auto-security-check.sh` / `auto-qa-check.sh`
+  entry is already present.
+- Otherwise append to the array; preserve existing entries.
+
+After write, validate the JSON parses (use `jq .` or `node -e 'JSON.parse(require("fs").readFileSync(0,"utf-8"))'`). If invalid, restore from a backup we wrote first.
+
+### Step 5: Verify install + smoke test
+
+Run the scripts directly to confirm they work:
+
+```bash
+# Should exit 0 quickly (no staged files).
+bash <AUTO_GUARD_BIN>/auto-security-check.sh
+echo "exit=$?"
+
+# Should print "QA scheduled in background" and return.
+GSTACK_AUTOGUARD_OFF=1 bash <AUTO_GUARD_BIN>/auto-qa-check.sh
+echo "exit=$?"
+```
+
+Confirm both return 0 in under a second.
+
+### Step 6: Print the operator guide
+
+Tell the user:
+
+- **Bypass once:** `GSTACK_AUTOGUARD_OFF=1 git commit ...`
+- **Switch to warn-only:** export `GSTACK_AUTOGUARD_BLOCK=0`
+- **Change budget:** `GSTACK_AUTOGUARD_BUDGET=10` (default 5s)
+- **Disable permanently:** remove the hooks block from
+  `~/.claude/settings.json` (or `.claude/settings.local.json`)
+- **Where the log lives:** `~/.gstack/projects/{slug}/auto-guard.log`
+- **Find latest QA report:** check `~/.gstack/projects/{slug}/auto-qa-latest.txt`
+
+## Outputs
+
+1. Updated settings.json with PreToolUse + PostToolUse hooks
+2. Backup of the prior settings.json at `settings.json.autoguard-backup.{ts}`
+3. A verification summary in the chat showing both hook scripts run cleanly
+4. The operator guide (bypass / disable / where logs go)
+
+## Edge cases
+
+- **Settings file missing.** Create it with `{ "hooks": { ... } }` only.
+- **Settings file malformed JSON.** Refuse to write; ask the user to fix it
+  first. Never clobber unparseable user config.
+- **Scripts not executable.** `chmod +x` them as part of Step 2.
+- **Hooks already installed.** Detect by matching the script filename in the
+  hook command string; offer to update vs leave alone via AskUserQuestion.
+- **Repo not a git repo at hook fire time.** The scripts handle this — they
+  exit 0 immediately.
+- **Mid-merge / mid-rebase.** Scripts skip themselves. No re-entry needed.
+- **Performance budget violation.** Scripts self-kill via background watchdog
+  and exit 0 (fail-open). Developer keeps moving; we log it for review.
+- **Network unavailable.** No effect — scripts are entirely offline.
+- **Monorepo with multiple projects.** The scan is scoped to STAGED files only;
+  it doesn't traverse unrelated subtrees. Good enough by construction.
+
+## Dependencies
+
+- `bash 4+` and `grep` with `-E` (BSD or GNU). macOS default works.
+- `git` (any version that supports `git diff --cached --diff-filter`).
+- The two scripts must live in `<AUTO_GUARD_BIN>` and be executable.
+- No Node, no Python, no network. Intentionally minimal.
+
+## Graceful degradation
+
+The cardinal rule: **never break the developer's commit because the scan
+itself broke**. Concretely:
+
+- If the script exits 2 (internal error), the commit proceeds.
+- If the script's budget watchdog fires, the script exits 0 (warn but
+  proceed).
+- If the script can't write its log file (permission, disk full), it silently
+  swallows the write error and continues — security findings still surface
+  on stderr to the developer.
+- If `bash` itself is missing (unlikely), the hook is a no-op.
+
+This is intentional. A guardrail that bricks commits will be uninstalled
+within a week.
+
+## Related skills
+
+- `/cso` — full Chief Security Officer audit. Run weekly or before
+  shipping a sensitive change.
+- `/qa` — interactive QA with the full test-fix-verify loop.
+- `/qa-only` — report-only QA. The async post-push hook is a precursor;
+  for a real bug hunt, invoke `/qa-only` interactively.
+- `/review` — pre-PR diff review.

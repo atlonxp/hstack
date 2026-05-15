@@ -1,0 +1,263 @@
+---
+name: cross-repo-pr
+preamble-tier: 3
+version: 1.0.0
+description: |
+  [Multi-Repo] Atomic PR trains across N repos that must merge in lockstep. Defines a merge
+  gate (all green + all approved), lands PRs in dependency order with retry on conflict,
+  and reverts the WHOLE train automatically if any post-merge production check fails.
+  Use when asked to "atomic multi-repo PR", "PR train", "lockstep merge", "ship across repos
+  together", or "merge these PRs as a unit". (gstack)
+allowed-tools:
+  - Bash
+  - Read
+  - Write
+  - Edit
+  - Grep
+  - Glob
+  - AskUserQuestion
+sensitive: true
+---
+
+{{PREAMBLE}}
+
+# /cross-repo-pr — Family E4 — Multi-Repo / Monorepo
+
+A PR train: N PRs across N repos that must all land or none. The naive approach —
+"merge them roughly together and hope" — leaves consumers broken in the gap between
+the provider's merge and the consumer's merge. This skill closes the gap.
+
+The defining feature is the **automatic whole-train revert**. If a post-merge
+production check fails, the agent reverts every PR in the train in reverse order
+within minutes, before users notice.
+
+---
+
+## When to use
+
+- Coordinated API change where rollback must be all-or-nothing.
+- Feature that spans frontend + backend + shared lib and only works when all three ship.
+- Schema migration + reader change + writer change.
+
+Compare:
+- `/multi-repo-refactor` — same edit, N repos, can tolerate staggered merges.
+- `/cross-repo-pr` — different edits, N repos, must merge in lockstep with whole-train
+  revert on failure.
+
+---
+
+## Inputs
+
+1. **Train name** (slug) — short, will appear in PR titles and the tracking file.
+2. **Repos + PRs** — either pre-existing PR numbers or "open these branches as PRs".
+3. **Merge order** — provider repos first, consumers later. Required.
+4. **Post-merge production check** — a command, URL, or check name per repo (or one global)
+   that determines whether the train stays merged. If absent, AskUserQuestion before
+   proceeding — no check means no revert, which weakens the guarantee.
+
+---
+
+## Pre-flight
+
+```bash
+gh auth status --show-token 2>&1 | grep -i "Token scopes"
+```
+
+Required scopes: `repo` (write) on every train repo. Additionally, the user (or a
+bot the user can act through) must have **merge permission** AND **revert permission**
+on every repo. A repo where revert requires an approval = not eligible — abort with the
+list of ineligible repos.
+
+For each repo:
+
+```bash
+gh repo view <owner/repo> --json viewerPermission,squashMergeAllowed,mergeCommitAllowed,deleteBranchOnMerge
+```
+
+Pick the merge strategy the repo allows. The agent prefers squash for revertability.
+
+**AskUserQuestion gate (merge order + revert trigger confirmation):**
+
+> "Train `<slug>`: I'll merge in this order:
+> 1. owner/repo-a #PR
+> 2. owner/repo-b #PR
+> 3. owner/repo-c #PR
+>
+> Revert trigger: <check>. If it fails within <window> after the last merge, I will
+> revert all <N> PRs in reverse order automatically. Confirm or amend."
+
+Options: `confirm` | `change order` | `change revert window` | `disable auto-revert (require manual)` | `abort`.
+
+---
+
+## Procedure
+
+### Step 1: Materialize the train file
+
+`trains/<slug>.md`:
+
+```markdown
+# Train: <slug>
+- Started: <ISO>
+- Revert window: <minutes>
+- Revert check: <command or URL>
+- PRs (merge order):
+  1. owner/repo-a#PR — <title>
+  2. owner/repo-b#PR — <title>
+  3. owner/repo-c#PR — <title>
+
+## Status
+| step | repo | PR | gate | merge | revert | SHA |
+|------|------|-----|------|-------|--------|-----|
+```
+
+Backlink: edit every PR body to include `Part of train <slug>: <link to train file>`
+plus the full sibling-PR list. Re-edit after every PR moves.
+
+### Step 2: Gate — all green + all approved
+
+The merge gate has three conditions; ALL must hold:
+
+1. **CI green** on every PR: `gh pr checks <PR> --required` returns 0 exit code.
+2. **Approved** by required reviewers: `gh pr view <PR> --json reviewDecision` returns
+   `APPROVED`.
+3. **Mergeable** (no conflicts, base up to date): `gh pr view <PR> --json mergeable,mergeStateStatus`
+   returns `MERGEABLE` + `CLEAN`.
+
+Poll the gate every 60s. If any PR drifts (base moved), `gh pr update-branch <PR>`
+and re-poll its CI before re-checking the gate.
+
+If a PR sits non-green for >30 min, AskUserQuestion: `wait longer` | `fix in this branch`
+| `abort the train`. Don't silently sit forever.
+
+### Step 3: Merge in lockstep
+
+Once the gate is fully green:
+
+```bash
+for pr in $PRS_IN_ORDER; do
+  gh pr merge "$pr" --squash --delete-branch
+  # Capture the merge commit SHA for the revert log
+  gh pr view "$pr" --json mergeCommit -q '.mergeCommit.oid'
+done
+```
+
+Do NOT use `--auto`. We've already confirmed the gate; we want synchronous merges
+so we can stop the train immediately if one fails (e.g. branch protection bot blocks
+a particular SHA). If a merge fails mid-train:
+
+1. Record which PRs already merged.
+2. AskUserQuestion: `revert the merged PRs now (recommended)` | `pause and fix manually`.
+3. If revert: jump to Step 5 with the subset of merged PRs.
+
+Record every merge commit SHA in the train file as the merge happens — that's the
+revert plan's source of truth.
+
+### Step 4: Post-merge production check
+
+Run the configured check (per repo or global). Examples:
+
+```bash
+# URL liveness
+curl -fsS --max-time 10 "$CHECK_URL" || REVERT=1
+
+# Workflow check
+gh run list --repo "$REPO" --workflow=post-merge.yml --limit 1 --json conclusion | jq -e '.[0].conclusion == "success"' || REVERT=1
+
+# Custom command
+$CHECK_CMD || REVERT=1
+```
+
+Poll for the configured window (default 15 min). The check must pass continuously
+for the last 3 consecutive polls before declaring the train healthy.
+
+### Step 5: Whole-train revert (if check fails)
+
+**This is the load-bearing part of the skill. Get it right.**
+
+Revert in REVERSE merge order. The last-merged PR is reverted first so the dependency
+graph stays consistent at every intermediate step.
+
+```bash
+for repo_pr_sha in $MERGED_REVERSED; do
+  REPO="${repo_pr_sha%%|*}"
+  SHA="${repo_pr_sha##*|}"
+  REVERT_BRANCH="revert/train-<slug>-${SHA:0:7}"
+  TMP=$(mktemp -d)
+  gh repo clone "$REPO" "$TMP" -- --depth 5
+  (
+    cd "$TMP"
+    git checkout -b "$REVERT_BRANCH"
+    git revert --no-edit "$SHA"
+    git push -u origin "$REVERT_BRANCH"
+  )
+  gh pr create --repo "$REPO" \
+    --title "revert: train <slug> (auto-revert)" \
+    --body "Auto-revert of <SHA> due to failing post-merge check on train <slug>. See trains/<slug>.md."
+  REVERT_PR=$(gh pr view --repo "$REPO" --json number -q '.number')
+  gh pr merge --repo "$REPO" "$REVERT_PR" --squash --admin --delete-branch
+done
+```
+
+`--admin` is intentional: revert PRs bypass branch protection because the alternative
+is leaving production broken while waiting for reviewers. The agent records every
+admin-merge in `trains/<slug>.md` for after-the-fact audit. If the user disabled
+auto-revert at Step 0, this step instead drafts the revert PRs (without `--admin
+--squash`) and stops, paging the user with the open PR links.
+
+Verify reverts landed:
+
+```bash
+for repo in $REPOS; do
+  gh api "/repos/$repo/commits/main" --jq '.sha'
+done
+```
+
+Append final post-revert SHAs to the train file. Re-run the production check; if it
+still fails, page the user — the change wasn't the cause.
+
+### Step 6: Outputs and closeout
+
+Final `trains/<slug>.md` shows:
+
+- Every PR with its merge SHA.
+- Final state per repo (`merged` or `reverted`).
+- Production check timeline.
+- If reverted: a post-mortem-ready dump of the failing check output.
+
+Post a closing comment on every PR (merged OR reverted) linking the train file and
+naming the outcome.
+
+---
+
+## Outputs
+
+- `trains/<slug>.md` — plan, status table, merge SHAs, revert log.
+- N PRs (merged or reverted; either way, cross-linked).
+- For reverts: N revert-PRs, all `--admin` merged with audit trail.
+
+---
+
+## Edge cases
+
+- **Partial token scope** — abort pre-flight. Never start a train you can't revert.
+- **Branch protection blocks `--admin` merge for revert** — agent escalates to user;
+  this is a configuration bug, fix it before relying on this skill.
+- **Revert conflict** (a follow-up PR landed on top of the train mid-window) — `git
+  revert` will conflict. The agent stops and pages the user with the conflicting
+  commit; no auto-resolution because it's user-judgment territory.
+- **Post-merge check is flaky** — require 3 consecutive successes (or failures) before
+  acting. Single-poll failures don't trigger revert.
+- **One PR in the train is in a repo without revert permission** — caught in pre-flight.
+- **User disables auto-revert** — Step 5 drafts revert PRs but stops merging them; the
+  user takes over.
+
+---
+
+## Dependencies
+
+- `gh` CLI with `repo` scope and merge + revert permission on every repo.
+- `git` (standard).
+- `lib/pr-train.ts` (planned) for the polling loop in long-running mode. Until that
+  exists, the skill runs inline in the conversation.
+- Used by: `/multi-repo-refactor` for the merge phase when atomicity matters.

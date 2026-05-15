@@ -10,54 +10,179 @@ Conventions:
 
 ## Skills
 
-- [/autoplan](autoplan/SKILL.md): Auto-review pipeline — reads the full CEO, design, eng, and DX review skills from disk and runs them sequentially with auto-decisions using 6 decision principles.
-- [/benchmark](benchmark/SKILL.md): Performance regression detection using the browse daemon.
-- [/benchmark-models](benchmark-models/SKILL.md): Cross-model benchmark for gstack skills.
-- [/browse](browse/SKILL.md): Fast headless browser for QA testing and site dogfooding.
-- [/canary](canary/SKILL.md): Post-deploy canary monitoring.
-- [/careful](careful/SKILL.md): Safety guardrails for destructive commands.
+- [/accessibility-audit](accessibility-audit/SKILL.md): [Accessibility AI] WCAG 2.2 AA conformance audit augmented with assistive-tech behavioral testing.
+- [/adr](adr/SKILL.md): [CTO Strategy] Architecture Decision Record generator + linter (Michael Nygard format).
+- [/agent-design](agent-design/SKILL.md): [AI Engineering / Research] Designs an LLM agent as a typed state machine, not an ad-hoc while-loop.
+- [/agent-ux-review](agent-ux-review/SKILL.md): [Cognitive Computing / HMC] Reviews an AI feature's interaction flow against agent-UX principles — predictability, repair, attention budget, surfaced uncertainty, escape hatches, mode visibility.
+- [/api-contract-test](api-contract-test/SKILL.md): [API/DB] Generate consumer-driven contract tests (Pact, or equivalent) from an OpenAPI / GraphQL / Protobuf spec, wire them into CI for both producer and consumer sides, and maintain a cross-service compatibility matrix.
+- [/api-design](api-design/SKILL.md): [API/DB] Design or audit an API surface.
+- [/aso](aso/SKILL.md): [Mobile] App Store Optimization.
+- [/auto-feature-build](auto-feature-build/SKILL.md): [Build & Autonomy] Single-persona feature builder for gstack.
+- [/auto-feature-build-full](auto-feature-build-full/SKILL.md): [Build & Autonomy] Full feature gap-fill across ALL personas for gstack.
+- [/auto-guard](auto-guard/SKILL.md): [Tools] Automatic security + QA hooks for git events.
+- [/auto-ux-audit](auto-ux-audit/SKILL.md): [UX Audit] Single-persona UX audit with auto-fix.
+- [/auto-ux-audit-full](auto-ux-audit-full/SKILL.md): [UX Audit] Full UX audit across all personas with auto-fix.
+- [/autoaudit](autoaudit/SKILL.md): [Code Review] Post-build verification pipeline for gstack — runs security audit (/cso) then code review (/review + /codex) sequentially.
+- [/autobuild](autobuild/SKILL.md): [Build & Autonomy] Autonomous implementation for gstack from an approved plan.
+- [/autoplan](autoplan/SKILL.md): [Code Review] Auto-review pipeline — reads the full CEO, design, eng, and DX review skills from disk and runs them sequentially with auto-decisions using 6 decision principles.
+- [/autoplan-full](autoplan-full/SKILL.md): [Code Review] Full CTO planning pipeline for gstack — from raw idea to fully reviewed implementation plan.
+- [/avatar-design](avatar-design/SKILL.md): [Avatar & Embodiment] Full avatar architecture designer.
+- [/avatar-sign](avatar-sign/SKILL.md): [Avatar & Embodiment] Sign-language-performing avatar pipeline.
+- [/backtest](backtest/SKILL.md): [FinTech / Algorithmic Trading] Point-in-time, look-ahead-free backtest harness for algorithmic strategies.
+- [/behavioral-experiment](behavioral-experiment/SKILL.md): [Operations Research / Behavioral] Design a behavioral A/B / multi-arm experiment with proper power analysis, randomization strategy, primary + guardrail metrics, **pre- registered analysis plan** (anti p-hacking), and pre-committed success / failure decision rule.
+- [/benchmark](benchmark/SKILL.md): [Ship & Release] Performance regression detection using the browse daemon.
+- [/benchmark-models](benchmark-models/SKILL.md): [Ship & Release] Cross-model benchmark for gstack skills.
+- [/biases-audit](biases-audit/SKILL.md): [Operations Research / Behavioral] Defensive cognitive-bias audit.
+- [/blueprint](blueprint/SKILL.md): [Product Transposition] Structured study of an external target (product, paper, codebase, app, or SDK/API) that produces a domain-agnostic BLUEPRINT.md plus evidence, notes, and citations.
+- [/board-deck](board-deck/SKILL.md): [CEO Cockpit] Board deck generator following the YC-style template — Traction, Financials, Product, Team, Risks, Asks.
+- [/browse](browse/SKILL.md): [Browser & Web] Fast headless browser for QA testing and site dogfooding.
+- [/bug-bounty-triage](bug-bounty-triage/SKILL.md): [Red Team / RE] Bug-bounty report triage pipeline.
+- [/buy-vs-build](buy-vs-build/SKILL.md): [CTO Strategy] Vendor-vs-build scorecard.
+- [/c4-diagram](c4-diagram/SKILL.md): [Chief Architect] Generates the four C4 model levels (System Context, Container, Component, Code) from the actual codebase, not whiteboard memory.
+- [/canary](canary/SKILL.md): [Ship & Release] Post-deploy canary monitoring.
+- [/careful](careful/SKILL.md): [Build & Autonomy] Safety guardrails for destructive commands.
+- [/chaos](chaos/SKILL.md): [Cloud-Native] Design and run chaos engineering experiments per dependency-graph node.
+- [/check-ci](check-ci/SKILL.md): [Investigate & Security] One-shot CI status check for gstack.
+- [/check-deps](check-deps/SKILL.md): [Investigate & Security] One-shot dependency audit for gstack.
+- [/check-issues](check-issues/SKILL.md): [Investigate & Security] One-shot issue triage for gstack.
 - [/claude](claude/SKILL.md): Claude Code CLI wrapper for non-Claude hosts - three modes.
-- [/codex](codex/SKILL.md): OpenAI Codex CLI wrapper — three modes.
-- [/context-restore](context-restore/SKILL.md): Restore working context saved earlier by /context-save.
-- [/context-save](context-save/SKILL.md): Save working context.
-- [/cso](cso/SKILL.md): Chief Security Officer mode.
-- [/design-consultation](design-consultation/SKILL.md): Design consultation: understands your product, researches the landscape, proposes a complete design system (aesthetic, typography, color, layout, spacing, motion), and generates font+color preview pages.
-- [/design-html](design-html/SKILL.md): Design finalization: generates production-quality Pretext-native HTML/CSS.
-- [/design-review](design-review/SKILL.md): Designer's eye QA: finds visual inconsistency, spacing issues, hierarchy problems, AI slop patterns, and slow interactions — then fixes them.
-- [/design-shotgun](design-shotgun/SKILL.md): Design shotgun: generate multiple AI design variants, open a comparison board, collect structured feedback, and iterate.
-- [/devex-review](devex-review/SKILL.md): Live developer experience audit.
-- [/document-generate](document-generate/SKILL.md): Generate missing documentation from scratch for a feature, module, or entire project.
-- [/document-release](document-release/SKILL.md): Post-ship documentation update.
-- [/freeze](freeze/SKILL.md): Restrict file edits to a specific directory for the session.
+- [/clone-and-twist](clone-and-twist/SKILL.md): [Product Transposition] Build the transposed version of a studied mechanism.
+- [/codex](codex/SKILL.md): [Code Review] OpenAI Codex CLI wrapper — three modes.
+- [/cognitive-load-audit](cognitive-load-audit/SKILL.md): [Cognitive Computing / HMC] Quantifies cognitive load on a surface using Sweller's intrinsic / extraneous / germane split.
+- [/collaboration-pattern](collaboration-pattern/SKILL.md): [Cognitive Computing / HMC] Picks the right human-AI collaboration pattern (pair, supervised, delegated, autonomous) for a given task, with rationale across skill-level fit, error cost, observability requirement, and user agency.
+- [/compliance-audit](compliance-audit/SKILL.md): [CISO Compliance + IR] Framework-aware compliance audit (SOC 2 Type II / ISO 27001 / HIPAA / PCI-DSS v4 / GDPR / CCPA).
+- [/context-restore](context-restore/SKILL.md): [Intelligence & Memory] Restore working context saved earlier by /context-save.
+- [/context-save](context-save/SKILL.md): [Intelligence & Memory] Save working context.
+- [/cost-optimize](cost-optimize/SKILL.md): [Chief Architect] FinOps analysis for AWS, GCP, and Azure.
+- [/counterfactual](counterfactual/SKILL.md): [Economic Simulation] Counterfactual analysis framework for economic simulators.
+- [/cross-repo-pr](cross-repo-pr/SKILL.md): [Multi-Repo] Atomic PR trains across N repos that must merge in lockstep.
+- [/cso](cso/SKILL.md): [Investigate & Security] Chief Security Officer mode.
+- [/customer-interview](customer-interview/SKILL.md): [CEO Cockpit] Customer interview workflow — two modes.
+- [/dashboard](dashboard/SKILL.md): [Build & Autonomy] Multi-agent dashboard for hstack.
+- [/db-design](db-design/SKILL.md): [API/DB] Design a new database schema or audit an existing one.
+- [/db-migration](db-migration/SKILL.md): [API/DB] Zero-downtime database migration planner.
+- [/db-perf](db-perf/SKILL.md): [API/DB] EXPLAIN-driven slow-query diagnosis and index advisor.
+- [/define-workflows](define-workflows/SKILL.md): [UX Audit] Derive the list of workflows each persona *should* be able to accomplish, based on their goal, permissions, and entry point.
+- [/dep-graph](dep-graph/SKILL.md): [Chief Architect] Builds a cross-service dependency graph from imports, route calls, and IaC topology.
+- [/design-consultation](design-consultation/SKILL.md): [Design] Design consultation: understands your product, researches the landscape, proposes a complete design system (aesthetic, typography, color, layout, spacing, motion), and generates font+color preview pages.
+- [/design-html](design-html/SKILL.md): [Design] Design finalization: generates production-quality Pretext-native HTML/CSS.
+- [/design-review](design-review/SKILL.md): [Design] Designer's eye QA: finds visual inconsistency, spacing issues, hierarchy problems, AI slop patterns, and slow interactions — then fixes them.
+- [/design-shotgun](design-shotgun/SKILL.md): [Design] Design shotgun: generate multiple AI design variants, open a comparison board, collect structured feedback, and iterate.
+- [/detect-engineering](detect-engineering/SKILL.md): [Blue Team / Defensive] Detection rule engineering.
+- [/devex-review](devex-review/SKILL.md): [UX Audit] Live developer experience audit.
+- [/discover](discover/SKILL.md): [CTO Discovery] CTO-mode technology and product intelligence for gstack.
+- [/discover-personas](discover-personas/SKILL.md): [UX Audit] Discover and register personas for the project, either from the user's description or by auto-discovering them from the live app.
+- [/document-generate](document-generate/SKILL.md): [Ship & Release] Generate missing documentation from scratch for a feature, module, or entire project.
+- [/document-release](document-release/SKILL.md): [Ship & Release] Post-ship documentation update.
+- [/econ-sim](econ-sim/SKILL.md): [Economic Simulation] Designs a runnable economic simulator from a research question.
+- [/eval-harness](eval-harness/SKILL.md): [AI Engineering / Research] Generates a per-feature eval harness (dataset, metrics, baselines, CI hook) for any LLM/AI feature.
+- [/event-design](event-design/SKILL.md): [API/DB] Design event/message schemas with explicit versioning and compatibility policy for Kafka, NATS, EventBridge, SQS, RabbitMQ, or Pub/Sub.
+- [/event-stream](event-stream/SKILL.md): [Economic Simulation] Designs a real-world event ingestion pipeline for an economic simulator with observability-time modeling — agents react to events when the information would have been observable to them, not at publication time.
+- [/explanation-design](explanation-design/SKILL.md): [Cognitive Computing / HMC] Designs explanation surfaces for AI features with the goal of trust calibration, not tutorial.
+- [/exploit-dev](exploit-dev/SKILL.md): [Red Team / RE] Scaffolds an authorized exploit-development project (CTF or engagement) for binary pwn, web, mobile, or IoT firmware targets.
+- [/expression-synth](expression-synth/SKILL.md): [Avatar & Embodiment] Facial expression synthesis designer.
+- [/feature-build](feature-build/SKILL.md): [Build & Autonomy] Single-feature manual builder for gstack.
+- [/finetune](finetune/SKILL.md): [AI Engineering / Research] Generates a fine-tuning project — data prep, format conversion (sharegpt/alpaca/dpo), recipe config (LoRA / QLoRA / full / DPO / ORPO), eval baseline before+after, deployment plan.
+- [/forensics](forensics/SKILL.md): [Blue Team / Defensive] DFIR (digital forensics + incident response).
+- [/freeze](freeze/SKILL.md): [Build & Autonomy] Restrict file edits to a specific directory for the session.
+- [/game-theory-analysis](game-theory-analysis/SKILL.md): [Operations Research / Behavioral] Model a strategic situation as a formal game (normal form for one-shot, extensive form for sequential).
+- [/gap-analysis](gap-analysis/SKILL.md): [UX Audit] Compare expected workflows (from /define-workflows) against what the app actually supports.
+- [/gesture-synth](gesture-synth/SKILL.md): [Avatar & Embodiment] Speech-to-gesture synthesis designer.
 - [/gstack](gstack/SKILL.md): Fast headless browser for QA testing and site dogfooding.
-- [/gstack-upgrade](gstack-upgrade/SKILL.md): Upgrade gstack to the latest version.
-- [/guard](guard/SKILL.md): Full safety mode: destructive command warnings + directory-scoped edits.
-- [/health](health/SKILL.md): Code quality dashboard.
-- [/investigate](investigate/SKILL.md): Systematic debugging with root cause investigation.
-- [/land-and-deploy](land-and-deploy/SKILL.md): Land and deploy workflow.
-- [/landing-report](landing-report/SKILL.md): Read-only queue dashboard for workspace-aware ship.
-- [/learn](learn/SKILL.md): Manage project learnings.
-- [/make-pdf](make-pdf/SKILL.md): Turn any markdown file into a publication-quality PDF.
-- [/office-hours](office-hours/SKILL.md): YC Office Hours — two modes.
-- [/open-gstack-browser](open-gstack-browser/SKILL.md): Launch GStack Browser — AI-controlled Chromium with the sidebar extension baked in.
-- [/pair-agent](pair-agent/SKILL.md): Pair a remote AI agent with your browser.
-- [/plan-ceo-review](plan-ceo-review/SKILL.md): CEO/founder-mode plan review.
-- [/plan-design-review](plan-design-review/SKILL.md): Designer's eye plan review — interactive, like CEO and Eng review.
-- [/plan-devex-review](plan-devex-review/SKILL.md): Interactive developer experience plan review.
-- [/plan-eng-review](plan-eng-review/SKILL.md): Eng manager-mode plan review.
-- [/plan-tune](plan-tune/SKILL.md): Self-tuning question sensitivity + developer psychographic for gstack (v1: observational).
-- [/qa](qa/SKILL.md): Systematically QA test a web application and fix bugs found.
-- [/qa-only](qa-only/SKILL.md): Report-only QA testing.
-- [/retro](retro/SKILL.md): Weekly engineering retrospective.
-- [/review](review/SKILL.md): Pre-landing PR review.
-- [/scrape](scrape/SKILL.md): Pull data from a web page.
-- [/setup-browser-cookies](setup-browser-cookies/SKILL.md): Import cookies from your real Chromium browser into the headless browse session.
-- [/setup-deploy](setup-deploy/SKILL.md): Configure deployment settings for /land-and-deploy.
-- [/setup-gbrain](setup-gbrain/SKILL.md): Set up gbrain for this coding agent: install the CLI, initialize a local PGLite or Supabase brain, register MCP, capture per-remote trust policy.
-- [/ship](ship/SKILL.md): Ship workflow: detect + merge base branch, run tests, review diff, bump VERSION, update CHANGELOG, commit, push, create PR.
-- [/skillify](skillify/SKILL.md): Codify the most recent successful /scrape flow into a permanent browser-skill on disk.
-- [/sync-gbrain](sync-gbrain/SKILL.md): Keep gbrain current with this repo's code and refresh agent search guidance in CLAUDE.md.
-- [/unfreeze](unfreeze/SKILL.md): Clear the freeze boundary set by /freeze, allowing edits to all directories again.
+- [/gstack-upgrade](gstack-upgrade/SKILL.md): [Tools] Upgrade gstack to the latest version.
+- [/guard](guard/SKILL.md): [Build & Autonomy] Full safety mode: destructive command warnings + directory-scoped edits.
+- [/health](health/SKILL.md): [Tools] Code quality dashboard.
+- [/hiring-loop](hiring-loop/SKILL.md): [CTO Strategy] Full hiring kit generator from a role description.
+- [/honeypot](honeypot/SKILL.md): [Blue Team / Defensive] Deception deployment.
+- [/iac-review](iac-review/SKILL.md): [Chief Architect] Pre-apply review of Terraform / Pulumi / AWS CDK diffs.
+- [/incentive-design](incentive-design/SKILL.md): [Operations Research / Behavioral] Design an incentive system (pricing tier, referral program, growth loop, OKR / commission plan, in-app reward) using mechanism design plus behavioral economics — loss aversion, present bias, social proof, anchoring, default effects, reference dependence.
+- [/incident-response](incident-response/SKILL.md): [CISO Compliance + IR] Generates an incident response runbook tuned to Hall's stack (web / mobile / API), and runs in live war-room mode during an actual incident.
+- [/indoor-nav](indoor-nav/SKILL.md): [Accessibility AI] Indoor positioning + accessibility-aware routing design.
+- [/intel](intel/SKILL.md): [Intelligence & Memory] Project intelligence briefing — reads cross-session memory from intelligence.jsonl, compacts stale entries, and presents a briefing of recurring patterns, recent findings, and known hotspots.
+- [/investigate](investigate/SKILL.md): [Investigate & Security] Systematic debugging with root cause investigation.
+- [/investigate-workflow](investigate-workflow/SKILL.md): [Investigate & Security] Post-implementation workflow completeness investigator for gstack.
+- [/investor-update](investor-update/SKILL.md): [CEO Cockpit] Monthly investor update generator.
+- [/k8s-design](k8s-design/SKILL.md): [Cloud-Native] Generate production-grade Kubernetes manifests, Helm charts, or Kustomize overlays for a workload.
+- [/kpi-dashboard](kpi-dashboard/SKILL.md): [CEO Cockpit] KPI dashboard with weekly cadence.
+- [/land-and-deploy](land-and-deploy/SKILL.md): [Ship & Release] Land and deploy workflow.
+- [/landing-report](landing-report/SKILL.md): [Tools] Read-only queue dashboard for workspace-aware ship.
+- [/learn](learn/SKILL.md): [Intelligence & Memory] Manage project learnings.
+- [/lip-sync](lip-sync/SKILL.md): [Avatar & Embodiment] Lip-sync model selection + training/inference pipeline designer.
+- [/log-analyze](log-analyze/SKILL.md): [Blue Team / Defensive] Large-log triage with polars-backed analysis.
+- [/make-pdf](make-pdf/SKILL.md): [Tools] Turn any markdown file into a publication-quality PDF.
+- [/mental-model-trace](mental-model-trace/SKILL.md): [Cognitive Computing / HMC] Diffs the user's mental model of a feature against the real system model.
+- [/migration-plan](migration-plan/SKILL.md): [Chief Architect] Given a from→to migration (DB engine swap, framework upgrade, language port, region move, monolith→services), picks the safest pattern (strangler fig, parallel run, blue-green, canary, dark launch) and emits a phased plan with cutover criteria, rollback triggers, observability requirements, and team-capacity check.
+- [/mobile-build](mobile-build/SKILL.md): [Mobile] Mobile feature scaffolding across React Native, Flutter, native iOS (Swift), and native Android (Kotlin).
+- [/mobile-perf](mobile-perf/SKILL.md): [Mobile] Mobile performance profiling: cold-start time, time-to-interactive, FPS during scrolling, jank rate, memory under load.
+- [/mobile-qa](mobile-qa/SKILL.md): [Mobile] Mobile QA flow generation + execution across Maestro, Detox, XCUITest, and Espresso.
+- [/mobile-release](mobile-release/SKILL.md): [Mobile] End-to-end TestFlight / Play Internal release pipeline.
+- [/monorepo-graph](monorepo-graph/SKILL.md): [Multi-Repo] Unified projection of a monorepo's project graph.
+- [/multi-repo-refactor](multi-repo-refactor/SKILL.md): [Multi-Repo] Coordinated refactor across N repos.
+- [/multi-sign](multi-sign/SKILL.md): [Accessibility AI] Multi-sign-language platform architecture.
+- [/observability](observability/SKILL.md): [Cloud-Native] Generate an OpenTelemetry-first observability stack: per-language SDK setup, exporters (Prometheus + Tempo + Loki, or Datadog/Honeycomb/New Relic), trace propagation, log-trace correlation, RED/USE dashboards, and alert rules.
+- [/office-hours](office-hours/SKILL.md): [Planning & Review] YC Office Hours — two modes.
+- [/open-gstack-browser](open-gstack-browser/SKILL.md): [Browser & Web] Launch GStack Browser — AI-controlled Chromium with the sidebar extension baked in.
+- [/optimize-decision](optimize-decision/SKILL.md): [Operations Research / Behavioral] Formulate a decision as a Linear Program (LP), Mixed-Integer Program (MIP), or Constraint Program (CP-SAT) using OR-Tools or Pyomo.
+- [/pair-agent](pair-agent/SKILL.md): [Browser & Web] Pair a remote AI agent with your browser.
+- [/paper-pipeline](paper-pipeline/SKILL.md): [AI Engineering / Research] Reproducible research-paper scaffold for NeurIPS / ACL / IEEE (and friends).
+- [/paper-trade](paper-trade/SKILL.md): [FinTech / Algorithmic Trading] Realistic-execution paper-trading harness.
+- [/plan-ceo-review](plan-ceo-review/SKILL.md): [Planning & Review] CEO/founder-mode plan review.
+- [/plan-design-review](plan-design-review/SKILL.md): [Planning & Review] Designer's eye plan review — interactive, like CEO and Eng review.
+- [/plan-devex-review](plan-devex-review/SKILL.md): [Planning & Review] Interactive developer experience plan review.
+- [/plan-eng-review](plan-eng-review/SKILL.md): [Planning & Review] Eng manager-mode plan review.
+- [/plan-tune](plan-tune/SKILL.md): [Planning & Review] Self-tuning question sensitivity + developer psychographic for gstack (v1: observational).
+- [/plan-ux-review](plan-ux-review/SKILL.md): [Planning & Review] UX researcher-mode plan review for gstack.
+- [/postmortem](postmortem/SKILL.md): [CISO Compliance + IR] Blameless postmortem facilitator.
+- [/pricing-experiment](pricing-experiment/SKILL.md): [CEO Cockpit] Pricing experiment designer.
+- [/prompt-engineering](prompt-engineering/SKILL.md): [AI Engineering / Research] Systematic prompt engineering: from a task spec, generates 6-8 prompt variants spanning CoT / few-shot / role-play / structured-output / decomposition / self-critique, runs them through /eval-harness, picks the Pareto winner (quality × cost × latency), documents WHY the winner won.
+- [/prosody-control](prosody-control/SKILL.md): [Speech & Voice AI] Expression / tone / accent / cadence control surface for a TTS system.
+- [/purple-exercise](purple-exercise/SKILL.md): [Red Team / RE] Purple-team exercise orchestrator.
+- [/qa](qa/SKILL.md): [QA & Bugs] Systematically QA test a web application and fix bugs found.
+- [/qa-only](qa-only/SKILL.md): [QA & Bugs] Report-only QA testing.
+- [/rag-design](rag-design/SKILL.md): [AI Engineering / Research] End-to-end RAG design: data-source survey, chunking strategy, embedding model, vector store, retrieval algorithm, reranker, eval plan.
+- [/recipe](recipe/SKILL.md): [Product Transposition] Document YOUR built thing as a reproducible cookbook: INGREDIENTS.md, STEPS.md, TECHNIQUES.md, PLATING.md.
+- [/recon](recon/SKILL.md): [Red Team / RE] Passive-then-active reconnaissance orchestrator for AUTHORIZED engagements only.
+- [/redteam-c2](redteam-c2/SKILL.md): [Red Team / RE] Short-lived, scope-gated C2 infrastructure provisioning for AUTHORIZED red-team engagements only.
+- [/retro](retro/SKILL.md): [Intelligence & Memory] Weekly engineering retrospective.
+- [/reverse-engineer](reverse-engineer/SKILL.md): [Red Team / RE] Authorized adversarial RE.
+- [/review](review/SKILL.md): [Code Review] Pre-landing PR review.
+- [/risk-engine](risk-engine/SKILL.md): [FinTech / Algorithmic Trading] Risk engine designer for algorithmic strategies.
+- [/runway](runway/SKILL.md): [CEO Cockpit] Burn + runway + hire-cost scenario modeler.
+- [/scrape](scrape/SKILL.md): [Browser & Web] Pull data from a web page.
+- [/security-training](security-training/SKILL.md): [CISO Compliance + IR] Project-specific security training generator.
+- [/service-catalog](service-catalog/SKILL.md): [Chief Architect] One-time scaffolding of a Backstage-style service catalog in markdown.
+- [/service-mesh](service-mesh/SKILL.md): [Cloud-Native] Decide whether a service mesh actually helps, and if so, generate config for Istio, Linkerd, or Consul Connect.
+- [/setup-browser-cookies](setup-browser-cookies/SKILL.md): [Browser & Web] Import cookies from your real Chromium browser into the headless browse session.
+- [/setup-deploy](setup-deploy/SKILL.md): [Tools] Configure deployment settings for /land-and-deploy.
+- [/setup-gbrain](setup-gbrain/SKILL.md): [Intelligence & Memory] Set up gbrain for this coding agent: install the CLI, initialize a local PGLite or Supabase brain, register MCP, capture per-remote trust policy.
+- [/shared-lib-bump](shared-lib-bump/SKILL.md): [Multi-Repo] Cascading version-bump PRs across every detected consumer of a shared lib.
+- [/ship](ship/SKILL.md): [Ship & Release] Ship workflow: detect + merge base branch, run tests, review diff, bump VERSION, update CHANGELOG, commit, push, create PR.
+- [/siem-tune](siem-tune/SKILL.md): [Blue Team / Defensive] SIEM rule fidelity tuning.
+- [/sign-linguistics](sign-linguistics/SKILL.md): [Accessibility AI] Per-sign-language linguistic catalog compiler.
+- [/sign-text](sign-text/SKILL.md): [Accessibility AI] Bidirectional text↔sign translation pipeline design.
+- [/sim-calibrate](sim-calibrate/SKILL.md): [Economic Simulation] Calibration workflow for economic simulators.
+- [/simulate](simulate/SKILL.md): [Operations Research / Behavioral] Build a discrete-event or Monte-Carlo simulation of a system from a description.
+- [/skillify](skillify/SKILL.md): [Intelligence & Memory] Codify the most recent successful /scrape flow into a permanent browser-skill on disk.
+- [/soar-playbook](soar-playbook/SKILL.md): [Blue Team / Defensive] SOAR playbook generation.
+- [/sre-slo](sre-slo/SKILL.md): [Cloud-Native] Define SLIs, SLOs, and error budgets per service — as engineering contracts, not marketing copy.
+- [/strategy-design](strategy-design/SKILL.md): [FinTech / Algorithmic Trading] Strategy design framework for algorithmic trading.
+- [/strategy-eval](strategy-eval/SKILL.md): [FinTech / Algorithmic Trading] Multi-metric strategy evaluation scorecard.
+- [/sync-gbrain](sync-gbrain/SKILL.md): [Intelligence & Memory] Keep gbrain current with this repo's code and refresh agent search guidance in CLAUDE.md.
+- [/team-velocity](team-velocity/SKILL.md): [CTO Strategy] Throughput, cycle-time, review-latency, and bug-rate trend report for the last 12 weeks.
+- [/tech-debt-register](tech-debt-register/SKILL.md): [CTO Strategy] ROI-sorted tech-debt register.
+- [/threat-hunt](threat-hunt/SKILL.md): [Blue Team / Defensive] Hypothesis-driven threat hunting.
+- [/threat-intel](threat-intel/SKILL.md): [Blue Team / Defensive] Threat intelligence ingestion + relevance filter.
+- [/threat-model-evolve](threat-model-evolve/SKILL.md): [CISO Compliance + IR] Living STRIDE threat model that updates on /ship.
+- [/transpose](transpose/SKILL.md): [Product Transposition] Interactive bridge-planning skill.
+- [/tts-design](tts-design/SKILL.md): [Speech & Voice AI] TTS architecture + training plan.
+- [/unfreeze](unfreeze/SKILL.md): [Build & Autonomy] Clear the freeze boundary set by /freeze, allowing edits to all directories again.
+- [/ux-audit](ux-audit/SKILL.md): [UX Audit] Persona-driven UX workflow audit on a live site.
+- [/vendor-risk](vendor-risk/SKILL.md): [CISO Compliance + IR] Third-party risk inventory + scoring.
+- [/vendor-score](vendor-score/SKILL.md): [CTO Strategy] Deep single-vendor evaluation across 12 dimensions: security posture, SLA, pricing, API quality, DX, data portability, support, ecosystem, financial health, compliance, roadmap signal, and lock-in.
+- [/verify-loop](verify-loop/SKILL.md): [Build & Autonomy] Self-healing verification loop for gstack.
+- [/voice-clone](voice-clone/SKILL.md): [Speech & Voice AI] End-to-end voice cloning workflow with consent + watermark guardrails.
+- [/voice-eval](voice-eval/SKILL.md): [Speech & Voice AI] Multi-metric TTS / voice-clone eval harness.
+- [/workspace-sync](workspace-sync/SKILL.md): [Multi-Repo] Sync shared workspace configs (tsconfig, eslint, prettier, Renovate, GH Actions, .editorconfig, .nvmrc) across consuming repos via Renovate-style PRs.
 
 ## Browse Commands
 

@@ -1,0 +1,433 @@
+---
+name: behavioral-experiment
+preamble-tier: 2
+version: 1.0.0
+description: |
+  [Operations Research / Behavioral] Design a behavioral A/B / multi-arm experiment with
+  proper power analysis, randomization strategy, primary + guardrail metrics, **pre-
+  registered analysis plan** (anti p-hacking), and pre-committed success / failure
+  decision rule. Cites the underlying behavioral principle being tested (anchoring,
+  default effects, framing, salience, loss aversion, social proof) and predicts the
+  expected effect size before the experiment runs.
+  Use when: "design an experiment", "A/B test", "behavioral experiment", "power
+  analysis", "pre-registration", "anti p-hacking experiment design". (gstack)
+allowed-tools:
+  - Read
+  - Write
+  - Grep
+  - Glob
+  - Bash
+  - AskUserQuestion
+  - WebSearch
+benefits-from: [statsmodels, marketing-psychology, ab-testing]
+triggers:
+  - design an experiment
+  - power calc
+  - pre-register the analysis
+  - behavioral A/B
+  - intervention design
+---
+
+{{PREAMBLE}}
+
+# /behavioral-experiment — Family I — Operations Research / Behavioral
+
+You design experiments that **can actually settle the question** they're
+asking. Most behavioral experiments shipped today are:
+
+- **Under-powered** — sample size set by "how many users we got in two
+  weeks" instead of MDE math.
+- **Garden-of-forking-paths** — post-hoc subgroup analysis, metric
+  swapping, peeking-and-stopping. Statistical guarantees evaporate.
+- **Over-claimed** — "treatment lifted conversion by 8.3%" when the 95% CI
+  is `[-2%, +18%]`.
+
+This skill forces a **pre-registered** experiment plan: hypothesis → power
+calc → randomization unit → primary + guardrail metrics → analysis plan →
+stopping rule → success / failure verdict criteria, all committed before
+the experiment ships. After the experiment runs, the analysis must follow
+the plan, not the data.
+
+You are explicitly tied to the **behavioral economics primitive** under
+test. "A/B test the button color" is not in scope (use the team's A/B
+platform). "A/B test loss-framed vs gain-framed renewal copy with predicted
+effect size from prior literature on loss aversion" — that's in scope.
+
+## When to use
+
+Use this skill when:
+- The intervention is **behavioral** (framing, defaults, anchoring, social
+  proof, salience, friction, scarcity).
+- The stakes are non-trivial — the experiment will inform a decision worth
+  more than the cost of running it.
+- The user wants to **avoid p-hacking** and ship a defensible result.
+- The user wants to **predict effect size** from prior literature before
+  running, to test calibration.
+
+Do NOT use this skill when:
+- The change is a bug fix or a hard requirement; you don't need an
+  experiment to confirm a known truth.
+- The traffic is too low to be powered (less than ~500 conversions per arm
+  expected). Run qualitative research instead.
+- The intervention has known harms that no result could justify (informed
+  consent matters even in product experiments).
+
+## Inputs (Intervention hypothesis)
+
+1. **Behavioral principle being tested.** Name it from the marketing-
+   psychology primitive set: anchoring, default effect, loss aversion,
+   social proof, salience, scarcity, present bias, reciprocity, choice
+   architecture.
+2. **Hypothesis.** Specific. Directional. With a predicted effect size:
+   - Bad: "Loss framing will work better."
+   - Good: "Loss-framed renewal copy ('You'll lose access to X') will
+     increase renewal rate by 8-15% relative to gain-framed control,
+     consistent with Tversky & Kahneman (1981) on a comparable choice."
+3. **Primary outcome metric.** One. Just one.
+4. **Guardrail metrics.** What you don't want to break (revenue per user,
+   unsubscribe rate, NPS, support ticket rate).
+5. **Randomization unit.** User? Session? Account? Device? Time block?
+6. **Eligible population.** Who is in the experiment? Who is excluded?
+7. **Traffic estimate.** Daily eligible users / events.
+8. **Practical significance threshold (MDE).** The smallest effect that
+   would change a decision.
+
+## Procedure
+
+### Step 1 — Pin the behavioral principle and predicted effect size
+
+Refuse to design until the user names the behavioral principle. "We want to
+test if users will upgrade more" is not a hypothesis; it's a wish.
+
+For each principle, prior literature gives effect-size ranges:
+
+| Principle | Typical effect range | Caveats |
+|-----------|---------------------|---------|
+| Default effects (opt-in → opt-out) | 20-80% lift | Strongest in low-engagement domains |
+| Loss aversion framing | 5-20% lift | Smaller in repeat-exposure contexts |
+| Social proof (peer counts shown) | 5-25% lift | Erodes if counts feel inflated |
+| Anchoring (price reference) | 10-30% lift on perceived value | Recall: anchors are weak in expert audiences |
+| Scarcity (honest only) | 10-40% lift on urgency | Backfires hard if revealed as manufactured |
+| Salience (visual prominence) | 3-15% lift | Often confounded with novelty |
+| Present bias (immediate vs delayed) | 15-50% lift on uptake | Reverses on follow-through metrics |
+| Friction reduction | 5-30% lift | Diminishing returns |
+
+Surface the cited range and ask the user: which effect size matters for
+your decision? Use that as the MDE.
+
+### Step 2 — Power analysis
+
+Compute the required sample size per arm. Use the appropriate formula for
+the outcome type. Generate a Python snippet the user can run.
+
+**For a proportion (e.g., conversion rate):**
+
+```python
+"""
+Power calc for two-sample proportion test (chi-squared / z-test).
+Generated by /behavioral-experiment.
+"""
+from statsmodels.stats.power import NormalIndPower
+from statsmodels.stats.proportion import proportion_effectsize
+
+# Inputs
+p_control = 0.062     # baseline conversion
+mde_rel   = 0.10      # detect a 10% relative lift
+p_treat   = p_control * (1 + mde_rel)
+alpha     = 0.05      # two-sided
+power     = 0.80      # 1 - beta
+
+# Effect size (Cohen's h)
+h = proportion_effectsize(p_treat, p_control)
+analysis = NormalIndPower()
+n_per_arm = analysis.solve_power(effect_size=h, alpha=alpha, power=power,
+                                  alternative="two-sided")
+print(f"n per arm: {int(n_per_arm):,}")
+print(f"Total exposures needed: {int(2 * n_per_arm):,}")
+```
+
+**For a continuous outcome (e.g., revenue per user, time on page):**
+
+```python
+from statsmodels.stats.power import TTestIndPower
+analysis = TTestIndPower()
+n_per_arm = analysis.solve_power(effect_size=0.10,  # Cohen's d
+                                  alpha=0.05, power=0.80)
+```
+
+**For a count outcome (Poisson):** Use exact methods (`scipy.stats.poisson`
++ simulation) — closed-form is fragile.
+
+Output: **Required total sample size + expected run length** based on the
+daily traffic estimate. If run length > 4 weeks, flag it — long experiments
+suffer from novelty fade and seasonality. If < 1 week, flag for week-of-day
+effects.
+
+### Step 3 — Randomization design
+
+Decide the randomization unit and method:
+
+| Unit | Use when | Pitfall |
+|------|----------|---------|
+| **User** (sticky assignment) | Most product changes | Need stable user ID; new users mid-experiment need policy |
+| **Session** | Logged-out / pre-login changes | Cross-session contamination if user converts after randomization |
+| **Account / org** | B2B with multi-user accounts | Cluster size variation → power loss |
+| **Time block (interleaved)** | Can't randomize per user (e.g., pricing visible to all) | Confounded by time-of-day effects; need switchback design |
+| **Geo / market** | Pricing changes, regulatory regions | Few units → low statistical power |
+
+For clustered randomization (accounts, geos), use **cluster-robust standard
+errors** in the analysis — naive per-user SE under-states variance.
+
+**SUTVA check** (Stable Unit Treatment Value Assumption):
+- Does one user's treatment affect another user's outcome? (Marketplace,
+  social, network effects → yes. Use cluster or geo randomization.)
+- Is the treatment well-defined? (No variants of the variant.)
+
+If SUTVA is violated, naive A/B is misleading. Recommend switchback,
+clustered, or synthetic-control designs.
+
+### Step 4 — Primary + guardrail metrics
+
+**Primary metric**:
+- One. Just one. Specify the exact definition (numerator, denominator,
+  window, exclusions).
+- Pre-commit to the statistical test (e.g., "two-sided z-test on
+  binomial proportion with 0.05 alpha").
+
+**Guardrail metrics** (typically 3-5):
+- What you don't want to break.
+- For each: pre-commit to a "harm threshold" — the magnitude that triggers a
+  STOP regardless of primary outcome.
+- Use one-sided tests on guardrails (you only care about harm direction).
+
+**Counter-metric** (1-2): A metric you'd expect to move in the opposite
+direction. If both primary and counter-metric move in the same direction,
+something is wrong (instrumentation bug, novelty effect).
+
+### Step 5 — **Pre-registered analysis plan**
+
+This is the heart of the skill. Write down BEFORE the experiment runs:
+
+1. **Primary analysis.** Exact test, exact code path, exact handling of edge
+   cases (users with zero exposures, users in multiple cells from bug,
+   account-level vs user-level aggregation).
+2. **Secondary analyses.** Listed up front, ranked, with explicit alpha
+   correction (Bonferroni, BH-FDR). If you find a result in a secondary
+   analysis that wasn't pre-registered, you may report it but cannot claim
+   it as confirmatory.
+3. **Subgroups.** Pre-registered. New mobile users, returning desktop users,
+   geo, plan tier. Each one costs alpha. Cap at 3-5 subgroups.
+4. **Handling of common edge cases.** Bot traffic, internal users, users in
+   parallel experiments, users with insufficient exposure window.
+5. **Stopping rule.** Fixed-horizon (run for N days, then analyze) is the
+   default — simple and immune to peeking-bias. If sequential testing is
+   needed, use a proper method: **always-valid p-values** (Robbins, Howard),
+   **alpha-spending** (Pocock, O'Brien-Fleming), or **mSPRT**. Do not eyeball
+   "is it significant yet?" daily — that inflates false-positive rate to
+   20-30%.
+6. **Multiple testing correction.** If running N comparisons, decide
+   correction up front: Bonferroni (conservative), Benjamini-Hochberg FDR
+   (less conservative, controls false discovery rate), or holistic
+   (registered single primary, secondaries are exploratory).
+7. **Success criterion.** Exact: "primary metric lift ≥ MDE *and* lower 95%
+   CI bound > 0 *and* all guardrails within harm thresholds."
+8. **Failure criterion.** Exact: "primary metric within ±1% of control *or*
+   any guardrail breaches harm threshold."
+9. **Inconclusive criterion.** Anything between. Specify what to do — usually
+   "ship neither; design follow-up with larger sample or different lever."
+
+Persist this plan to `experiments/behavioral/{slug}/PLAN.md` **before**
+exposure to traffic. Hash it. Commit it. Reference the hash in any later
+analysis. This is the anti-p-hacking commitment.
+
+### Step 6 — Sample ratio mismatch (SRM) check
+
+Most experiments are silently broken by SRM — unequal arm sizes due to
+bot filtering, opt-out skew, or buggy assignment. Pre-commit to:
+
+- Chi-squared test on observed-vs-expected assignment ratios.
+- If p < 0.001 on the SRM test, **discard the experiment** — do not analyze
+  the primary. Find the bug, fix it, re-run.
+
+### Step 7 — Generate analysis notebook
+
+Write `experiments/behavioral/{slug}/analysis.ipynb` (or `.py`) with:
+
+```python
+"""
+{slug} — Pre-registered analysis.
+Plan hash: <sha256 of PLAN.md at registration>
+"""
+import pandas as pd
+import statsmodels.stats.proportion as smp
+import scipy.stats as st
+
+PLAN_HASH = "abc123..."  # from PLAN.md commit
+df = pd.read_parquet("exposures.parquet")
+
+# === Step 1: SRM check ===
+arm_counts = df["arm"].value_counts()
+expected = [arm_counts.sum() / len(arm_counts)] * len(arm_counts)
+srm_chi2, srm_p = st.chisquare(arm_counts.values, expected)
+print(f"SRM check: chi2={srm_chi2:.2f}, p={srm_p:.4f}")
+assert srm_p > 0.001, "SRM violation — STOP. Do not analyze primary."
+
+# === Step 2: Primary metric ===
+ct = df.groupby("arm")["converted"].agg(["sum", "count"])
+stat, p_value, _ = smp.proportions_ztest(ct["sum"].values, ct["count"].values)
+ci = smp.confint_proportions_2indep(ct.loc["treat", "sum"], ct.loc["treat", "count"],
+                                     ct.loc["control", "sum"], ct.loc["control", "count"])
+print(f"Primary z={stat:.2f}, p={p_value:.4f}, 95% CI on diff: {ci}")
+
+# === Step 3: Guardrails (one-sided) ===
+# ... pre-registered list
+
+# === Step 4: Subgroups (pre-registered only) ===
+# ... pre-registered list, with BH-FDR correction
+```
+
+### Step 8 — Verdict template
+
+Pre-commit to the verdict format:
+
+```
+EXPERIMENT VERDICT: {slug}
+Plan hash: <sha256>
+Primary metric:  conversion (signup → upgrade within 7 days)
+                 Control:  6.20% (n=18,420)
+                 Treat:    6.78% (n=18,602)
+                 Lift:     +9.4%  95% CI [+2.1%, +16.8%]
+                 p-value:  0.012
+Guardrails (one-sided harm direction):
+                 RPU:         +1.2%  PASS  (threshold: ≥ -2%)
+                 Unsubscribe: +0.05% PASS  (threshold: ≤ +0.20%)
+                 NPS sample:  +0.4   PASS  (threshold: ≥ -2.0)
+SRM:             p=0.342  PASS
+Subgroups (BH-FDR adj, pre-registered):
+                 New users:     lift +14.2% [+4.1%, +24.3%]   q=0.018
+                 Returning:     lift +5.8%  [-2.3%, +14.0%]   q=0.180
+DECISION:        SHIP
+```
+
+### Step 9 — Anti-p-hacking checklist
+
+Before finalizing the plan, verify:
+
+- [ ] Hypothesis is directional and predicts an effect size from prior
+      literature.
+- [ ] One primary metric, no last-minute swaps.
+- [ ] Guardrails listed with harm thresholds.
+- [ ] Stopping rule is fixed-horizon OR uses a proper sequential method.
+- [ ] Subgroups pre-registered with correction.
+- [ ] Plan hashed and persisted before exposure.
+- [ ] SRM check is the gate before the primary analysis.
+- [ ] Verdict template pre-committed.
+
+## Outputs
+
+```
+experiments/behavioral/{slug}/PLAN.md          # the pre-registered plan
+experiments/behavioral/{slug}/PLAN.sha256      # hash of PLAN.md
+experiments/behavioral/{slug}/analysis.py      # analysis notebook (post-run)
+experiments/behavioral/{slug}/power-calc.py    # the power analysis used
+experiments/behavioral/{slug}/VERDICT.md       # filled-in verdict after run
+```
+
+## Edge cases
+
+- **Novelty / primacy effects.** First-week results often over-state effects
+  (novelty) and then decay. Plan for at least 14 days of exposure, ideally
+  spanning two cycles of natural behavior (weekday + weekend, or monthly
+  billing cycles).
+- **Heterogeneous treatment effects.** Average treatment effect can hide
+  segments where the intervention HURTS. Pre-register a CATE (conditional
+  average treatment effect) analysis on a small set of segments. Don't fish
+  through every dimension post-hoc.
+- **Interaction with other experiments.** If multiple experiments run on
+  overlapping populations, factorial design + interaction analysis is
+  needed. Naive single-experiment analysis is biased.
+- **Carryover.** In switchback / time-block designs, treatment from one
+  block bleeds into the next. Either use a washout period or model
+  carryover explicitly.
+- **One-sided concerns.** If you genuinely only care about harm in one
+  direction (e.g., "as long as renewal doesn't drop, ship the new UI"),
+  one-sided tests are correct on guardrails but NOT on the primary (where
+  surprise direction matters).
+- **Underpowered experiments are worse than no experiment.** They produce
+  noise that gets misinterpreted as signal. If the power calc says "you'd
+  need 6 months of traffic," tell the user, and recommend either a
+  qualitative study or a bigger MDE.
+- **Effect sizes from prior literature don't generalize cleanly.** WEIRD-
+  population priors don't apply to non-WEIRD users. SaaS findings don't
+  apply to consumer mobile. Treat priors as the order of magnitude, not the
+  exact value.
+- **Ethical review.** For interventions affecting vulnerable populations,
+  health-adjacent products, or financial decisions, recommend formal
+  ethical review (IRB-style) even if not legally required. Don't
+  optimization-test on people without their reasonable understanding.
+
+## Pre-registration philosophy
+
+The point of pre-registration is **commitment**. Once you've written down
+the analysis plan and hashed it, you cannot "let the data speak" without
+disclosing the pre-registration. This separates **confirmatory** findings
+(your one shot) from **exploratory** findings (everything else, which need
+follow-up confirmation).
+
+Without pre-registration, the difference between confirmatory and
+exploratory analysis collapses, and every report becomes "we found
+something." The replication crisis in social science is exactly this
+failure mode. Don't reproduce it.
+
+## Dependencies
+
+- **statsmodels skill** — power calculations, proportion / regression tests.
+- **scipy** — distributions, exact tests.
+- **`marketing-psychology` skill** — primitive set for behavioral principles
+  and effect-size priors.
+- **`/ab-testing`** — operational A/B platform integration.
+- **`/incentive-design`** — if the experiment is testing an incentive
+  structure designed by that skill.
+- **`/biases-audit`** — defensive check on the experiment design itself —
+  is your hypothesis biased by what you want to find?
+
+## AskUserQuestion gates
+
+Mandatory before writing the plan:
+
+1. **Behavioral principle.** Refuse to proceed without one named.
+2. **MDE / practical significance threshold.** What lift would change the
+   decision?
+3. **Primary metric definition.** Numerator, denominator, window — exact.
+4. **Randomization unit.** User / session / account / time-block.
+5. **Stopping rule.** Fixed-horizon (default) or sequential method.
+6. **Subgroups to pre-register.** Cap at 3-5.
+7. **Harm thresholds on guardrails.** Per metric.
+8. **Decision rule.** What happens on SHIP / KILL / INCONCLUSIVE.
+
+## Critical rules
+
+1. **No analysis without pre-registered plan + hash.** Skipping pre-
+   registration converts a confirmatory test into exploratory data
+   dredging. Don't.
+2. **SRM check gates the primary analysis.** Always.
+3. **Never swap the primary metric post-hoc.** If you really need to, that
+   is an exploratory finding, not a confirmatory result. Run a second
+   experiment.
+4. **Always cite an effect-size prior.** Hypotheses without predicted
+   magnitudes can't be falsified — any non-zero result will be called a win.
+
+## Completion summary
+
+After producing the plan, present:
+
+- Behavioral principle + predicted effect range.
+- Required sample size per arm + expected run length.
+- Primary metric + guardrails + harm thresholds.
+- Stopping rule + correction strategy.
+- Subgroups pre-registered.
+- Plan hash.
+- Files written.
+- Recommended follow-up: register the plan in the team's experiment
+  registry; `/biases-audit` on the design; after run, run analysis from the
+  notebook and produce VERDICT.md.

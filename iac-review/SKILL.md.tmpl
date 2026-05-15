@@ -1,0 +1,266 @@
+---
+name: iac-review
+preamble-tier: 2
+version: 1.0.0
+description: |
+  [Chief Architect] Pre-apply review of Terraform / Pulumi / AWS CDK diffs. Skips
+  the 200 lines of resource-rename noise to surface the things that actually
+  matter: destructive changes (deletes, replaces), IAM widenings, public exposure,
+  instance-class upgrades over 2x cost, missing tags, drift from the policy
+  baseline. Default is dry-run; --apply requires explicit confirmation. Use when:
+  "review this terraform plan", "iac review", "is this plan safe to apply",
+  "review the cdk diff", or "review the pulumi preview". (gstack)
+allowed-tools:
+  - Read
+  - Write
+  - Edit
+  - Grep
+  - Glob
+  - AskUserQuestion
+  - Bash
+triggers:
+  - review terraform plan
+  - iac review
+  - review cdk diff
+  - review pulumi preview
+  - infra change review
+---
+
+{{PREAMBLE}}
+
+{{GBRAIN_CONTEXT_LOAD}}
+
+# /iac-review — Family D — Chief Architect
+
+Infrastructure plans are mostly noise. A 200-line `terraform plan` typically holds
+198 lines of resource renames, tag additions, and metadata churn — and one IAM
+policy that opens a bucket to the world. This skill finds the one.
+
+Mode is **read-only by default**. Mutations (apply, destroy, push to remote) are
+gated behind `AskUserQuestion` confirmation. There is no auto-apply path.
+
+## When to use
+
+- Before `terraform apply` / `pulumi up` / `cdk deploy` on any non-trivial change.
+- Pre-merge gate on any PR that touches `*.tf`, `Pulumi.yaml`, `cdk.json`, or any
+  IaC module.
+- After importing existing resources — drift review.
+- Quarterly policy-baseline audit on the production state file.
+
+**Do not use for:**
+
+- Cost-only analysis without a pending plan — that's `/cost-optimize`.
+- Runtime security audit of deployed resources — that's `/cso`.
+- Application code review — that's `/review`.
+
+## Inputs
+
+The skill accepts one of:
+
+1. A **plan artifact** — preferred. Generate it first:
+   - Terraform: `terraform plan -out=tfplan.binary && terraform show -json tfplan.binary > tfplan.json`
+   - Pulumi: `pulumi preview --json > pulumi-preview.json`
+   - AWS CDK: `cdk diff --json > cdk-diff.json` (CDK v2 supports `--ci --no-color` for stable output)
+2. A **paste of plan output** in chat — the skill parses human-readable diff
+   format too, but JSON is more reliable.
+3. A **PR URL** — `gh pr view <url>` to fetch the CI plan comment if the
+   workflow posts one.
+
+If nothing is provided, AskUserQuestion to pick a source.
+
+## Procedure
+
+### Step 0: Detect IaC tool and plan format
+
+```bash
+# Detect tool
+[ -f main.tf ] || find . -maxdepth 3 -name "*.tf" -not -path "*/node_modules/*" 2>/dev/null | head -1 \
+  && echo "terraform: yes" || echo "terraform: no"
+[ -f Pulumi.yaml ] && echo "pulumi: yes" || echo "pulumi: no"
+[ -f cdk.json ] && echo "cdk: yes" || echo "cdk: no"
+
+# Detect plan artifact
+ls tfplan.json pulumi-preview.json cdk-diff.json 2>/dev/null
+```
+
+If multiple IaC tools are present (Terraform + CDK for different stacks), state
+which one the user wants reviewed.
+
+### Step 1: AskUserQuestion — confirm scope
+
+One issue per call. Ask:
+
+- **Tool + plan source** — Terraform / Pulumi / CDK, and where is the plan? File
+  path, paste, or PR.
+- **Environment** — dev / staging / prod / unknown. Prod gets stricter gates.
+- **Apply intent** — review only (default) or apply after review? Apply requires
+  a follow-up confirmation gate at Step 6.
+
+Do not proceed until the user responds.
+
+### Step 2: Parse the plan
+
+Use the tool-appropriate parser. The output of this step is a normalized list of
+**resource actions**:
+
+```
+{
+  "address": "aws_iam_role.app",
+  "action": "update" | "create" | "delete" | "replace" | "read",
+  "type": "aws_iam_role",
+  "before": { ... },
+  "after": { ... },
+  "change_keys": ["assume_role_policy", "tags.Environment"]
+}
+```
+
+**Terraform** — parse `tfplan.json` `resource_changes[]`. The `change.actions`
+array tells you `create` / `update` / `delete` / `replace` (= `["delete","create"]`).
+
+**Pulumi** — parse `pulumi-preview.json` `steps[]`. `op` is one of `create`,
+`update`, `delete`, `replace`, `same`, `read`. Pulumi has `same` (no change) which
+Terraform doesn't show — filter it out.
+
+**CDK** — `cdk diff --json` emits `iamChanges`, `securityGroupChanges`,
+`resourceChanges` separately. Parse each. IAM changes are already pre-classified,
+which makes Step 3 easier.
+
+For free-text plans (paste mode), use Terraform's `+`/`~`/`-`/`-/+` prefix
+convention. Pulumi prefixes are similar with `++` for replace. CDK uses
+`[+]`/`[-]`/`[~]` in its console output.
+
+### Step 3: Classify every change by risk
+
+Walk each resource action and apply this matrix:
+
+| Pattern                                                          | Risk |
+|------------------------------------------------------------------|------|
+| Delete on a stateful resource (database, bucket with data, EBS) | **CRITICAL** |
+| Replace on a stateful resource (= delete + recreate)             | **CRITICAL** |
+| IAM policy widens (adds `Action: "*"`, `Resource: "*"`, `*:Get*`) | **CRITICAL** |
+| Security group opens 0.0.0.0/0 on a non-public port              | **CRITICAL** |
+| S3 bucket / Storage account public access change                 | **CRITICAL** |
+| KMS key delete or alias swap                                     | **CRITICAL** |
+| Public endpoint added (`publicly_accessible = true`)             | **HIGH** |
+| Instance class upgrade with >2x hourly cost                      | **HIGH** |
+| Lambda execution role widens                                     | **HIGH** |
+| VPC route table changes affecting NAT / IGW                      | **HIGH** |
+| Database parameter group change (could restart instance)         | **HIGH** |
+| Auto-scaling min/max change                                      | **MEDIUM** |
+| Tag-only update                                                  | **LOW** |
+| Description / comment-only update                                | **LOW** |
+
+State the count by risk band. Show the CRITICAL items first, in full.
+
+### Step 4: IAM-specific deep dive
+
+For every IAM policy change (create/update on `aws_iam_policy`,
+`aws_iam_role_policy`, `google_project_iam_*`, `azurerm_role_assignment`):
+
+1. Diff the policy document. Show added statements, removed statements, modified
+   `Action` / `Resource` / `Condition` / `Principal`.
+2. Flag any of:
+   - `Action: "*"` or `Action: "service:*"` (e.g., `s3:*`).
+   - `Resource: "*"` paired with `Action` other than `Describe*` / `List*`.
+   - `Principal: "*"` without an `aws:SourceArn` / `aws:SourceAccount` condition.
+   - `NotAction` / `NotResource` (almost always a bug).
+   - `Effect: Allow` on `iam:PassRole` to `*`.
+3. Cross-reference: if a role gains permissions, what does the role attach to?
+   The blast radius of a Lambda role widening is just that function; widening a
+   role attached to an EC2 instance profile or a Kubernetes ServiceAccount is
+   much larger.
+
+### Step 5: Cost delta estimate
+
+For every resource change that affects cost:
+
+- Instance class swaps — look up the on-demand hourly rate (cache lookup in
+  `~/.gstack/cost-data/{provider}-instances.json` if the cache is fresh, else
+  use a conservative estimate from the well-known prices table baked into
+  `lib/cloud-cost/` if available; else estimate from the size delta and note
+  the estimate is rough).
+- Provisioned IOPS / throughput changes on EBS / RDS / Aurora.
+- `aws_eip` / static IP additions (~$3.60/mo when unattached).
+- NAT gateway additions (~$32.40/mo per gateway).
+- Data transfer additions (cross-AZ, cross-region, internet egress).
+
+Emit a **monthly delta** ("+$140/mo, -$30/mo, net +$110/mo"). If `/cost-optimize`
+has run and a baseline exists at `~/.gstack/projects/{slug}/cost-baseline.json`,
+compute the percentage delta against the current monthly bill.
+
+### Step 6: Emit the report
+
+```bash
+mkdir -p infra/reviews
+REPORT="infra/reviews/$(date +%Y-%m-%d-%H%M).md"
+```
+
+Report sections, in order:
+
+1. **Verdict** — one line: SAFE / NEEDS REVIEW / DO NOT APPLY.
+2. **Critical findings** — numbered list. Each: resource address, action, why
+   it's critical, recommended fix.
+3. **High findings** — same shape.
+4. **Cost delta** — table of resources with cost change, plus the net.
+5. **IAM diff appendix** — every IAM change, with the policy doc diff.
+6. **Full resource change table** — address, action, risk band. Sortable.
+7. **Suggested next actions** — what to change in the plan before applying.
+
+Post the report to the PR as a comment if a PR URL was provided:
+`gh pr comment <url> --body-file "$REPORT"`.
+
+### Step 7: AskUserQuestion — apply gate
+
+If the user asked for apply intent at Step 1 AND the verdict is SAFE:
+
+- AskUserQuestion: "Apply this plan now?" with options: Apply / Defer / Edit plan first.
+- If Apply, run the apply command. Stream output. Capture state changes.
+- Append the apply outcome to the report.
+
+If the verdict is NEEDS REVIEW or DO NOT APPLY, refuse to apply even on request.
+Tell the user which findings to address first.
+
+## Outputs
+
+- `infra/reviews/{YYYY-MM-DD-HHMM}.md` — the full review report.
+- A PR comment (if PR context provided) with the verdict + critical findings.
+- `~/.gstack/projects/{slug}/iac-history.jsonl` — append-only log of every review
+  (date, verdict, finding counts) for trend analysis over time.
+
+## Edge cases
+
+- **Module-call diffs** — a module change appears as many flat resource changes.
+  Group them under the module path in the report so the human sees "the auth
+  module changed" not 47 separate resources.
+- **Sensitive value redaction** — Terraform marks `(sensitive value)` for secrets;
+  preserve that redaction. Pulumi has `secret` outputs; never log them. Strip
+  any value that looks like a key (regex on `AKIA[A-Z0-9]{16}`, `AIza[0-9A-Za-z\-_]{35}`,
+  etc.) defensively.
+- **CDK assets** — code bundles re-hash on every synth. A pure asset-hash change
+  with no resource property delta is LOW risk and should be collapsed.
+- **Provider version upgrades** — flag separately. A provider major-version bump
+  can introduce silent behavior change even if no resource changes show.
+- **Workspaces / stacks** — confirm which workspace/stack the plan is against.
+  Reviewing a dev plan and applying it to prod is a classic outage.
+- **Drift not in the plan** — if `terraform plan` shows `Note: Objects have
+  changed outside of Terraform`, flag it. Drift is a separate problem; surface it.
+- **Multi-account / multi-project plans** — Terragrunt and Pulumi multi-stack
+  plans bundle several environments. Insist on one environment per review.
+
+## Dependencies
+
+- **S1 (Hall-mode preamble)** for trust-gated outputs.
+- `terraform`, `pulumi`, or `cdk` CLI installed locally.
+- `jq` for plan-JSON parsing.
+- `gh` CLI for PR comment posting.
+- `/cost-optimize` (optional) for cost-baseline comparison.
+
+## Stop gates
+
+- After Step 1 (scope confirmation) — do not proceed without user response.
+- Before Step 7 (apply) — apply requires its own AskUserQuestion confirmation.
+- Refuse to apply when the verdict is NEEDS REVIEW or DO NOT APPLY, even on
+  direct user request. Tell them what to fix first.
+
+A plan that destroys customer data is one accepted suggestion away. The default
+is dry-run for a reason.

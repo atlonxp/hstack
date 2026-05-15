@@ -1,0 +1,408 @@
+---
+name: simulate
+preamble-tier: 2
+version: 1.0.0
+description: |
+  [Operations Research / Behavioral] Build a discrete-event or Monte-Carlo simulation
+  of a system from a description. Auto-generates a SimPy (or simmer) model, runs
+  scenarios, produces distribution outputs (p50/p95/p99), generates a tornado plot
+  for sensitivity, and persists a reproducible report. Use for capacity / pricing /
+  staffing / latency / queue / failure-rate questions where back-of-envelope math
+  hides the tail risk.
+  Use when: "simulate this", "monte carlo", "queueing analysis", "what does the
+  p99 look like", "tornado plot", "SimPy / simmer / discrete-event sim". (gstack)
+allowed-tools:
+  - Read
+  - Write
+  - Grep
+  - Glob
+  - Bash
+  - AskUserQuestion
+benefits-from: [simpy, statsmodels]
+triggers:
+  - simulate the system
+  - monte carlo
+  - p99 analysis
+  - capacity planning sim
+  - tornado plot
+---
+
+{{PREAMBLE}}
+
+# /simulate — Family I — Operations Research / Behavioral
+
+You build a **simulation** of a system the user describes. Two modes:
+
+- **Discrete-event simulation (DES)** — for queues, servers, latency,
+  capacity, staffing, throughput. Built with SimPy.
+- **Monte-Carlo (MC)** — for outcome distributions of stochastic processes
+  (revenue, churn, project completion time, risk capital). Built with NumPy +
+  SciPy.
+
+The output is **not** "the simulation said X." The output is **a distribution
+with p50 / p95 / p99**, a **tornado plot** showing which input drives the
+output the most, and a **reproducibility bundle** (seeded RNG, pinned deps).
+
+Most teams skip simulation because "back-of-envelope works." It doesn't,
+not when the question is "will we meet SLA?" or "what's the worst-case
+queue length on Black Friday?" — averages lie, tails kill.
+
+## When to use
+
+Use this skill when:
+- The question involves **variability or randomness** (arrival rates, service
+  times, failure probabilities, project durations).
+- The question asks about a **tail outcome** (p95 / p99 / worst case), not
+  just an average.
+- The system has **interacting components** (queues feeding queues, servers
+  with shared resources, retries, timeouts).
+- You need to **compare scenarios** ("what if we add a second cashier?",
+  "what if we cap retries at 3?") without running them in production.
+
+Do NOT use this skill when:
+- The system is deterministic and a spreadsheet would answer the question.
+- The user wants a single point estimate. Simulation produces distributions;
+  if the user can't stomach uncertainty bounds, the value is wasted.
+- The system is so simple that a closed-form queueing formula (M/M/1 etc.)
+  would do. Reach for `/optimize-decision` or hand-math first.
+
+## Inputs (System Description)
+
+You need a **system description** before writing any code. Walk through:
+
+1. **What is the system?** A queue (customers / requests / jobs)? A risk
+   process (project that can fail at each stage)? An inventory chain?
+2. **Entities and resources.** What flows? What is consumed? What blocks?
+3. **Arrival process.** Poisson with rate λ? Empirical from data? Time-of-day
+   varying? Burst-driven?
+4. **Service / processing distributions.** Exponential? Lognormal? Pareto?
+   Empirical?
+5. **Capacities and policies.** Server count, queue discipline (FIFO / LIFO /
+   priority), abandonment, retry policy, timeout.
+6. **Outputs of interest.** Mean wait time? p99 wait? Utilization? Throughput?
+   Probability of breaching SLA?
+7. **Time horizon.** Run length per replication, number of replications,
+   warm-up period for steady-state.
+8. **Sensitivity targets.** Which inputs are uncertain and need the tornado
+   plot?
+
+## Procedure
+
+### Step 1 — Mode selection
+
+Ask the user via AskUserQuestion:
+
+- **Discrete-event (SimPy)** if entities flow through resources with
+  interaction (queues, servers, capacities).
+- **Monte Carlo** if independent draws give the outcome (sum of random
+  stage durations, NPV under stochastic cash flows, win probability).
+- **Hybrid** if some elements interact and some don't (rare; SimPy can hold
+  both).
+
+### Step 2 — System diagram
+
+Produce an ASCII diagram of the system *before* writing code:
+
+```
+       arrivals (λ=12/min, Poisson)
+              │
+              v
+        ┌────────────┐
+        │  intake    │  1 worker, exp(μ=15/min)
+        └─────┬──────┘
+              │
+              v
+        ┌────────────┐
+        │  triage    │  2 workers, lognormal(μ=2.5, σ=0.6 min)
+        └─────┬──────┘
+              │
+              v          (abandonment after 10 min wait)
+        ┌────────────┐
+        │  resolution│  3 workers, gamma(α=2, β=4 min)
+        └────────────┘
+```
+
+Surface to the user. Get sanity check. This is where most modeling errors
+hide.
+
+### Step 3 — Distribution choice
+
+For each random element, pick a distribution and justify it:
+
+| Phenomenon | Default distribution | When to deviate |
+|------------|---------------------|-----------------|
+| Inter-arrival times (memoryless arrivals) | Exponential | Use empirical / NHPP if time-of-day varies |
+| Service times (positive, right-skewed) | Lognormal | Gamma if shape control needed |
+| Failure / success counts | Binomial / Poisson | Negative binomial if overdispersed |
+| Project durations | Triangular (best/likely/worst) | Beta-PERT for smoother shape |
+| Heavy tails (rare big events) | Pareto / Weibull | Document the tail exponent — it matters |
+
+If the user has empirical data, fit it: `scipy.stats.lognorm.fit(data)` then
+QQ-plot before trusting. Empirical CDF (bootstrap) is always a safe fallback.
+
+### Step 4 — SimPy DES implementation
+
+For a queueing system, generate `simulations/{slug}/model.py`:
+
+```python
+"""
+{slug} — Support queue with intake / triage / resolution.
+Generated by /simulate. Discrete-event simulation in SimPy.
+"""
+import random
+import statistics
+import simpy
+
+RANDOM_SEED  = 42
+SIM_TIME_MIN = 8 * 60          # 8-hour day
+WARMUP_MIN   = 60              # discard first hour for steady-state
+REPLICATIONS = 500             # number of independent runs
+
+LAMBDA_PER_MIN = 12            # arrivals/min (Poisson → exp inter-arrivals)
+INTAKE_RATE    = 15            # mean service rate
+TRIAGE_MU, TRIAGE_SIGMA = 2.5, 0.6   # lognormal
+RESOLUTION_SHAPE, RESOLUTION_SCALE = 2, 4  # gamma
+ABANDON_MIN = 10               # customer leaves if wait > 10 min
+
+class Metrics:
+    def __init__(self):
+        self.wait_times = []
+        self.abandoned  = 0
+        self.completed  = 0
+
+def customer(env, name, intake, triage, resolution, metrics):
+    arrive = env.now
+    with intake.request() as req:
+        result = yield req | env.timeout(ABANDON_MIN)
+        if req not in result:
+            metrics.abandoned += 1
+            return
+        yield env.timeout(random.expovariate(INTAKE_RATE))
+    with triage.request() as req:
+        yield req
+        yield env.timeout(random.lognormvariate(TRIAGE_MU, TRIAGE_SIGMA))
+    with resolution.request() as req:
+        yield req
+        yield env.timeout(random.gammavariate(RESOLUTION_SHAPE, RESOLUTION_SCALE))
+    wait = env.now - arrive
+    if env.now > WARMUP_MIN:
+        metrics.wait_times.append(wait)
+        metrics.completed += 1
+
+def arrivals(env, intake, triage, resolution, metrics):
+    i = 0
+    while True:
+        yield env.timeout(random.expovariate(LAMBDA_PER_MIN))
+        i += 1
+        env.process(customer(env, f"c{i}", intake, triage, resolution, metrics))
+
+def run_once(seed):
+    random.seed(seed)
+    env = simpy.Environment()
+    intake     = simpy.Resource(env, capacity=1)
+    triage     = simpy.Resource(env, capacity=2)
+    resolution = simpy.Resource(env, capacity=3)
+    metrics = Metrics()
+    env.process(arrivals(env, intake, triage, resolution, metrics))
+    env.run(until=SIM_TIME_MIN)
+    return metrics
+
+def quantile(xs, q):
+    xs = sorted(xs); k = int(q * (len(xs) - 1)); return xs[k]
+
+if __name__ == "__main__":
+    p50s, p95s, p99s, abandons = [], [], [], []
+    for r in range(REPLICATIONS):
+        m = run_once(RANDOM_SEED + r)
+        if m.wait_times:
+            p50s.append(quantile(m.wait_times, 0.50))
+            p95s.append(quantile(m.wait_times, 0.95))
+            p99s.append(quantile(m.wait_times, 0.99))
+        abandons.append(m.abandoned / max(1, m.abandoned + m.completed))
+    print(f"p50 wait : mean={statistics.mean(p50s):.2f} min  CI95=±{1.96*statistics.stdev(p50s)/len(p50s)**0.5:.2f}")
+    print(f"p95 wait : mean={statistics.mean(p95s):.2f} min")
+    print(f"p99 wait : mean={statistics.mean(p99s):.2f} min")
+    print(f"abandon% : mean={100*statistics.mean(abandons):.1f}%")
+```
+
+### Step 5 — Monte Carlo implementation
+
+For independent-draw problems (no resource contention), use NumPy:
+
+```python
+import numpy as np
+rng = np.random.default_rng(seed=42)
+N = 100_000
+
+# Example: revenue = price * volume - costs, all stochastic
+price   = rng.lognormal(mean=np.log(50),  sigma=0.15, size=N)
+volume  = rng.poisson(lam=1200, size=N)
+costs   = rng.normal(loc=35_000, scale=4_000, size=N)
+revenue = price * volume - costs
+
+q = np.quantile(revenue, [0.05, 0.50, 0.95, 0.99])
+print(f"p05={q[0]:,.0f}  p50={q[1]:,.0f}  p95={q[2]:,.0f}  p99={q[3]:,.0f}")
+print(f"P(loss) = {(revenue < 0).mean():.3f}")
+```
+
+### Step 6 — Warm-up, replications, confidence intervals
+
+Three things almost everyone gets wrong on first build:
+
+1. **Warm-up.** A DES starts empty and reaches steady state after some time.
+   Discard metrics from the warm-up period. Use Welch's method: plot the
+   running mean of wait time, eyeball where it stabilizes, discard everything
+   before. Rule of thumb: warm-up ≈ 10× the longest service time.
+2. **Replications.** ONE run is a sample, not the answer. Run at least 100
+   replications with different seeds. 500-1000 if tails matter.
+3. **Confidence intervals.** Report point estimate ± 95% CI from replication
+   variance: `CI = 1.96 · σ / √N`. Without CIs the user will over-interpret
+   noise.
+
+### Step 7 — Tornado plot (sensitivity)
+
+For each input parameter, sweep ±20% (or ±1σ if you have uncertainty
+estimates), holding others at baseline, and measure the change in the output
+of interest (typically p99 wait time or P(loss)).
+
+```python
+baseline_p99 = run_scenario({})  # default params
+sensitivities = {}
+for param in ["LAMBDA_PER_MIN", "INTAKE_RATE", "TRIAGE_MU", "RESOLUTION_SHAPE"]:
+    low_p99  = run_scenario({param: 0.8 * defaults[param]})
+    high_p99 = run_scenario({param: 1.2 * defaults[param]})
+    sensitivities[param] = (low_p99, high_p99)
+
+# Sort by total swing and print
+ranked = sorted(sensitivities.items(),
+                key=lambda kv: abs(kv[1][1] - kv[1][0]),
+                reverse=True)
+print(f"{'Parameter':<25}{'-20%':>10}{'baseline':>12}{'+20%':>10}{'swing':>10}")
+for k, (lo, hi) in ranked:
+    print(f"{k:<25}{lo:>10.2f}{baseline_p99:>12.2f}{hi:>10.2f}{hi-lo:>10.2f}")
+```
+
+Render as ASCII bars in the report, or generate a real horizontal-bar PNG
+via matplotlib for the appendix. The ranking tells the user **which lever
+to actually pull** — usually one or two parameters dominate.
+
+### Step 8 — Scenario comparison
+
+After baseline, run named scenarios:
+
+| Scenario | Δ from baseline | p50 wait | p95 wait | p99 wait | Abandon% |
+|----------|-----------------|----------|----------|----------|----------|
+| Baseline | — | 1.2 | 4.8 | 9.6 | 4.2% |
+| +1 triage worker | capacity 2→3 | 0.9 | 3.1 | 6.0 | 1.1% |
+| Cap retries to 3 | retries=∞→3 | 1.1 | 4.5 | 8.9 | 4.0% |
+| Black Friday 3× λ | λ 12→36 | 6.8 | 22.4 | 41.0 | 31% |
+
+### Step 9 — Write report
+
+Generate `simulations/{slug}/REPORT.md`:
+
+- System description + diagram.
+- Distribution choices + justification.
+- Baseline results table (with CIs).
+- Tornado plot (ASCII).
+- Scenario comparison.
+- Verdict: "p99 wait exceeds SLA in baseline. +1 triage worker brings p99
+  under SLA. Adding a second intake server has near-zero effect (utilization
+  already 0.65; intake is not the bottleneck)."
+- Caveats: known unknowns (e.g., "service times assumed lognormal — fit on
+  Q1 data only; bursty incidents not modeled").
+
+Persist raw replication outputs to `simulations/{slug}/results/runs.jsonl`
+for reproducibility and `simulations/{slug}/model.py` (the runnable model)
+with seed pinned.
+
+## Outputs
+
+```
+simulations/{slug}/model.py        # runnable SimPy or Monte-Carlo model
+simulations/{slug}/REPORT.md       # human-readable findings
+simulations/{slug}/results/runs.jsonl  # raw replication outputs (seed, scenario, metrics)
+simulations/{slug}/tornado.txt     # ASCII tornado plot
+```
+
+## Edge cases
+
+- **Stationarity assumption is wrong.** If arrivals follow a daily / weekly
+  pattern, do NOT use a constant λ — use a **non-homogeneous Poisson process
+  (NHPP)** with hourly rates fitted from data. Constant-λ simulation
+  underestimates peak-period queues.
+- **Service-time tails dominate.** If the service distribution is heavy-tailed
+  (Pareto with α < 2 has infinite variance), p99 estimates are noisy. Need
+  10× more replications. Always plot the empirical service-time distribution
+  before picking exponential — exponential under-models tails.
+- **Resources with shared state.** SimPy's `Resource` is FIFO. Use
+  `PriorityResource` for priority queues, `PreemptiveResource` for
+  preemption, `Container` for things that fill / empty (inventory).
+- **Rare events.** If the metric is `P(catastrophe)` < 0.01, naive Monte
+  Carlo is data-inefficient. Use **importance sampling** or **rare-event
+  simulation** (splitting, RESTART). Flag this to the user — the default
+  simulation will give a confidence interval like `[0.000, 0.012]` which
+  isn't useful.
+- **Validation.** Simulation is only as good as the model. Before trusting
+  any scenario result, validate the baseline against real production data
+  if available — compare mean wait / utilization / abandon rate to actuals.
+  If the model disagrees with reality, fix the model before believing the
+  scenarios.
+- **Warm-up too short.** A simulation reporting "p99 wait = 0.4 min" on a
+  saturated server is almost always a warm-up bug. Plot the running mean
+  and eyeball it. Always.
+- **Correlated inputs.** Real-world parameters are often correlated (high
+  λ correlates with high σ_service in customer support). Default Monte
+  Carlo assumes independence. If correlation matters, use Cholesky
+  decomposition or a copula. Flag this in the caveats section.
+
+## Multi-objective tradeoffs
+
+If the user cares about BOTH p99 wait AND cost (e.g., adding workers reduces
+wait but adds cost), produce a **Pareto frontier** of scenarios — sweep
+worker count from 1 to 10, plot p99 vs cost, identify the knee. Do NOT
+collapse to a weighted sum unless the user explicitly assigns weights.
+
+## Dependencies
+
+- **SimPy** (`pip install simpy`) — discrete-event backend.
+- **NumPy + SciPy** — Monte Carlo + distribution fitting.
+- **matplotlib** (optional) — tornado plot rendering.
+- **simpy skill** — for SimPy idioms and reusable patterns.
+- **statsmodels skill** — for distribution-fitting and goodness-of-fit
+  diagnostics on empirical input data.
+- **`/sre-slo`** — when the simulation is feeding into a capacity / SLO
+  decision.
+- **`/optimize-decision`** — when the simulation result becomes input to an
+  optimization (e.g., "what's the cheapest staffing that keeps p99 < SLA?").
+
+## AskUserQuestion gates
+
+Mandatory before writing code:
+
+1. **Mode** — DES, Monte Carlo, or hybrid?
+2. **Output metric** — p50, p95, p99, mean, or full distribution?
+3. **Replication count** — default 500; ask if tails are heavy or rare events.
+4. **Warm-up length** — confirm before running.
+5. **Distribution choices** — for every random element, confirm exponential
+   vs lognormal vs empirical etc.
+6. **Sensitivity targets** — which parameters to sweep in the tornado plot.
+
+## Critical rule
+
+**Never report a single number from a simulation without a confidence
+interval and a sensitivity ranking.** A "p99 = 12.3 min" without CI and
+without "this is most sensitive to λ, then to triage capacity" is worse
+than no simulation — it manufactures confidence that doesn't exist.
+
+## Completion summary
+
+After the simulation runs, present:
+
+- Baseline distribution: p50 / p95 / p99 with CIs.
+- Top 3 sensitivity drivers from tornado plot.
+- Scenarios run and their verdicts.
+- Validation status (model vs reality, if production data available).
+- Files written.
+- Recommended follow-up: `/optimize-decision` if minimizing cost subject to
+  SLA, `/incentive-design` if humans are gaming the simulated process.

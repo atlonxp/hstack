@@ -1,0 +1,268 @@
+---
+name: shared-lib-bump
+preamble-tier: 3
+version: 1.0.0
+description: |
+  [Multi-Repo] Cascading version-bump PRs across every detected consumer of a shared lib.
+  Detects consumers via /dep-graph or by scanning lockfiles, opens a bump PR per consumer,
+  runs each consumer's test suite, and files ONE tracking issue with the merge plan
+  (not N — the issue is the rollup).
+  Use when asked to "bump shared lib", "cascade version bump", "roll out new version",
+  "upgrade @org/lib everywhere", or "consumer rollout". (gstack)
+allowed-tools:
+  - Bash
+  - Read
+  - Write
+  - Edit
+  - Grep
+  - Glob
+  - AskUserQuestion
+sensitive: true
+---
+
+{{PREAMBLE}}
+
+# /shared-lib-bump — Family E4 — Multi-Repo / Monorepo
+
+A shared library publishes a new version. You have N consumer repos. The bump is
+mechanical; the lockfile churn, test failures, and "which order do we roll this
+out?" coordination is not.
+
+/shared-lib-bump opens a bump PR per consumer, runs each consumer's tests against
+the new version, and files **one** tracking issue that holds the merge plan and
+status for all of them. One issue, not N — the rollup IS the deliverable.
+
+---
+
+## When to use
+
+- "We just cut `@org/logger@4.2.0`. Roll it out."
+- "New major version of our shared schema lib — what breaks?"
+- Quarterly dependency hygiene: "bring the laggard consumers up to current."
+
+Compare:
+- `/workspace-sync` — sync config files; different problem.
+- `/multi-repo-refactor` — coordinated code change; different problem.
+- `/shared-lib-bump` — version bump in dependency manifest + lockfile churn + test
+  per consumer.
+
+---
+
+## Inputs
+
+1. **Library name** — e.g. `@org/logger` (npm), `org-logger` (PyPI), `com.org:logger` (Maven).
+2. **New version** — semver string.
+3. **Consumer repo list** — from `/dep-graph` (cross-repo) if installed, else from
+   a config file (`bumps/consumers.yaml`), else typed by the user.
+4. **Tracking issue repo** — where the rollup issue lives (usually the shared-lib's
+   own repo).
+
+---
+
+## Pre-flight
+
+```bash
+gh auth status --show-token 2>&1 | grep -i "Token scopes"
+```
+
+Required scope: `repo` (write) on every consumer repo PLUS `issues` on the tracking
+repo. Pre-flight verifies both.
+
+For each consumer:
+
+```bash
+gh repo view <repo> --json viewerPermission,defaultBranchRef
+```
+
+Skip-list any repo where viewer permission < WRITE.
+
+**Detect language/package manager per consumer.** Read the consumer's manifest:
+
+| Manifest             | Manager        | Lockfile             |
+|----------------------|----------------|----------------------|
+| `package.json`       | npm/pnpm/yarn  | `package-lock.json` / `pnpm-lock.yaml` / `yarn.lock` |
+| `pyproject.toml`     | poetry/uv/pip  | `poetry.lock` / `uv.lock` / `requirements.txt` |
+| `Cargo.toml`         | cargo          | `Cargo.lock`         |
+| `go.mod`             | go             | `go.sum`             |
+| `Gemfile`            | bundler        | `Gemfile.lock`       |
+| `pom.xml` / `build.gradle` | maven/gradle | (varies)         |
+
+A consumer that doesn't list the library at all (false positive in the discovery list)
+gets dropped with a note.
+
+**AskUserQuestion gate (consumer list + version + tracking issue location):**
+
+> "Bump `<lib>` to `<version>` across these <N> consumers. Tracking issue will be
+> filed in `<tracking-repo>`. Confirm or amend."
+
+Options: `confirm` | `amend consumer list` | `amend version` | `change tracking repo` | `abort`.
+
+---
+
+## Procedure
+
+### Step 1: File the tracking issue (first, not last)
+
+```bash
+gh issue create --repo "$TRACKING_REPO" \
+  --title "rollout: <lib>@<version> (<N> consumers)" \
+  --body "$(cat <<'EOF'
+Tracking rollout of <lib> v<version> across <N> consumer repos.
+
+## Plan
+1. One bump PR per consumer (opened automatically).
+2. Each PR runs the consumer's own test suite against the new version.
+3. PRs are NOT auto-merged — human review per repo.
+
+## Status (auto-updated)
+| repo | PR | tests | review | merged |
+|------|-----|-------|--------|--------|
+EOF
+)"
+TRACKING_ISSUE=$(gh issue view --repo "$TRACKING_REPO" --json number -q '.number')
+```
+
+The issue is the single rollup. Every PR will backlink to it. The agent re-edits this
+issue's body after every status change — re-render the table, don't append comments
+(comments scroll; the body is canonical).
+
+### Step 2: For each consumer, open a bump PR
+
+```bash
+WORK=$(mktemp -d)
+for repo in $CONSUMERS; do
+  gh repo clone "$repo" "$WORK/$(basename $repo)" -- --depth 5
+  cd "$WORK/$(basename $repo)"
+  BASE=$(gh repo view "$repo" --json defaultBranchRef -q '.defaultBranchRef.name')
+  git checkout -b "bump/<lib>-<version>"
+done
+```
+
+Per consumer, bump the manifest AND the lockfile (lockfile is the hard part):
+
+| Manager | Bump command                                    |
+|---------|-------------------------------------------------|
+| npm     | `npm install <lib>@<version> --package-lock-only` then `npm install` |
+| pnpm    | `pnpm add <lib>@<version>`                      |
+| yarn    | `yarn add <lib>@<version>`                      |
+| poetry  | `poetry add <lib>@<version>`                    |
+| uv      | `uv add <lib>==<version>`                       |
+| cargo   | `cargo update -p <lib> --precise <version>`     |
+| go      | `go get <lib>@v<version> && go mod tidy`        |
+| bundler | `bundle update <lib>`                           |
+
+If the manager isn't installed locally, the agent edits the manifest by hand and
+notes in the PR body that the reviewer must regenerate the lockfile. Don't push a
+broken lockfile.
+
+### Step 3: Run the consumer's tests
+
+Read the consumer's `CLAUDE.md` for test commands. If absent, fall back to:
+
+- `npm test` / `pnpm test` / `yarn test` for JS.
+- `pytest` for Python.
+- `cargo test` for Rust.
+- `go test ./...` for Go.
+- `bundle exec rspec` for Ruby.
+
+Capture stdout+stderr+exit code. Three outcomes:
+
+- **Pass** — PR body gets a `Tests: PASS` line. Mark the tracking issue.
+- **Fail with clear cause from the new version** — agent annotates the PR body with
+  the failing test names + stack-trace snippets, sets a `breaking-bump` label,
+  marks `tests: FAIL` in tracking. Do NOT close the PR — humans decide whether to
+  push a fix or hold the upgrade.
+- **Fail due to flake / unrelated** — agent retries once; if still failing, treat as
+  `Fail` above.
+
+Commit the lockfile changes separately from the manifest changes for bisect-friendliness:
+
+1. Commit 1: `chore: bump <lib> to <version>` (manifest only)
+2. Commit 2: `chore: regen lockfile for <lib> <version>` (lockfile only)
+
+### Step 4: Push and open the PR
+
+```bash
+git push -u origin "bump/<lib>-<version>"
+gh pr create --repo "$repo" \
+  --title "chore: bump <lib> to <version>" \
+  --body "$(cat <<'EOF'
+Part of rollout tracked in <tracking-repo>#<tracking-issue>.
+
+## Change
+- `<lib>`: `<old-version>` → `<version>`
+
+## Test result
+<paste truncated output, last ~60 lines>
+
+## Notes
+- Lockfile regenerated.
+- Consumer-specific notes: <auto-detected, e.g. peer dep mismatch>.
+EOF
+)" \
+  --label "shared-lib-bump"
+```
+
+If tests failed: add `breaking-bump` label and a comment with the full failing output
+gist'd via `gh gist create`.
+
+### Step 5: Update the tracking issue
+
+After every PR opens (or moves), re-render the tracking issue body with the latest
+status table. The table is the source of truth: PR link, tests pass/fail, review
+status, merge status.
+
+```bash
+gh issue edit "$TRACKING_ISSUE" --repo "$TRACKING_REPO" --body "$(render_status_table)"
+```
+
+### Step 6: Outputs
+
+Write `bumps/<lib>-<version>.md` locally with the same content as the tracking issue
+plus the agent's reasoning (which consumers failed and why, suggested next steps).
+
+Do NOT auto-merge. AskUserQuestion at the end:
+
+> "Rollout PRs opened: <N> pass / <M> fail. Pick next action:"
+> - `watch and re-poll status` (re-run me later)
+> - `auto-merge passing PRs only` (still requires required reviewers)
+> - `done for now`
+
+---
+
+## Outputs
+
+- `bumps/<lib>-<version>.md` — local plan + status.
+- One tracking issue in the configured repo (the rollup — never N issues).
+- N bump PRs across consumer repos, labeled and cross-linked.
+- Failing PRs tagged with `breaking-bump` for human triage.
+
+---
+
+## Edge cases
+
+- **Partial GH token scope** — consumers without write get skipped and listed in the
+  tracking issue under "blocked".
+- **Lockfile manager not installed on agent host** — push manifest-only change with a
+  PR body note; CI on the consumer regenerates the lockfile (most repos do this).
+- **Consumer doesn't actually depend on the lib** (false discovery) — drop with a note
+  in the tracking issue, don't open the PR.
+- **Test command unknown for a consumer** — AskUserQuestion per repo, persist answer to
+  that repo's `CLAUDE.md` so next bump knows.
+- **Major version with breaking changes** — agent reads the lib's CHANGELOG between
+  old and new versions and includes the breaking-changes section verbatim in every
+  PR body so reviewers know what to look for.
+- **One consumer is a monorepo with multiple packages depending on the lib** — open
+  ONE PR for that consumer that bumps all packages together; track as a single row.
+- **Tracking issue grows too long** — when status table exceeds 100 rows, the agent
+  switches to "summary at top, table linked from gist" mode.
+
+---
+
+## Dependencies
+
+- `gh` CLI with `repo` (write) on every consumer + `issues` on the tracking repo.
+- `git` (standard).
+- Whatever language package managers are needed for the consumers being bumped.
+- `/dep-graph` (cross-repo mode) for auto-discovering consumers.
+- Used by: post-publish hooks in shared lib repos (manual today).

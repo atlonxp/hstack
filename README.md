@@ -1,10 +1,47 @@
 # hstack (Hall Stack)
 
-**A CTO's software factory for Claude Code** — derived from [garrytan/gstack](https://github.com/garrytan/gstack), extended with research-grade intelligence.
+**The multi-hat operating system for solo founders + practitioners.** Derived from [garrytan/gstack](https://github.com/garrytan/gstack), extended into the seats no general-purpose toolkit fills.
 
-Hi, I'm [Hall](https://x.com/atlonxp). I'm a CTO building AI products — from computer vision to financial ML to multiagent systems — and right now I am in the middle of something that feels like a new era entirely.
+Hi, I'm [Hall](https://x.com/atlonxp). I wear **five executive hats — CEO, CTO, CISO, Chief Architect (CA), Senior Engineer (Full-Stack / Mobile / Cloud-Native)** — and bring **four practitioner specialties: CPENT + CEH-grade red team & reverse engineering, AI engineering & research, cognitive computing & human-machine collaboration, and Operations Research with an applied-psychology bent.**
 
-I forked [Garry Tan's gstack](https://github.com/garrytan/gstack) — his open source software factory that turns Claude Code into a virtual engineering team — and I'm making it better. Not because gstack was broken, but because a CTO who has spent years building AI systems sees gaps that a general-purpose toolkit doesn't cover. Stakeholder workflows that span multiple personas. Technology landscape intelligence that recommends with conviction, not menus. The kind of thinking a research-trained technologist brings to product development.
+I forked [Garry Tan's gstack](https://github.com/garrytan/gstack) — his open-source software factory that turns Claude Code into a virtual engineering team — and I'm making it better. Not because gstack is broken, but because a solo operator wearing nine hats needs different leverage than a developer who has a team.
+
+**The unifying observation:** I think breadth-first — security informs UX, OR informs eval harnesses, psychology informs incentive design. hstack's skills connect those domains rather than silo them. That's the moat: not skill count, **workflow intelligence across domains**.
+
+### Why hstack is outstanding to gstack — Hall's vision
+
+hstack v2 made the developer-engineer hat fast. v3 compresses the four executive hats *and* the four practitioner specialties down to one-command workflows. v3 targets roles where there is no equivalent tooling and where I am the only person doing the work, so leverage compounds the fastest.
+
+**Three phases of divergence from gstack:**
+
+- **v1 (shipped) — Persona-aware engineering layer.** Multi-persona UX audits, cross-persona regression detection, feature gap-filling that knows what every persona should be able to do, CTO-mode technology intelligence. The Senior Engineer hat got *fast*.
+- **v2 (shipped) — Autonomous-loop layer.** Self-healing verify-loop after builds, cross-session intelligence, watchers for CI/deps/issues, end-to-end feature-build pipelines. The engineering hat got *automatic*.
+- **v3 (shipped) — Multi-hat compression layer.** 107 new skills across 19 new families spanning executive hats (CEO Cockpit · CTO Strategy · CISO Compliance + IR · Chief Architect), engineering surfaces (Mobile · API/DB · Cloud-Native · Multi-Repo), practitioner specialties (Red Team / RE · Blue Team / Defensive · AI Engineering / Research · Cognitive Computing / HMC · Operations Research / Behavioral · Product Transposition), and AI verticals Hall actively builds in (Speech & Voice AI · Accessibility AI · Avatar & Embodiment · FinTech / Algorithmic Trading · Economic Simulation). Plus v2 deferred items now landed: `/auto-guard` (pre-commit security + post-push QA hooks) and `/dashboard` (parallel-agent review). **173 skills total live in Claude Code.** The other eight hats stop being expensive context switches. See [`PLAN-v3-roadmap.md`](PLAN-v3-roadmap.md) for the full design.
+
+| Need | gstack | hstack |
+|---|---|---|
+| Build a feature with rigor | ✓ | ✓ |
+| Persona-aware UX audit + cross-persona regression | — | ✓ (v1) |
+| Self-healing autonomous build loop | — | ✓ (v2) |
+| CEO workflows (investor updates, board, runway, customer interviews) | — | v3 |
+| CISO workflows (SOC2/ISO27001/HIPAA/PCI/GDPR audit, IR, postmortem, vendor risk) | — | v3 |
+| Chief Architect workflows (C4, IaC review, FinOps, migration patterns) | — | v3 |
+| Mobile / Cloud-Native / Multi-Repo families | — | v3 |
+| Authorized red-team / reverse-engineering pipeline | — | v3 |
+| Blue-team defensive pipeline (detection, hunt, deception, forensics, SOAR) | — | v3 |
+| AI Engineering (eval harness, RAG, agents, fine-tune, paper pipeline) | — | v3 |
+| Cognitive computing + human-machine collaboration UX | — | v3 |
+| Operations Research + applied behavioral science | — | v3 |
+| Constructive RE pipeline (study → transpose → build → recipe) | — | v3 |
+| Speech & Voice AI (TTS architecture, voice clone, prosody, multilingual) | — | v3 |
+| Accessibility AI (indoor nav + sign-language pipelines) | — | v3 |
+| Avatar & Embodiment (face + body + voice + sign-performing avatars) | — | v3 |
+| FinTech / Algorithmic Trading (PIT backtest, risk engine, regime-aware eval) | — | v3 |
+| Economic Simulation (ABM/SD/DSGE with real-time event ingestion) | — | v3 |
+
+**hstack is gstack + nine hats.** Same foundation. Same MIT license. All the upstream specialists, plus the families that turn a solo founder + practitioner into a team. Built on the shoulders of a giant — credit where it's due.
+
+Fork it. Improve it. Make it yours.
 
 **What hstack adds on top of gstack:**
 

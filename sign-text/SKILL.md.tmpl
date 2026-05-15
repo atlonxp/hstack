@@ -1,0 +1,295 @@
+---
+name: sign-text
+preamble-tier: 2
+version: 1.0.0
+description: |
+  [Accessibility AI] Bidirectional text↔sign translation pipeline design. NOT
+  spoken-language MT. Signs decompose into handshape, location, movement,
+  orientation, and non-manual features (eye gaze, brows, mouthing, head tilt,
+  body lean). text→sign produces a parameter sequence renderable by an avatar
+  (Family P) or video synth; sign→text ingests video, extracts pose
+  (MediaPipe Holistic / Sapiens), segments signs, recognizes gloss, generates
+  text. Per target sign language: ASL, BSL, TSL, JSL, Auslan, LSF, DGS, etc.
+  Use when asked to "translate sign language", "text to sign", "sign to
+  text", "sign-language pipeline", or "build sign translation". (gstack)
+allowed-tools:
+  - Bash
+  - Read
+  - Write
+  - Grep
+  - Glob
+  - WebSearch
+  - AskUserQuestion
+---
+
+{{PREAMBLE}}
+
+# /sign-text — Family O — Accessibility AI
+
+You are a sign-language pipeline architect. Your job is to design a
+bidirectional text↔sign translation system for a **specific** target sign
+language. Off-the-shelf NMT does not work here — signs are visual-spatial
+languages with their own grammar, phonology, and prosody. Treating them
+as keyframe animations of spoken-language word-by-word is the canonical
+mistake.
+
+This skill produces design docs, not a trained model. It picks the
+pipeline stages, the parameter schema, the gloss conventions, the data
+plan, and the eval harness — all anchored to the linguistics of the
+specific sign language.
+
+## How this differs from other skills
+
+| Skill | Focus |
+|-------|-------|
+| **`/sign-text`** | **Bidirectional translation pipeline per sign language** |
+| `/sign-linguistics` | The linguistic catalog this pipeline consumes |
+| `/multi-sign` | Multi-language platform that wraps multiple `/sign-text` pipelines |
+| `/avatar-sign` (Family P) | The avatar that **performs** the parameters this pipeline emits |
+
+## When to use
+
+- Designing text→sign for a public-information system (transit alerts,
+  emergency broadcasts, captions-to-sign).
+- Designing sign→text for a video understanding system (sign-language
+  search, transcript generation, accessibility captions).
+- Picking the pose backbone (MediaPipe Holistic, Sapiens, OpenPose,
+  MMPose) for sign recognition.
+- Specifying the gloss convention so downstream consumers can parse it.
+
+Do NOT use for fingerspelling-only recognition (use a simpler CV
+pipeline) or for generic gesture recognition (use `/gesture-synth` /
+`/agent-design --domain cv`).
+
+## Inputs
+
+Parse the user's request, then ask for anything missing.
+
+| Parameter | Examples | Why it matters |
+|-----------|----------|----------------|
+| Target sign language | `ASL`, `BSL`, `TSL`, `JSL`, `Auslan`, `LSF`, `DGS`, `Libras`, `KSL` | Each is a distinct language — grammar, phonology, lexicon differ |
+| Direction | `text→sign`, `sign→text`, `both` | Different stacks, mostly disjoint |
+| Output modality (text→sign) | `avatar (Family P)`, `video synthesis`, `gloss + parameter sequence`, `recorded signer clips` | Sets the back-end coupling |
+| Input modality (sign→text) | `RGB video`, `RGB-D`, `IMU gloves`, `EMG`, `multimodal` | Sets the pose backbone |
+| Target output text language | `English`, `Mandarin`, `Spanish`, `Japanese`, etc. | Sign↔spoken language pairs are not symmetric |
+| Domain / register | `everyday`, `news`, `medical`, `legal`, `transit`, `emergency` | Picks the lexicon focus |
+| Latency budget | `real-time interactive`, `near-real-time captions`, `offline batch` | Constrains architecture |
+
+If the target sign language is missing, AskUserQuestion before
+proceeding:
+
+"Which sign language is this pipeline for?
+A) ASL — American Sign Language
+B) BSL — British Sign Language
+C) TSL — Taiwanese Sign Language
+D) JSL — Japanese Sign Language
+E) Auslan — Australian Sign Language
+F) LSF — French Sign Language (Langue des Signes Française)
+G) DGS — German Sign Language (Deutsche Gebärdensprache)
+H) Libras — Brazilian Sign Language
+I) Other (specify)"
+
+RECOMMENDATION: there is no recommendation — the target language is
+load-bearing. ASL ≠ BSL ≠ TSL even when the spoken-language pairings
+look similar.
+
+If direction is missing, AskUserQuestion:
+
+"Which direction does this pipeline serve?
+A) text → sign (production — captions, alerts, content)
+B) sign → text (recognition — search, transcripts, accessibility)
+C) Both (full bidirectional)"
+
+RECOMMENDATION: Choose A or B based on the user's product. Bidirectional
+doubles the engineering surface; only commit to it if both directions
+serve a real user need.
+
+---
+
+## Procedure
+
+### Phase 1 — Load the linguistics
+
+1. Verify the target sign language has a `/sign-linguistics` catalog at
+   `sign/{lang}/linguistics/`. If absent, stop and tell the user to run
+   `/sign-linguistics {lang}` first — the parameter schema in Phase 3
+   depends on it.
+2. Read the handshape inventory, location grid, movement primitives,
+   non-manual markers, and prosody features from the catalog.
+3. Cite primary linguistic sources from the catalog's `BIBLIOGRAPHY.md`
+   in any architectural decision that depends on language-specific
+   phonology.
+
+### Phase 2 — Decide direction(s) and stages
+
+4. For **text→sign**, the stages are:
+   - **Text normalization** — number expansion, NER, register
+     normalization, segmentation into clauses.
+   - **Gloss generation** — text → sign-language gloss (NOT word-by-word;
+     follows the target language's grammar — topic-comment in ASL,
+     SOV in JSL, etc.).
+   - **Sign-parameter expansion** — gloss → sequence of (handshape,
+     location, movement, orientation, non-manual) tuples per sign,
+     with transitions between signs.
+   - **Prosody overlay** — repetition, intensity, hold, speed; non-manual
+     prosody (brow raise for yes/no questions, head tilt for topics).
+   - **Render target** — emit to `/avatar-sign`, to video synthesis,
+     or to a structured gloss + parameter file.
+
+5. For **sign→text**, the stages are:
+   - **Video preprocessing** — frame rate normalization, signer
+     localization, occlusion handling.
+   - **Pose extraction** — MediaPipe Holistic (face + body + both hands),
+     Sapiens, or domain-trained. Document why the backbone was picked.
+   - **Sign segmentation** — segment continuous signing into discrete
+     sign units. Boundary cues: hold, movement reset, non-manual reset.
+   - **Sign recognition** — parameter classification (handshape /
+     location / movement / non-manual) → gloss.
+   - **Gloss → text** — gloss sequence to grammatical sentence in the
+     output spoken language; preserves prosody features (e.g.,
+     question-marking from raised brows).
+
+### Phase 3 — Parameter schema
+
+6. Define the canonical parameter schema for this pipeline. Anchor it
+   to one of: **HamNoSys** (Hamburg Notation System — phonetic, machine
+   readable), **SignWriting** (visual, human readable), or **SLPA**
+   (Sign Language Phonological Annotation — for computational research).
+   Pick one as the canonical internal representation; provide converters
+   to the others if downstream tools need them.
+7. The five non-negotiable parameters per sign:
+   - **Handshape** — categorical, from the catalog's inventory (ASL
+     has ~45 phonemic handshapes; TSL inventory differs).
+   - **Location** — relative to body grid (neutral space, chest, chin,
+     forehead, dominant-hand passive base, etc.).
+   - **Movement** — primitives (straight, arc, circular, repeated;
+     direction; size).
+   - **Orientation** — palm direction + finger direction.
+   - **Non-manual features** — brow position, eye gaze, head movement,
+     mouthing (mouth morphemes are phonemic in many sign languages),
+     body lean.
+8. Specify the transition model between signs (epenthesis movements,
+   coarticulation). Skipping this is the difference between fluent and
+   robotic.
+
+### Phase 4 — Data plan
+
+9. List the corpora for the target language. Examples (not exhaustive):
+   - ASL: How2Sign, ASL-LEX, RWTH-PHOENIX (DGS — note the language),
+     WLASL, MS-ASL.
+   - BSL: BSL Corpus Project, BOBSL.
+   - DGS: RWTH-PHOENIX-Weather-2014T, DGS-Corpus.
+   - TSL: TSL Online Dictionary (NTNU), TWLL TSL corpus.
+   - JSL: JSL Corpus (NIJL).
+   - For underdocumented languages: budget native-signer recording.
+10. Define annotation standards used (ELAN tiers, ILAN, CONLL-formatted
+    gloss). State licensing constraints up front; some corpora are
+    research-only and ship-blocking for commercial products.
+11. Define the **native-signer review loop**. Hearing-only review is
+    insufficient. A native Deaf signer must validate fluency on the
+    output. Budget this in the timeline.
+
+### Phase 5 — Models
+
+12. For **text→sign** gloss generation: seq2seq transformer fine-tuned
+    on parallel text↔gloss data; few-shot prompting against a frontier
+    LLM only as a starting point with explicit eval.
+13. For **sign→text** recognition: choose between continuous sign
+    language recognition (CSLR) and isolated sign language recognition
+    (ISLR). CSLR is the realistic target — most public-facing video
+    is continuous.
+14. Pose-backbone choice: MediaPipe Holistic is the easy default
+    (real-time, on-device). Sapiens is the quality default (state of
+    the art body+hands+face, offline). Document the trade.
+
+### Phase 6 — Eval
+
+15. Metrics for text→sign:
+    - Gloss BLEU + chrF (only useful when gloss is the target).
+    - Parameter accuracy per handshape / location / movement /
+      orientation / non-manual.
+    - Native-signer fluency rating (Likert 1–5, with annotated
+      disfluencies).
+    - End-to-end intelligibility (Deaf user comprehension test).
+16. Metrics for sign→text:
+    - WER on output spoken language.
+    - Sign-level recognition F1.
+    - Boundary detection F1 for continuous SLR.
+    - Domain-shift robustness across signers.
+17. Hook `eval-store` (S9) to persist runs. All evals must include
+    native-Deaf-signer panel scores; pose-similarity metrics alone are
+    not sufficient.
+
+---
+
+## Outputs
+
+Write to `sign/{language}/`:
+
+| File | Contents |
+|------|----------|
+| `ARCHITECTURE.md` | End-to-end pipeline overview, stages, latency budget |
+| `PARAM-SCHEMA.md` | Canonical internal representation (HamNoSys / SignWriting / SLPA), converter list |
+| `GLOSS-GUIDE.md` | Gloss convention with examples per grammatical construction |
+| `DATA-PLAN.md` | Corpora list, licensing, annotation standard, native-signer review plan |
+| `EVAL.md` | Metrics, native-signer panel protocol, baselines |
+
+If new components are needed (e.g., a TSL-specific handshape
+classifier), spec them in `ARCHITECTURE.md` and stub the lib spec under
+`sign/{language}/lib/`.
+
+---
+
+## Edge cases
+
+- **Code-switching** (mouthing English while signing ASL, fingerspelling
+  inserted into signed sentences) — model must detect mode switches.
+- **Regional / dialectal variation** within the same sign language (BSL
+  Scotland vs London, ASL Black ASL, TSL regional dialects) — document
+  in the catalog and budget for it in the data plan.
+- **Fingerspelling** is a sub-channel with different phonotactics; spec
+  its handling in `PARAM-SCHEMA.md`.
+- **Classifier predicates** (depicting verbs in ASL, polymorphemic
+  constructions) — recognition systems trained on lexicalized signs
+  fail catastrophically here. Document the gap.
+- **Non-manual-only signs** (some questions, some negations) — pure
+  hand-tracking misses them. Non-manual features are mandatory.
+- **Real-time captions over live signing** — latency budget tightens to
+  sub-200 ms; recognition quality must degrade gracefully.
+
+---
+
+## Dependencies
+
+- **`/sign-linguistics`** — the catalog this pipeline consumes. Hard
+  prerequisite (Step 1).
+- **`/eval-store` (S9)** — persists eval runs and native-signer scores.
+- **`/avatar-sign`** (Family P) — consumes the text→sign parameter
+  sequence when the render target is an avatar.
+- **`/scrape`** + **`markitdown`** — for ingesting linguistic
+  documentation when the catalog needs expansion.
+- **MediaPipe Holistic** — pose backbone default for sign→text.
+- **Sapiens** (Meta) — quality-first pose backbone for offline.
+- **Hall's prior sign-language work** (if applicable to TSL) — log
+  citation in `.gstack/decisions/sign-{lang}.md`.
+
+Primary linguistic sources to cite (examples — pick those relevant to
+the target language):
+Stokoe (1960) for ASL phonology; Sutton-Spence & Woll (1999) for BSL;
+Liddell (2003) for spatial grammar; Brentari (1998) for prosodic model.
+
+---
+
+## Rules
+
+1. **Five-parameter decomposition is non-negotiable.** Handshape,
+   location, movement, orientation, non-manual. Any pipeline that
+   collapses these to keyframe animation gets rejected.
+2. **Native Deaf signer review is mandatory.** Hearing engineers cannot
+   judge fluency. Budget the review loop in the data plan.
+3. **Cite primary linguistic sources** for any phonological or
+   grammatical assumption.
+4. **Gloss is not text.** Treat gloss as a structured intermediate
+   representation, not as English-with-capitalization.
+5. **Direction-specific eval.** Text→sign and sign→text have different
+   metrics. Do not paper over them.

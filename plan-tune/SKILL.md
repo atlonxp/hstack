@@ -3,7 +3,7 @@ name: plan-tune
 preamble-tier: 2
 version: 1.0.0
 description: |
-  Self-tuning question sensitivity + developer psychographic for gstack (v1: observational).
+  [Planning & Review] Self-tuning question sensitivity + developer psychographic for gstack (v1: observational).
   Review which AskUserQuestion prompts fire across gstack skills, set per-question preferences
   (never-ask / always-ask / ask-only-for-one-way), inspect the dual-track
   profile (what you declared vs what your behavior suggests), and enable/disable

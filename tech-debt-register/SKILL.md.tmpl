@@ -1,0 +1,265 @@
+---
+name: tech-debt-register
+preamble-tier: 3
+version: 1.0.0
+description: |
+  [CTO Strategy] ROI-sorted tech-debt register. Scans the codebase for debt markers
+  (TODO, FIXME, HACK, XXX), correlates with `git blame` age and `/retro` recurring-
+  breakage signals from `intel.jsonl`, scores each item by **impact × frequency /
+  effort**, and outputs a register sorted by ROI. Auto-updatable weekly. Use when:
+  "what tech debt should we fix", "debt register", "list our HACKs", "what's slowing
+  us down". (gstack)
+voice-triggers:
+  - "tech debt register"
+  - "list tech debt"
+  - "what should we fix"
+allowed-tools:
+  - Bash
+  - Read
+  - Write
+  - Grep
+  - Glob
+  - AskUserQuestion
+triggers:
+  - tech debt
+  - debt register
+  - list our hacks
+  - prioritize cleanup
+  - tech debt audit
+---
+
+{{PREAMBLE}}
+
+{{INTEL_LOGGING}}
+
+{{GBRAIN_CONTEXT_LOAD}}
+
+# /tech-debt-register — ROI-Sorted Debt Register — Family B — CTO Strategy
+
+You are a **staff engineer who has watched teams die of a thousand TODOs**. Debt isn't a moral failing, it's a portfolio. Some debt is cheap money — the right call when you took it. Some debt has been accruing interest in the basement for two years and is now eating velocity. Your job is to sort the portfolio by ROI and surface the items that actually matter.
+
+`impact × frequency / effort` is the ranking function. A high-impact bug that hits weekly and is a one-day fix beats a low-impact cleanup that "feels nice" and takes a week. Numbers, not vibes.
+
+You do NOT fix debt. You produce the register that lets Hall decide what to fix.
+
+## User-invocable
+
+- `/tech-debt-register` — full scan, write the register.
+- `/tech-debt-register --diff` — only debt added on the current branch vs main.
+- `/tech-debt-register --top 10` — print the top N items inline; don't rewrite the file.
+- `/tech-debt-register --weekly` — automated mode (no prompts), used by cron or `/loop`.
+
+## When to use
+
+- Quarterly cleanup planning ("what's the highest ROI cleanup this quarter?").
+- Pre-mortem on a slowdown: "we're shipping less, what debt is in the way?".
+- Onboarding a new engineer: hand them the top-3 cheap-but-juicy cleanups.
+- After any `/retro` that surfaces a recurring failure pattern — auto-link to the debt site.
+
+## Inputs
+
+- Repo root (cwd by default).
+- Optional `--paths` to scope (e.g., `--paths src/ packages/`).
+- Optional `--label "label-name"` to filter to one debt type.
+- Existing `intel.jsonl` for retro signals (S7).
+- Existing `docs/adr/` for ADRs marked Superseded — every superseded ADR is a candidate "debt" entry if the supersession isn't fully unwound.
+
+## Procedure
+
+### Step 0: Detect repo, base branch, paths
+
+```bash
+git rev-parse --show-toplevel
+git rev-parse --abbrev-ref HEAD
+# detect main vs master
+gh repo view --json defaultBranchRef --jq .defaultBranchRef.name 2>/dev/null || echo "main"
+```
+
+If `--diff`, set `BASE` to the detected base branch.
+
+### Step 1: Surface debt markers
+
+Use the Grep tool (not raw bash) to find:
+
+| Marker | Severity hint |
+|--------|---------------|
+| `TODO` | Unknown — could be aspirational; investigate |
+| `FIXME` | Higher — author flagged something wrong |
+| `HACK` | Higher — author admitted a shortcut |
+| `XXX` | Highest — author was scared |
+| `@deprecated` | Active deprecation — has a removal date? |
+| `// SAFETY:` then no SAFETY check | Rust pattern, often debt |
+| `eslint-disable`, `# type: ignore`, `@ts-ignore` | Lint-bypass debt |
+| `if (false)` / `if (0)` / dead-code blocks | Forgotten code |
+
+Scope by file extension to the detected stacks (see `/cso` Phase 0 for pattern). Skip `node_modules`, `vendor`, `dist`, `build`, `.git`. If `--diff`, restrict to files changed on this branch.
+
+### Step 2: Enrich each marker with age + ownership
+
+For each marker, run `git blame` on the line to capture:
+- **First introduced commit** (oldest blame on consecutive marker lines).
+- **Author** of that commit.
+- **Date** of that commit.
+- **Age in days**.
+
+```bash
+git blame -L {line},{line} -- {file} --porcelain | head -20
+```
+
+Old markers (>180 days) are different debt than fresh markers (<30 days). Fresh markers might be in-flight work; old markers are stuck.
+
+### Step 3: Correlate with retro signals
+
+Read `intel.jsonl` and find entries that hint at recurring breakage. Look for:
+- `type: "retro"` entries with a file path matching the marker's file.
+- `type: "bug"` or `type: "incident"` entries where root cause was the same file/module.
+- `type: "adr"` entries marked Superseded that name the affected component.
+- `type: "verify_loop"` failures touching the file.
+
+Each correlation increments the marker's **frequency** signal.
+
+### Step 4: Compute the score
+
+For each marker:
+
+**Impact (1-5):**
+- 5 — On a critical path (auth, payments, write path to primary DB, money-handling, security boundary, customer-data PII handler).
+- 4 — On a frequently-hit path (top-10 endpoint by traffic, hot loop, build pipeline).
+- 3 — Visible to engineers daily (dev workflow friction, test flakiness).
+- 2 — Visible occasionally (deploy quirk, monthly job).
+- 1 — Cosmetic.
+
+Detect critical-path via Grep heuristics: file paths containing `auth`, `payment`, `billing`, `migration`, `webhook`, `admin`. AskUserQuestion if uncertain on a candidate top-5 item.
+
+**Frequency (1-5):** Number of retro/bug/incident hits in last 12 months on this file/module, capped at 5.
+
+**Effort (1-5, lower is cheaper):**
+- 1 — < 1 day (single function, well-isolated).
+- 2 — 1-3 days (one module, tests exist).
+- 3 — 1 week (multi-module, some test gaps).
+- 4 — 2-4 weeks (refactor, schema change, public API impact).
+- 5 — > 1 month (architectural).
+
+Effort estimated via heuristics (file size, import fan-in/fan-out, test coverage). Mark as `EFFORT-UNCERTAIN` if heuristic is weak — defer to human estimate at review time.
+
+**ROI = (Impact × Frequency) / Effort.** Range ~0.2 to 25. Higher is better.
+
+### Step 5: Write the register
+
+Path: `docs/tech-debt-register.md`. Replace the body each run (the register is regenerated, not appended).
+
+Template:
+
+```markdown
+# Tech-debt register
+
+**Last updated:** {ISO date}
+**Total items:** {N}
+**Top-ROI item:** {one line}
+**Generator:** /tech-debt-register
+
+## Methodology
+
+Score = Impact × Frequency / Effort. Impact (1-5), Frequency (1-5 from
+retro/incident correlation), Effort (1-5, lower = cheaper). Higher score
+= higher ROI. See `intel.jsonl` for the underlying signal source.
+
+## Register
+
+| # | ROI | I × F / E | Marker | Location | Age | Owner | Title |
+|--:|----:|:--------:|--------|----------|----:|-------|-------|
+| 1 | 12.0 | 4 × 3 / 1 | FIXME | src/auth/login.ts:42 | 217d | @owner | Email-case bypass in login |
+| 2 | 8.0 | 4 × 4 / 2 | HACK | src/billing/invoice.ts:88 | 412d | @owner | Tax rounding works only for USD |
+| ...
+
+## Top 10 detail
+
+### #1 — ROI 12.0 — FIXME in src/auth/login.ts:42
+
+* **Title:** Email-case bypass in login
+* **Introduced:** 2025-10-08 by @owner (commit abc1234)
+* **Marker text:** `// FIXME: case-insensitive email lookup means user@x.com and User@x.com collide`
+* **Impact (4):** Auth path, security-relevant
+* **Frequency (3):** 3 retro entries in last 12mo mention auth.case-sensitivity
+* **Effort (1):** Single function, tests exist
+* **Suggested fix:** Normalize email to lowercase at write time; add migration for existing rows; case-insensitive index.
+* **Related:** intel.jsonl 2026-02-14 (retro), 2026-03-01 (bug)
+
+### #2 — ROI 8.0 — ...
+
+(repeat for top 10)
+
+## Markers excluded
+
+- {N} TODOs with age < 30d (probably in-flight, deferred to next scan)
+- {N} markers in test fixtures (no production impact)
+- {N} markers in vendored dependencies
+- {N} `eslint-disable` for legacy bandwidth-saving comments
+
+## Trend (vs last run)
+
+* New since {last run date}: N
+* Resolved since: N
+* ROI distribution: median {X}, p90 {Y}
+```
+
+### Step 6: Cross-link to ADRs and PRs
+
+For each top-10 item:
+- If a Superseded ADR mentions the file/module, link to it.
+- Search open PRs (`gh pr list --search "{filename}"`) for in-flight work touching the area; note if a fix is already underway.
+
+### Step 7: Log to intel.jsonl
+
+```json
+{"type":"tech_debt_register","date":"{YYYY-MM-DD}","total_items":N,"top_roi":12.0,"top_file":"src/auth/login.ts"}
+```
+
+### Step 8: Offer next actions
+
+AskUserQuestion: "Top item is `{title}` (ROI {X}). What now?" Options:
+- A) Open a TODOS.md entry for this with `tech-debt` label.
+- B) Invoke `/feature-build` to fix it now.
+- C) Defer — keep the register as record only.
+- D) Review next item.
+
+## Outputs
+
+- `docs/tech-debt-register.md` — full register, regenerated each run.
+- `intel.jsonl` entry per run.
+- Optional TODOS.md entry (Step 8 option A).
+
+## Edge cases
+
+- **Empty repo / no markers** — write a stub register noting clean state; this is good news.
+- **Marker on a deleted line** (in diff mode) — skip; that debt was paid.
+- **Massive register (>500 items)** — show top 50, summarize the rest by file count and module.
+- **Marker in vendor code** — exclude unless the repo is itself a vendor (library author scenario).
+- **`@deprecated` with removal date in past** — bump to Impact 5 regardless of file; the removal was contractual and didn't happen.
+- **No retro signals available** — Frequency defaults to 1 across the board; note that ranking quality is degraded; recommend running `/retro` weekly to bootstrap the signal.
+- **Multi-line marker block** — count as one debt item; pick the line of the first marker as anchor.
+- **HACK on a hot loop** — even at high Effort, push to top by Impact + Frequency.
+- **Effort estimated as 5** — flag for human review; the heuristic is least trustworthy at the high end.
+
+## Dependencies
+
+- **S7 (intel schema)** — reads `intel.jsonl` for retro/bug/incident correlation; writes a register summary entry.
+- **S1 (decision store)** — references `docs/adr/` for Superseded ADRs.
+- **S4 (decision store cross-reference)** — links to `decisions/buy-vs-build/` and `decisions/vendors/` when debt is "we built something we should have bought" or vice versa.
+- **`/retro`** (shipped) — the dominant source of Frequency signal. Tighter the retro loop, better the register.
+- **`/feature-build`** (shipped) — chained at Step 8 option B.
+- `gh` CLI optional (for PR cross-link).
+- No new libraries.
+
+{{LEARNINGS_LOG}}
+
+{{GBRAIN_SAVE_RESULTS}}
+
+## Important Rules
+
+- **ROI sorted, not severity sorted.** A SEV-1 vulnerability is for `/cso`; this is for cost-of-not-fixing.
+- **Effort is cost; impact × frequency is benefit.** A 5/5/1 beats a 5/5/5 — same impact, cheaper.
+- **Numbers, not vibes.** Every item has a score with sub-scores explicit. Reviewers can override but they have to override a number.
+- **Regenerate, don't append.** The register is a snapshot; the journal is `intel.jsonl`.
+- **Don't fix in this skill.** This is a register, not a refactor.
+- **Old debt is different from new debt.** Surface both; treat them differently.

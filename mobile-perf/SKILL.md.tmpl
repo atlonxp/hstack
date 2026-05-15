@@ -1,0 +1,353 @@
+---
+name: mobile-perf
+preamble-tier: 3
+version: 1.0.0
+description: |
+  [Mobile] Mobile performance profiling: cold-start time, time-to-interactive, FPS during
+  scrolling, jank rate, memory under load. Uses Xcode Instruments (iOS), Android Profiler
+  / Macrobenchmark (Android), and Flipper / React DevTools (RN/Flutter). Compares to the
+  last release baseline; flags regressions over threshold. Writes results to
+  mobile/perf/ and shares the baseline store with the web /benchmark skill. Use when:
+  "mobile perf", "profile cold start", "FPS check", "jank report", "memory regression",
+  or "compare perf to last release". (gstack)
+allowed-tools:
+  - Read
+  - Write
+  - Edit
+  - Grep
+  - Glob
+  - AskUserQuestion
+  - Bash
+  - WebSearch
+triggers:
+  - mobile perf
+  - cold start profile
+  - fps regression
+  - jank report
+  - memory profile mobile
+  - profile this screen
+---
+
+{{PREAMBLE}}
+
+{{BASE_BRANCH_DETECT}}
+
+# /mobile-perf — Family E1 — Mobile
+
+Profile the mobile app's perceived performance — cold start, time-to-interactive, FPS
+during scrolling, jank rate, memory under load — and compare to the last release's
+baseline. Surface regressions over threshold with actionable findings (which screen,
+which frame, which allocation site).
+
+The skill is **baseline-comparison-first**. A raw number is hard to interpret; a delta
+from last release is not. The baseline store is shared with the web `/benchmark` skill so
+the team has one history for "is performance trending up or down?"
+
+## When to use
+
+- Pre-release gate alongside `/mobile-release` Step 2.
+- Post-merge regression check on `main` (CI cron).
+- Triage when a 1★ review or a Crashlytics ANR spike points at a specific screen.
+- Adopt-a-new-library check ("does adding `react-native-reanimated` v3 cost us frames?").
+
+**Do not use for:**
+
+- Feature scaffolding — that's `/mobile-build`.
+- Functional QA — that's `/mobile-qa`.
+- Release upload — that's `/mobile-release`.
+- Web Core Web Vitals — that's `/benchmark`.
+
+## Stack auto-detection
+
+Same detection as `/mobile-build` (RN / Flutter / Swift / Kotlin / hybrid). The chosen
+profiler depends on stack + target platform:
+
+| Stack          | iOS profiler                 | Android profiler                           |
+|----------------|------------------------------|--------------------------------------------|
+| Native iOS     | Xcode Instruments (Time Profiler, Allocations, Animation Hitches) | n/a |
+| Native Android | n/a                          | Android Studio Profiler + Macrobenchmark   |
+| React Native   | Instruments + Flipper        | Profiler + Macrobenchmark + Flipper        |
+| Flutter        | Instruments + `flutter run --profile` + DevTools | Profiler + DevTools timeline |
+| Hybrid         | Instruments                  | Macrobenchmark                             |
+
+Cross-cutting tools: `simctl spawn ... log stream` (iOS), `adb shell dumpsys gfxinfo`
+(Android), Firebase Performance / Sentry Performance for production telemetry.
+
+## Inputs
+
+The skill accepts:
+
+1. **Target screen(s)** — name(s) the user wants profiled, or "cold start" for the
+   first-launch flow, or "all critical flows" for the user's marked-critical set.
+2. **Metric set** — default: `cold-start`, `time-to-interactive`, `fps-scroll`,
+   `jank-rate`, `peak-memory`. User can subset.
+3. **Comparison baseline** — default: the most recent baseline in
+   `~/.gstack-dev/baselines/mobile/{platform}/{stack}.json`. User can pin a specific
+   release tag.
+4. **OS / device matrix** — default: current OS + a "low-end" reference device (iPhone
+   12 mini / Pixel 4a). User can extend.
+5. **Iteration count** — default: 5 runs per scenario; report median + p95.
+
+## Procedure
+
+### Step 0: Detect + state
+
+Run the stack detection block. State stack + chosen profilers in one paragraph: "Detected:
+React Native 0.74 with Hermes. Profilers: Xcode Instruments (Animation Hitches +
+Time Profiler) for iOS, Android Macrobenchmark + Systrace for Android."
+
+### Step 1: AskUserQuestion — scope
+
+One issue per call:
+
+- **Scope** — single screen / critical flows / full smoke set.
+- **Comparison** — `last-release` (default), `last-7-runs`, `specific-tag`, or
+  `no-baseline-bootstrap` (use this when there's no history yet).
+- **Run on** — simulator + emulator only / +1 real device / device farm. Simulator
+  numbers are NOT comparable to real-device numbers; the skill keeps them in separate
+  baseline buckets.
+
+### Step 2: Boot the device + install the build
+
+For each platform in scope:
+
+- **iOS**: `xcrun simctl boot {udid}` + install the release build (`.app`). For real
+  device perf, ensure it's plugged in and `idevicepair` is paired.
+- **Android**: `emulator -avd {avd} -no-snapshot -no-audio -wipe-data` + `adb install
+  -r app-release.apk`. For real-device, `adb devices` to confirm.
+
+Pre-warm: launch the app once, kill it, then start the measurement run. This stabilizes
+the OS file cache + dex/JIT state.
+
+### Step 3: Run the measurements
+
+Each metric has its own measurement pattern. Run each `iteration-count` times.
+
+#### Cold start (app launch → first frame visible)
+
+- **iOS native**: Instruments → App Launch template, or `xcrun simctl spawn {udid}
+  launchctl print system | grep {bundle}`. Modern path:
+
+  ```bash
+  xcrun xctrace record --template "App Launch" --launch -- \
+    "{app}.app" --output cold-start-{run}.trace
+  ```
+
+  Parse the `.trace` for the launch-time event.
+
+- **Android native**: Macrobenchmark with `StartupTimingMetric`:
+
+  ```kotlin
+  @Test fun startupCold() = benchmarkRule.measureRepeated(
+    packageName = "com.example.app",
+    metrics = listOf(StartupTimingMetric()),
+    iterations = 5,
+    startupMode = StartupMode.COLD,
+  ) { pressHome(); startActivityAndWait() }
+  ```
+
+  Output: `app/build/outputs/connected_android_test_additional_output/`.
+
+- **React Native**: Use the native methods above. RN-specific overhead shows up in
+  Hermes-engine launch + bridge / TurboModule init. Annotate the trace.
+
+- **Flutter**: `flutter run --profile --trace-startup` writes `start_up_info.json`
+  with `engineEnterTimestampMicros`, `timeToFirstFrameMicros`, `timeToFirstFrameRasterizedMicros`.
+
+#### Time-to-interactive
+
+The first frame after which the main thread is idle for ≥ 50 ms. Compute from the
+trace (Instruments / Macrobenchmark / DevTools) or instrument the app with a marker
+in the screen's `onAppear` / `onResume` / `useEffect` mount.
+
+#### FPS during scrolling
+
+- **iOS**: Instruments → Animation Hitches template. Drive a scroll via XCUITest:
+  `app.scrollViews.firstMatch.swipeUp()` x N. Report median fps + 99th percentile
+  frame time + total hitch-time-ratio.
+- **Android**: Macrobenchmark + `FrameTimingMetric`:
+
+  ```kotlin
+  metrics = listOf(FrameTimingMetric())
+  ```
+
+  Drive scroll with `UiAutomator`. Report `frameDurationCpuMs` distribution +
+  `frameOverrunMs` (positive = jank).
+
+- **Flutter**: `flutter run --profile` + Timeline. Use the `summary` aggregation:
+  `flutter drive --target=test_driver/perf_test.dart --profile --trace-skia`.
+
+#### Jank rate
+
+`adb shell dumpsys gfxinfo {pkg} reset` → drive scroll → `adb shell dumpsys gfxinfo {pkg}`.
+Parse `Janky frames: X (Y%)` and `90th / 95th / 99th percentile`. iOS equivalent: hitch-
+time-ratio from the Animation Hitches template (Apple's "good" target is < 5 ms/s).
+
+#### Peak memory
+
+- **iOS**: Instruments → Allocations + Leaks. Drive the scenario; capture peak RSS +
+  unreleased allocations.
+- **Android**: `adb shell dumpsys meminfo {pkg}` snapshots before/during/after. Or
+  Macrobenchmark's `MemoryUsageMetric` (`PEAK`, `STABLE`).
+
+### Step 4: Aggregate runs
+
+For each (scenario, platform, metric):
+
+- Drop the slowest run (warmup artifact) if iteration-count ≥ 5.
+- Report median, p95, std-dev.
+- If std-dev / median > 20%, mark the measurement as **noisy** and flag.
+
+### Step 5: Compare to baseline
+
+Read `~/.gstack-dev/baselines/mobile/{platform}/{stack}.json` (shared store with
+`/benchmark`). For each metric, compute `delta = current_median - baseline_median` and
+`delta_pct = delta / baseline_median * 100`.
+
+Thresholds (tunable per project via `~/.gstack/config.yaml`):
+
+| Metric              | Warn   | Fail   |
+|---------------------|--------|--------|
+| cold-start          | +5%    | +10%   |
+| time-to-interactive | +5%    | +10%   |
+| fps-scroll (median) | -3 fps | -5 fps |
+| jank-rate           | +1 pp  | +3 pp  |
+| peak-memory         | +10%   | +25%   |
+
+(pp = percentage points.)
+
+Classification per metric: `improved` / `stable` / `warn` / `fail` / `noisy`.
+
+### Step 6: Localize the regression
+
+For every `fail` (and optionally `warn`), point at the likely cause:
+
+- **Cold-start regression** — diff `Info.plist` / `AndroidManifest.xml` for new
+  permissions, new `Application.onCreate` work, new `application` queries; diff the JS
+  bundle size (`hermes-bundle-size.json`); look for new sync filesystem reads in
+  startup paths.
+- **TTI regression** — diff main-thread work between the trace and the baseline trace
+  (Instruments compare or Macrobenchmark trace diff).
+- **FPS regression** — find frames where `frameDurationCpuMs > 16.7ms`; pull the call
+  stack from the trace; suggest moving work off the main thread.
+- **Jank regression** — same as FPS, plus look for new layout passes (Compose
+  `recomposition` count; SwiftUI body recomputes; RN re-renders).
+- **Memory regression** — peak vs baseline; identify new retained-allocation classes;
+  flag image-cache and bitmap-loading paths first (most common cause).
+
+If `git log {previous-tag}..HEAD` is small enough, list candidate commits that touched
+the implicated files.
+
+### Step 7: Report
+
+`mobile/perf/{YYYY-MM-DD}.md`:
+
+```markdown
+# Mobile Perf — {YYYY-MM-DD}
+Stack: {stack} · Compared against: {baseline-tag} · Device: {device}/{os}
+
+## Verdict
+{PASS | WARN | FAIL} — {N} fails, {M} warns, {K} noisy.
+
+## Headline metrics
+
+| Metric              | Baseline | Current | Δ          | Class    |
+|---------------------|----------|---------|------------|----------|
+| Cold start (ms)     | 850      | 920     | +8.2%      | WARN     |
+| TTI (ms)            | 1450     | 1500    | +3.4%      | stable   |
+| FPS scroll (median) | 58       | 56      | -2 fps     | stable   |
+| Jank rate           | 2.1%     | 4.8%    | +2.7 pp    | FAIL     |
+| Peak memory (MB)    | 180      | 210     | +16.7%     | WARN     |
+
+## Failing metric: jank-rate
+
+- Scenario: ProfileScreen scroll x 10
+- Root cause: likely the new image-cache eviction policy from commit `abc123`
+- Frame samples: `mobile/perf/{date}/jank-frames-{n}.json`
+- Recommendation: revert eviction change or move image decoding off the main thread.
+
+## Trace artifacts
+- `mobile/perf/{date}/ios/cold-start-1.trace`
+- `mobile/perf/{date}/android/macrobench-results/`
+
+## Baseline update
+Promote current to new baseline? **No** — there are failing metrics. Re-run after fix.
+```
+
+### Step 8: Baseline update
+
+If the verdict is `PASS` AND the user explicitly approves (AskUserQuestion), update the
+baseline:
+
+```bash
+mkdir -p ~/.gstack-dev/baselines/mobile/{platform}/
+cp .gstack/mobile-perf/{date}/baseline-candidate.json \
+   ~/.gstack-dev/baselines/mobile/{platform}/{stack}.json
+```
+
+Otherwise leave the baseline as-is. Never auto-promote a regression.
+
+## Outputs
+
+- `mobile/perf/{YYYY-MM-DD}.md` — the run report (committed).
+- `mobile/perf/{YYYY-MM-DD}/{ios,android}/` — raw `.trace`, Macrobenchmark JSON,
+  screenshots, jank-frame samples (gitignored; large).
+- `~/.gstack-dev/baselines/mobile/{platform}/{stack}.json` — updated baseline (only on
+  explicit promotion).
+- `mobile/perf/INDEX.md` — running index of runs with quick links to verdicts so trend
+  is visible at a glance.
+
+## Edge cases
+
+- **Simulator vs device numbers** — DO NOT mix. Simulator cold-start times are 2-5x
+  faster than real-device. Baselines are bucketed by `simulator | device-low | device-mid
+  | device-high`.
+- **Thermal throttling on real devices** — measurements during a throttle event are
+  invalid. Read `adb shell dumpsys thermalservice` / iOS thermal API in the trace
+  metadata and discard runs flagged `severe` / `critical`.
+- **Battery saver mode** — silently caps CPU / GPU. Detect via `dumpsys power` and warn.
+- **Hermes vs JSC (RN)** — Hermes startup is ~30-40% faster on Android, similar on iOS.
+  Baseline must match the engine in use; the skill writes engine into the baseline key.
+- **Flutter `--release` vs `--profile`** — `--profile` includes tracing overhead;
+  numbers are ~5-10% worse than `--release`. Document which mode was used; never compare
+  across modes.
+- **First-launch caches** — OS file cache, dex/JIT, image cache. Always pre-warm. Cold-
+  start means cold *app*, not cold *device*.
+- **Crashes during measurement** — discard the run, log the crash, surface as a separate
+  finding (a crashing screen is a worse problem than a slow one).
+- **Animation A/B differences** — if the new release changed the launch animation
+  duration, cold-start can change without any real perf delta. Compare TTI as the
+  primary metric in that case.
+- **A/B feature flags** — if the app reads a remote config at startup, vary it
+  deterministically per run or pin a single variant for the measurement.
+
+## Dependencies
+
+- **Xcode 15+** with command-line tools: `xcrun xctrace`, `xcodebuild`, `simctl`.
+- **Android Studio Hedgehog+** with Macrobenchmark: add `androidx.benchmark:benchmark-
+  macro-junit4` to a `:benchmark` module.
+- **`adb`** for snapshots + scrolling automation.
+- **Flutter SDK** (when stack is Flutter) for `flutter run --profile --trace-startup`
+  and DevTools.
+- **`/benchmark`** — shares the baseline store and the threshold-configuration format.
+- **`/mobile-qa`** — flows that the perf skill drives during measurement (scroll, login,
+  navigate).
+- **Optional**: Firebase Performance SDK / Sentry Mobile / `react-native-performance`
+  for in-app instrumentation that bridges from synthetic profile runs to real-user
+  numbers.
+
+No new gstack libs beyond shared baseline store.
+
+## Stop gates
+
+- After Step 1 (scope + comparison + matrix) — lock these before any device boots.
+- After Step 4 (aggregate) — if more than half the runs are flagged `noisy`, STOP and
+  ask the user whether to re-run with more iterations or accept noisy numbers.
+- After Step 7 (report) — baseline update is gated on explicit user approval; never
+  auto-promote.
+
+The AskUserQuestion call is a tool_use, not prose — call the tool directly. Loading the
+schema via ToolSearch and writing the recommendation as chat prose is the failure mode
+these gates exist to prevent.
+
+{{LEARNINGS_LOG}}

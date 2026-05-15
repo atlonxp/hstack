@@ -1,0 +1,309 @@
+---
+name: api-contract-test
+preamble-tier: 3
+version: 1.0.0
+description: |
+  [API/DB] Generate consumer-driven contract tests (Pact, or equivalent) from an
+  OpenAPI / GraphQL / Protobuf spec, wire them into CI for both producer and consumer
+  sides, and maintain a cross-service compatibility matrix. Catches the
+  "frontend ships expecting one shape, backend ships another" class of bug before
+  integration. Use when: "contract tests", "pact tests", "consumer driven contracts",
+  "api compatibility matrix", or "did the API break". (gstack)
+allowed-tools:
+  - Read
+  - Write
+  - Edit
+  - Grep
+  - Glob
+  - AskUserQuestion
+  - Bash
+  - WebSearch
+triggers:
+  - generate contract tests
+  - pact tests
+  - api compatibility matrix
+  - consumer driven contracts
+  - is this api change breaking
+---
+
+{{PREAMBLE}}
+
+{{GBRAIN_CONTEXT_LOAD}}
+
+# /api-contract-test — Family E2 — API/DB
+
+Contract testing sits **between** unit tests (which mock everything) and end-to-end
+tests (which spin up the whole stack). It asserts: *the producer and the consumer
+agree on the shape and behavior of the messages they exchange*.
+
+This skill generates contract tests from an existing API spec, wires them into CI,
+and builds a compatibility matrix across services. The default tool is **Pact**
+(via [Pact Foundation](https://pact.io)) — well-supported across languages with a
+broker for sharing contracts.
+
+## When to use
+
+- Multiple services share an API. Frontend talks to backend; service A calls service B.
+- You're about to ship a backwards-incompatible API change and want CI to catch it.
+- New service joining an existing system needs to declare what it expects.
+- Migrating from full E2E suites that are flaky and slow — contract tests are the lighter
+  replacement for "did the boundary still hold".
+- You have an OpenAPI / SDL / proto spec but no enforcement that running code matches it.
+
+**Do not use for:**
+
+- Designing the API surface — that's `/api-design`.
+- Database schema compatibility — that's `/db-design` + `/db-migration`.
+- Event-bus schema compatibility — that's `/event-design`.
+
+## Inputs
+
+The skill expects one or more of:
+
+1. An **API spec** (`openapi.yaml`, `schema.graphql`, `*.proto`).
+2. A **list of consumers** — services / clients / packages that call this API. Detected by
+   grepping for the base URL or import of the generated client.
+3. A **list of producers** — services that implement endpoints from the spec.
+4. The **CI system** (`.github/workflows/`, `.circleci/`, `gitlab-ci.yml`, etc.).
+
+If the spec is missing, run `/api-design` first to generate one.
+
+## Procedure
+
+### Step 0: Detect spec + consumers + producers
+
+```bash
+SPEC=$(find . -type f \( -name "openapi.yaml" -o -name "openapi.json" -o -name "schema.graphql" -o -name "*.proto" \) -not -path "*/node_modules/*" -not -path "*/.git/*" 2>/dev/null | head -5)
+[ -n "$SPEC" ] && echo "Specs detected:\n$SPEC" || echo "No spec found"
+
+CI_DIR=""
+[ -d .github/workflows ] && CI_DIR=".github/workflows"
+[ -f .circleci/config.yml ] && CI_DIR=".circleci"
+[ -f .gitlab-ci.yml ] && CI_DIR=".gitlab-ci.yml"
+echo "CI: ${CI_DIR:-none}"
+```
+
+State what you found. If no spec, stop and refer the user to `/api-design`.
+
+### Step 1: AskUserQuestion — confirm scope
+
+One issue per call. Use the preamble's AskUserQuestion format. Ask:
+
+- **Contract tool** — Pact (default, broad language support), Spring Cloud Contract
+  (Java/Kotlin/Groovy producers), Postman/Newman (lightweight, manual-friendly),
+  Schemathesis (property-based, OpenAPI-driven), or "let me pick".
+- **Direction** — Producer side (we expose an API and want to verify our implementation),
+  Consumer side (we call an API and want to lock our expectations), or both?
+- **Broker** — PactFlow / self-hosted Pact Broker / file-based / skip broker? Brokers are
+  the right answer for >2 services; for a tight monorepo, file-based contracts in
+  `contracts/` work fine.
+
+Do NOT proceed until the user responds.
+
+### Step 2: Pick the tool
+
+Use this matrix:
+
+| Constraint                                              | Tool                                |
+|---------------------------------------------------------|-------------------------------------|
+| Polyglot (JS/TS + Go + Python + Java + Ruby + .NET)    | Pact                                |
+| OpenAPI spec is the source of truth; want auto-fuzzing | Schemathesis or Dredd               |
+| Pure JVM / Spring                                       | Spring Cloud Contract               |
+| GraphQL                                                 | Pact (with GraphQL plugin) or GraphQL-Contract |
+| gRPC                                                    | `buf breaking` + Pact gRPC plugin   |
+| No infra, manual-only review                            | Postman collections + Newman in CI  |
+
+Default: **Pact** with the language-appropriate SDK (`@pact-foundation/pact` for JS/TS,
+`pact-go`, `pact-python`, `pact-jvm`, `pact-ruby`, etc.).
+
+State the tool chosen and why.
+
+### Step 3: Generate consumer-side contracts
+
+For every consumer detected, create a contract test that:
+
+1. Declares the expected interaction: request method, path, headers, body shape,
+   response status, response shape.
+2. Uses **matchers** (regex, type-only, term, like) — not literal values. The contract
+   is about *shape*, not specific values.
+3. Runs against a **mock provider** spun up by the test framework. The mock validates
+   the consumer's actual HTTP calls against the declared expectations.
+4. Writes the pact file to `pacts/{consumer}-{producer}.json` (or publishes to the broker).
+
+Example structure (JS/TS, Pact):
+
+```ts
+// tests/contracts/userService-consumer.test.ts
+import { PactV3, MatchersV3 } from '@pact-foundation/pact';
+const { like, eachLike, regex } = MatchersV3;
+
+const provider = new PactV3({
+  consumer: 'web-app',
+  provider: 'user-service',
+  dir: './pacts',
+});
+
+test('GET /v1/users/:id returns a user', async () => {
+  provider
+    .given('user u_123 exists')
+    .uponReceiving('a request for user u_123')
+    .withRequest({ method: 'GET', path: '/v1/users/u_123' })
+    .willRespondWith({
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+      body: {
+        object: 'user',
+        id: regex(/^u_[a-zA-Z0-9]+$/, 'u_123'),
+        email: like('alice@example.com'),
+        created: like(1700000000),
+      },
+    });
+  await provider.executeTest(async (mockServer) => {
+    const res = await fetch(`${mockServer.url}/v1/users/u_123`);
+    expect(res.status).toBe(200);
+  });
+});
+```
+
+Generate one consumer test per distinct interaction the consumer performs. Use Grep to
+find every call site (`fetch(`, `axios.`, `client.users.get`, etc.) to enumerate them.
+
+Outputs: `tests/contracts/{service}-consumer.test.ts` (or equivalent per language) and
+`pacts/{consumer}-{producer}.json`.
+
+### Step 4: Generate producer-side verifications
+
+For every producer detected, create a verifier test that:
+
+1. Reads each pact file relevant to this producer.
+2. Spins up the real service (or a slimmed-down test instance) on a known port.
+3. Replays every interaction in the pact against the running service.
+4. Asserts every response matches the contract's expectations.
+5. Sets up provider state for each `given(...)` declaration — typically via state
+   handlers that seed the DB.
+
+Example (JS/TS):
+
+```ts
+// tests/contracts/user-service-provider.test.ts
+import { Verifier } from '@pact-foundation/pact';
+
+test('user-service honors all consumer contracts', async () => {
+  await new Verifier({
+    provider: 'user-service',
+    providerBaseUrl: 'http://localhost:3000',
+    pactUrls: ['./pacts/web-app-user-service.json'],
+    stateHandlers: {
+      'user u_123 exists': async () => { await seedUser('u_123'); },
+    },
+  }).verifyProvider();
+});
+```
+
+Outputs: `tests/contracts/{service}-provider.test.ts`.
+
+### Step 5: CI integration
+
+Wire into CI so contracts run on every PR:
+
+- **Consumer PRs:** run consumer tests → publish pacts → trigger `can-i-deploy` check
+  against the broker. `can-i-deploy` answers "can I safely deploy this version of the
+  consumer to {env}?" by checking all producer verifications.
+- **Producer PRs:** run provider verification against all consumer pacts → publish
+  verification result → `can-i-deploy` check on the producer side.
+- **Webhook (broker):** when a consumer publishes a new pact, trigger the producer's
+  CI to re-verify. Without this, breaking changes only surface on the next producer PR.
+
+Generate the workflow file in the detected CI system. Example GitHub Actions:
+
+```yaml
+# .github/workflows/contract-tests.yml
+name: contract-tests
+on: [pull_request, push]
+jobs:
+  consumer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: npm ci && npm test -- tests/contracts/
+      - run: npx pact-broker publish ./pacts --consumer-app-version=${{ github.sha }} --branch=${{ github.ref_name }}
+        env:
+          PACT_BROKER_BASE_URL: ${{ secrets.PACT_BROKER_BASE_URL }}
+          PACT_BROKER_TOKEN: ${{ secrets.PACT_BROKER_TOKEN }}
+      - run: npx pact-broker can-i-deploy --pacticipant=web-app --version=${{ github.sha }} --to-environment=production
+```
+
+### Step 6: Compatibility matrix
+
+Build `docs/api/compat-matrix.md` showing for every (consumer, producer, environment)
+triple: which versions are deployable together. Populate from the broker via
+`pact-broker matrix --pacticipant=...`.
+
+Example matrix:
+
+| Consumer / Env  | user-service prod | user-service staging |
+|-----------------|-------------------|----------------------|
+| web-app prod    | OK (v2.4.1 vs v3.1.0) | n/a              |
+| web-app staging | n/a               | OK (v2.5.0-rc vs v3.2.0-rc) |
+| mobile-ios prod | FAIL (v1.9.0 expects `name: string` but provider returns `name: { first, last }`) | n/a |
+
+Mark FAIL rows red. Each failure is a blocker on the deploying side.
+
+### Step 7: AskUserQuestion — gate per failure
+
+For every red cell in the matrix, AskUserQuestion individually. Present options:
+add a compatibility shim, dual-publish the old shape during deprecation, version bump
+the API, or pause the deploy. Do not auto-resolve.
+
+## Outputs
+
+- `tests/contracts/{service}-consumer.test.ts` — one consumer test per service that calls
+  this API.
+- `tests/contracts/{service}-provider.test.ts` — one provider verifier per service that
+  exposes this API.
+- `pacts/{consumer}-{producer}.json` — generated pact files (committed for monorepo,
+  published to broker for polyrepo).
+- `.github/workflows/contract-tests.yml` (or equivalent) — CI wiring.
+- `docs/api/compat-matrix.md` — the deployable-together matrix, kept fresh on every run.
+
+## Edge cases
+
+- **GraphQL** — contracts are per-operation (query/mutation name + variable shape + result
+  shape). Pact's GraphQL support works but feels bolted-on; consider the `graphql-codegen`
+  approach where consumer queries are statically known and the producer's `schema.graphql`
+  is the contract. Run `graphql-inspector diff` as the breaking-change check.
+- **gRPC** — `buf breaking --against` against the previous proto is the primary check;
+  Pact's gRPC plugin adds runtime verification on top.
+- **Async APIs / webhooks** — Pact supports async with the "message" pact type. The
+  producer publishes a message; the consumer's pact says "given X, I expect to receive a
+  message matching Y." Set up Pact's `MessageConsumerPact` / `MessageProviderPact`.
+- **Microservices with shared types** — don't share the type definitions. The whole point
+  of contract tests is that each side compiles independently and the contract is the
+  cross-cut. Sharing a TypeScript types package hides drift.
+- **Flaky provider state** — state handlers must be idempotent (drop+seed) and isolated
+  per test. A flaky `given` is the #1 reason contract suites get abandoned.
+- **Versioning in URLs** — when the producer ships `/v2`, the old `/v1` contract should
+  remain green until the sunset date. Tag pacts with the API version they target.
+- **Backwards-compat checks without contracts** — if you can't ship consumer tests yet,
+  fall back to `Schemathesis` against the OpenAPI spec for stateless, generated tests,
+  plus `oasdiff breaking` for spec-level breakage detection. Document this is interim.
+
+## Dependencies
+
+- `@pact-foundation/pact` (JS/TS), `pact-go`, `pact-python`, `pact-jvm`, etc.
+- `pact-broker` CLI for publish + `can-i-deploy` + matrix queries.
+- Optional: `schemathesis` (Python; OpenAPI-driven fuzzing), `dredd` (OpenAPI runtime
+  validation), `graphql-inspector` (GraphQL breaking-change detection), `buf` (Protobuf).
+- A Pact Broker — PactFlow (managed) or self-hosted (`pactfoundation/pact-broker` Docker).
+
+No new gstack libs.
+
+## Stop gates
+
+- After Step 1 (tool/scope) — wait for user response.
+- After Step 7 (matrix failures) — every red cell needs explicit user decision (shim,
+  dual-publish, version bump, or block deploy).
+
+The AskUserQuestion call is a tool_use, not prose — call the tool directly. Loading the
+schema via ToolSearch and writing the recommendation as chat prose is the failure mode
+these gates exist to prevent.

@@ -1,0 +1,356 @@
+---
+name: db-design
+preamble-tier: 3
+version: 1.0.0
+description: |
+  [API/DB] Design a new database schema or audit an existing one. Knows naming
+  conventions, normalization vs denormalization, index choice, partitioning,
+  soft-delete patterns, append-only vs mutable history, JSON-column tradeoffs.
+  Outputs forward migration SQL plus rollback. For audits, scores the schema
+  against rules and produces a remediation plan. Supports Postgres, SQLite, and
+  MySQL. Use when: "design a schema", "audit our schema", "review this migration",
+  "should this be a JSON column", "normalization review". (gstack)
+allowed-tools:
+  - Read
+  - Write
+  - Edit
+  - Grep
+  - Glob
+  - AskUserQuestion
+  - Bash
+  - WebSearch
+triggers:
+  - design a schema
+  - audit the schema
+  - review migration
+  - normalize this
+  - jsonb vs columns
+---
+
+{{PREAMBLE}}
+
+{{GBRAIN_CONTEXT_LOAD}}
+
+# /db-design — Family E2 — API/DB
+
+Schema decisions are the highest-cost mistakes in the system. Backfilling or renaming
+a column six months in is brutal; getting the index wrong on the hottest table is a
+weekend on-call. This skill exists to slow you down at the moment that matters and put
+the right tradeoffs in front of you before the schema lands.
+
+Two modes:
+
+- **Design mode** — new schema or new table. Walk the modeling decisions, generate
+  forward + rollback migrations, document the choices.
+- **Audit mode** — existing schema. Score against the rules, identify problem patterns
+  (missing indexes, denormalization debt, soft-delete inconsistency, JSON-column abuse),
+  produce a remediation plan.
+
+## When to use
+
+- Designing a new feature whose data model isn't trivial (more than one entity, joins,
+  or any history/audit requirement).
+- Auditing an existing schema you've inherited or that's drifted from intent.
+- Before adding a "just one JSON column" — usually a warning sign.
+- When you suspect missing indexes (use `/db-perf` for empirical EXPLAIN-driven analysis;
+  use this skill for structural review).
+- During an upcoming migration where understanding the current shape matters.
+
+**Do not use for:**
+
+- Executing a migration safely on a live table — that's `/db-migration`.
+- Profiling slow queries — that's `/db-perf`.
+- Event/message persistence schemas — that's `/event-design`.
+
+## Inputs
+
+The skill expects one or more of:
+
+1. **Existing schema files** — `schema.sql`, `db/schema.rb`, `prisma/schema.prisma`,
+   `ent/schema/`, `sqlalchemy` models, Django `models.py`, migration directories
+   (`db/migrate/`, `migrations/`).
+2. **A live DB** — connection string for `psql` / `sqlite3` / `mysql` so you can
+   introspect actual columns, indexes, and constraints (read-only).
+3. **A natural-language brief** of the entities and access patterns.
+
+## Database engines supported
+
+| Engine     | Supported | Notes                                                       |
+|------------|-----------|-------------------------------------------------------------|
+| PostgreSQL | First class | Default. Assume latest stable (16+) unless told otherwise. |
+| SQLite     | First class | Assume modern (3.40+). Many "Postgres-only" patterns work via JSON1, generated columns, partial indexes. |
+| MySQL      | Supported   | 8.0+. InnoDB only. Note the smaller index-key limits and different JSON semantics. |
+
+The skill never assumes the engine. **Always AskUserQuestion if the engine isn't obvious
+from the project files.**
+
+## Procedure
+
+### Step 0: Detect engine + schema
+
+```bash
+# Try to detect engine from common config locations
+ENGINE=""
+grep -lE "postgres|postgresql|pg_" --include="*.json" --include="*.yaml" --include="*.yml" --include="*.toml" --include=".env*" -r . 2>/dev/null | head -3 && ENGINE="postgres"
+grep -lE "sqlite" --include="*.json" --include="*.yaml" --include="*.toml" -r . 2>/dev/null | head -3 && [ -z "$ENGINE" ] && ENGINE="sqlite"
+grep -lE "mysql|mariadb" --include="*.json" --include="*.yaml" --include="*.toml" --include=".env*" -r . 2>/dev/null | head -3 && [ -z "$ENGINE" ] && ENGINE="mysql"
+
+# Find schema files
+SCHEMA_FILES=$(find . -type f \( -name "schema.sql" -o -name "schema.rb" -o -name "schema.prisma" -o -name "models.py" \) -not -path "*/node_modules/*" -not -path "*/.git/*" -not -path "*/vendor/*" 2>/dev/null | head -10)
+MIGRATIONS=$(find . -type d \( -name "migrations" -o -name "migrate" \) -not -path "*/node_modules/*" -not -path "*/.git/*" 2>/dev/null | head -5)
+echo "Engine guess: ${ENGINE:-unknown}"
+echo "Schema files: ${SCHEMA_FILES:-none}"
+echo "Migration dirs: ${MIGRATIONS:-none}"
+```
+
+State what you found. If engine is unknown or ambiguous, AskUserQuestion before
+continuing — Postgres-only features (`JSONB`, `GIN` indexes, partial indexes, `EXCLUDE`
+constraints) make the rest of the review wrong if you assume the wrong engine.
+
+### Step 1: AskUserQuestion — confirm mode + scope
+
+One issue per call. Use the preamble's AskUserQuestion format. Ask:
+
+- **Mode** — design (new schema) or audit (existing schema)?
+- **Engine** — Postgres, SQLite, or MySQL (with version)?
+- **Naming convention** — `snake_case` (default, recommended), `camelCase`,
+  `PascalCase`? Singular table names (`user`) or plural (`users`)? Once chosen, locked.
+- **Soft-delete** — required, no, or per-table? If yes, `deleted_at TIMESTAMPTZ NULL`
+  with partial indexes is the boring default.
+- **Append-only vs mutable history** — does any entity need an audit log? Event-sourced
+  history? CDC into a warehouse? This affects whether you design the OLTP table as
+  mutable or as a projection over an immutable log.
+
+Do NOT proceed until the user responds.
+
+### Step 2: Design rules (apply in both modes)
+
+These are the structural rules every table should obey. In design mode, generate
+against them. In audit mode, score against them.
+
+**Naming**
+- Tables: `snake_case`, plural nouns (`users`, `orders`, `order_line_items`). Junction
+  tables: alphabetical (`tags_users`, not `users_tags`).
+- Columns: `snake_case`. Booleans named `is_*` or `has_*`. Timestamps suffix `_at`.
+- Primary keys: `id`. Foreign keys: `{singular_table}_id` (`user_id`, `order_id`).
+- Indexes: `idx_{table}_{cols}`. Unique indexes: `uq_{table}_{cols}`. Constraints:
+  `ck_{table}_{rule}`.
+
+**Identity**
+- Use `BIGINT` (Postgres `BIGSERIAL` / `GENERATED ALWAYS AS IDENTITY`) for internal IDs.
+- Expose **opaque external IDs** for public APIs: prefix + base32/base62 ULID
+  (`user_01HQX...`). Stripe-style. Hides volume, allows ID migration later.
+- Never expose raw DB primary keys in URLs or JSON.
+- UUIDv7 is acceptable when you need globally-unique-and-sortable but don't want a
+  prefix scheme. UUIDv4 if you don't care about insert locality.
+
+**Timestamps**
+- Always `TIMESTAMPTZ` in Postgres (never `TIMESTAMP` without TZ).
+- SQLite has no TZ type — use `TEXT` with ISO-8601 strings or `INTEGER` epoch.
+- MySQL: `TIMESTAMP` (with TZ via session) or `DATETIME` — pick one project-wide.
+- Every mutable table gets `created_at` and `updated_at`, both `NOT NULL DEFAULT now()`.
+- Triggers (Postgres/MySQL) or app-layer code keeps `updated_at` fresh — don't trust ORMs.
+
+**Nullability + defaults**
+- Default to `NOT NULL`. NULL is for "we genuinely don't know" — not "we haven't filled
+  it in yet". Use empty string / zero / a status enum value for unknown-but-not-null cases.
+- Defaults belong in the DB, not in the app. `DEFAULT now()`, `DEFAULT '{}'::jsonb`,
+  `DEFAULT FALSE`.
+
+**Constraints**
+- `FOREIGN KEY` on every reference, with `ON DELETE` decided per relation:
+  `CASCADE` (child meaningless without parent), `SET NULL` (child outlives parent),
+  `RESTRICT` (default, surfaces orphan attempts).
+- `CHECK` constraints for invariants (`CHECK (amount >= 0)`).
+- `UNIQUE` constraints for business uniqueness (email, slug). Use partial uniques
+  for soft-delete: `CREATE UNIQUE INDEX uq_users_email ON users(email) WHERE deleted_at IS NULL;`
+  (Postgres + SQLite). MySQL needs an app-layer check or a generated column.
+
+**Indexes**
+- Every FK gets an index (the FK itself doesn't auto-create one in Postgres).
+- Hot read paths get indexes matching the WHERE + ORDER BY shape.
+- Multicolumn indexes follow leftmost-prefix rules — `(a, b)` covers `WHERE a=...` and
+  `WHERE a=... AND b=...` but not `WHERE b=...`.
+- Partial indexes for sparse predicates: `CREATE INDEX ... ON orders(status) WHERE status IN ('pending', 'processing');`
+- `GIN` indexes for `JSONB` fields you query, `GIN` with `gin_trgm_ops` for fuzzy text
+  search (Postgres). SQLite: FTS5 virtual table. MySQL: fulltext index.
+- Never index-everything. Each index slows writes and costs space.
+
+**JSON columns**
+- `JSONB` (Postgres) / `JSON` (MySQL 8 / SQLite) is appropriate for:
+  - Settings / preferences / feature flags (rarely queried, often replaced wholesale).
+  - Per-row metadata bag that varies wildly per record.
+  - External payloads you store raw for audit.
+- `JSONB` is **not** appropriate for:
+  - Fields you'll filter / join / aggregate on. Promote to columns.
+  - Anything with a stable shape. Promote to columns.
+  - "I'll figure out the schema later". Decide now.
+- When in doubt: start with columns. Adding a JSONB later is cheaper than denormalizing
+  a JSONB into columns after the data is messy.
+
+**Soft delete**
+- `deleted_at TIMESTAMPTZ NULL`. Add to every "user-visible" entity that the product
+  ever wants to "undelete".
+- Every query needs `WHERE deleted_at IS NULL` — wrap in a view or a default scope.
+- Partial unique indexes (above) keep uniqueness sane.
+- For GDPR / right-to-be-forgotten — soft delete is not enough. Plan a hard delete path
+  with audit log of who/when/what.
+
+**Append-only history**
+- For audit / compliance / "what changed when" — write to an immutable history table
+  in addition to (or instead of) the mutable row. Patterns:
+  - **Audit table** (`{entity}_history`) — full row snapshot per change. Simple, big.
+  - **Change-log table** (`{entity}_changes`) — old + new diff per change. Smaller, more queries.
+  - **Event-sourced** — the mutable row is a materialized view of the log. Powerful, complex.
+- Default to audit table unless storage is a real concern.
+
+**Enums**
+- Postgres: `CREATE TYPE` enums are static, hard to alter (need ALTER TYPE ADD VALUE).
+  Acceptable for truly fixed sets (HTTP methods, colors). For app-defined sets that may
+  grow, use a `TEXT` column + `CHECK (status IN (...))` + a lookup table.
+- SQLite + MySQL: `TEXT` + `CHECK` is the portable default.
+
+**Partitioning** (Postgres)
+- Default: don't partition. Below ~100M rows it's premature.
+- Partition by time (RANGE) for append-heavy time-series. Partition by tenant (LIST or
+  HASH) for true multi-tenant where one tenant dominates load. Document the rollover
+  policy and how to detach old partitions.
+
+### Step 3: Design mode — generate the schema
+
+Walk through each entity:
+
+1. Name, columns, types (per engine).
+2. Constraints (PK, FK, UNIQUE, CHECK, NOT NULL).
+3. Indexes — declare each one with its query justification ("for the `GET /users?email=...`
+   path on the login page").
+4. Relationships: 1:1, 1:N, N:M. Junction tables explicit, with their own indexes.
+5. Soft delete? Audit log? Both? Neither?
+6. JSONB columns: shape documented in a comment, future "promote to column" candidates listed.
+
+Emit a forward migration SQL file AND a rollback. Number them per the project's
+convention (timestamp prefix or sequential).
+
+Example forward migration (Postgres):
+
+```sql
+-- db/migrations/20260516120000_create_orders.up.sql
+BEGIN;
+
+CREATE TABLE orders (
+  id            BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  external_id   TEXT NOT NULL,
+  user_id       BIGINT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+  status        TEXT NOT NULL CHECK (status IN ('pending', 'paid', 'shipped', 'refunded', 'cancelled')),
+  amount_cents  BIGINT NOT NULL CHECK (amount_cents >= 0),
+  currency      CHAR(3) NOT NULL,
+  metadata      JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  deleted_at    TIMESTAMPTZ NULL
+);
+
+CREATE UNIQUE INDEX uq_orders_external_id ON orders(external_id) WHERE deleted_at IS NULL;
+CREATE INDEX idx_orders_user_id_created_at ON orders(user_id, created_at DESC) WHERE deleted_at IS NULL;
+CREATE INDEX idx_orders_status ON orders(status) WHERE status IN ('pending', 'paid');
+
+CREATE TRIGGER trg_orders_updated_at BEFORE UPDATE ON orders
+  FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+COMMIT;
+```
+
+```sql
+-- db/migrations/20260516120000_create_orders.down.sql
+BEGIN;
+DROP TABLE orders;
+COMMIT;
+```
+
+Every migration MUST be reversible. If a forward step is destructive (drop column,
+drop table), the rollback must restore enough structure to keep the previous app
+version working — typically a full restore from backup is the only honest rollback.
+Document that.
+
+### Step 4: Audit mode — score the existing schema
+
+Score on a 0-10 scale across:
+
+- **Naming consistency** — does every table/column follow one convention?
+- **Constraint coverage** — FKs present? CHECKs on invariants? Uniques on business keys?
+- **Index health** — every FK indexed? Hot paths covered? Stale/unused indexes?
+- **JSON discipline** — JSONB used for the right things? Or sprawl?
+- **Soft-delete consistency** — every "deletable" entity has it? Queries respect it?
+- **Audit/history** — required entities have audit tables?
+- **Migration reversibility** — are existing migrations reversible?
+
+For each weak score, explain what would make it a 10. List concrete remediations
+ordered by risk.
+
+### Step 5: AskUserQuestion — gate per finding
+
+For every problem in audit mode, AskUserQuestion individually. Present 2-3 options:
+fix now, schedule, or accept. State your recommendation. Explain why.
+
+### Step 6: Run linters
+
+Where the project supports it:
+
+- **sqlfluff** — multi-dialect SQL linter. Run: `sqlfluff lint --dialect postgres db/migrations/`.
+  Codifies naming + keyword case + indentation.
+- **squawk** — Postgres-specific migration safety linter, catches dangerous patterns
+  (adding NOT NULL without default, locking ALTERs). Run: `squawk migrations/*.sql`.
+  Plays into `/db-migration` for the safety analysis.
+- **ts-node Prisma format / drizzle-kit check** — if using an ORM with codegen.
+
+If the linter isn't installed, document the install command and link the rules.
+
+## Outputs
+
+- `db/migrations/{NNNN}-{slug}.up.sql` + `.down.sql` (or the project's existing migration
+  naming convention).
+- `docs/db/schema-review-{YYYY-MM-DD}.md` — audit findings, scored, with remediation plan.
+- `docs/db/conventions.md` — the locked-in naming + soft-delete + JSON rules, written
+  as enforceable conventions for future migrations.
+
+## Edge cases
+
+- **SQLite specifics** — no `BOOLEAN` (use `INTEGER` 0/1), no `TIMESTAMPTZ`, no
+  `ENUM`, no real `ALTER TABLE` for many ops (need rename-copy-drop dance). Foreign
+  keys off by default — `PRAGMA foreign_keys = ON;` per connection.
+- **MySQL specifics** — `utf8mb4` for emoji support (never plain `utf8`). InnoDB
+  primary keys are clustered (insert order matters; UUIDv4 PKs hurt). `ON UPDATE CURRENT_TIMESTAMP`
+  exists but only one per table. Index key prefix limit (3072 bytes by default).
+- **Postgres specifics** — `JSONB` not `JSON` for indexable queries. `TIMESTAMPTZ` not
+  `TIMESTAMP`. `TEXT` over `VARCHAR(n)` (same storage, less hassle). `GENERATED ALWAYS AS IDENTITY`
+  over `SERIAL` in modern code.
+- **ORM-managed schemas** — Prisma / SQLAlchemy / ActiveRecord / Ent / Drizzle. Generate
+  migrations through the ORM, not hand-rolled SQL — drift between SQL and the ORM model
+  causes the worst bugs. Always inspect the generated SQL before applying.
+- **Multi-tenant schemas** — schema-per-tenant (Postgres), DB-per-tenant, or row-level
+  with `tenant_id` on every table. Pick one project-wide; mixing is misery. Each
+  approach has different index, backup, and access-control implications.
+- **Generated columns** — Postgres `GENERATED ALWAYS AS (expr) STORED` is great for
+  computed sort keys / search-normalization. MySQL + SQLite also support generated
+  columns. Use when the computed value is queried more than the inputs.
+- **`/db-migration` handoff** — once the design is approved, executing the migration on
+  a live, non-trivial table is handed to `/db-migration` (zero-downtime planner). This
+  skill only emits the migration SQL.
+
+## Dependencies
+
+- `psql` / `sqlite3` / `mysql` CLI for introspection (read-only credentials sufficient).
+- `sqlfluff` for linting (optional but recommended).
+- `squawk` for Postgres migration safety (optional but recommended).
+- WebSearch for current best-practice lookups when a pattern is unfamiliar.
+
+No new gstack libs.
+
+## Stop gates
+
+- After Step 1 (engine + naming + soft-delete + history) — locked once chosen.
+- After Step 5 (per audit finding) — every problem needs explicit user decision.
+
+The AskUserQuestion call is a tool_use, not prose — call the tool directly. Loading the
+schema via ToolSearch and writing the recommendation as chat prose is the failure mode
+these gates exist to prevent.

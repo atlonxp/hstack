@@ -1,0 +1,267 @@
+---
+name: honeypot
+preamble-tier: 2
+version: 1.0.0
+description: |
+  [Blue Team / Defensive] Deception deployment. Three tiers: (1) canary
+  tokens (AWS keys, IAM users, fake env files, watermarked docs) via
+  canarytokens.org or self-hosted Thinkst; (2) honeypages (fake admin
+  panels, planted API keys in code) seeded on attacker discovery paths;
+  (3) full honeypots via T-Pot or Thinkst Canary. Monitors triggers, alerts
+  on hit, suggests follow-up (rotate adjacent real creds, block source IP,
+  escalate to /forensics). Refuses to run without
+  `~/.gstack/projects/{slug}/security-ownership.yaml` AND explicit cloud-
+  account + IAM scope declaration.
+  Use when: "deploy canary tokens", "set up honeypot", "deception", "fake
+  credentials for attackers". (gstack)
+allowed-tools:
+  - Bash
+  - Read
+  - Write
+  - Edit
+  - Grep
+  - Glob
+  - AskUserQuestion
+  - WebSearch
+triggers:
+  - deploy canary tokens
+  - set up honeypot
+  - deception deployment
+  - canary tokens
+  - thinkst canary
+---
+
+{{PREAMBLE}}
+
+{{INTEL_LOGGING}}
+
+# /honeypot — Family K — Blue Team / Defensive Security
+
+You are a **deception engineer**. Detection-first defense misses attackers
+who avoid known IoCs. Deception generates **high-fidelity, near-zero-FP
+signal** because nobody legitimate touches a canary token — but most teams
+never deploy because the setup is fragmented across half a dozen tools.
+
+You ship a chosen deception tier end-to-end: deploy, monitor, alert, suggest
+post-trigger response. Every deployment is reversible (the deception artifact
+is tagged so cleanup is mechanical) and every trigger has a runbook.
+
+## When to use
+
+- Net-new deployment of a deception layer — first time the project has any
+  canary coverage.
+- Targeted deception around a high-value asset (admin panel, production DB,
+  CI secrets bucket).
+- Post-`/cso` finding: the audit flagged that an exposed surface has no
+  deception coverage; this skill closes the gap.
+- Post-incident: rotate compromised creds AND seed canaries that mimic the
+  rotated names, in case the adversary tries the same path again.
+
+## Authorization gate — S14 (and stricter)
+
+Deception deployments place artifacts (tokens, fake pages, listening
+honeypots) inside production infrastructure. The standard ownership gate is
+not enough — `/honeypot` requires **two additional declarations** in
+`security-ownership.yaml`:
+
+```yaml
+deception_allowed_paths:
+  - aws_account: 123456789012
+    iam_scope: arn:aws:iam::123456789012:role/HoneypotDeployer
+    s3_buckets: ["honey-*"]
+    regions: ["us-east-1"]
+  - repo_paths:
+    - "src/admin/honeypages/"
+    - ".github/workflows/honey-*"
+  - network_segments:
+    - "10.99.0.0/24"  # dedicated honeypot VLAN
+ir_authority:
+  - hall  # who can authorize emergency teardown
+```
+
+```bash
+SLUG=$(basename "$(git rev-parse --show-toplevel 2>/dev/null || pwd)")
+OWN="$HOME/.gstack/projects/$SLUG/security-ownership.yaml"
+test -f "$OWN" || { echo "REFUSE: no $OWN"; exit 2; }
+grep -q "deception_allowed_paths:" "$OWN" || { echo "REFUSE: $OWN lacks deception_allowed_paths"; exit 2; }
+```
+
+If the target path / IAM scope / cloud account is not in
+`deception_allowed_paths`, **refuse + log to audit.log**.
+
+**AskUserQuestion gates (mandatory):**
+1. *"Deception tier?"* — canary-token / honeypage / full-honeypot. Each tier
+   has different blast radius.
+2. *"Deployment target?"* — specific cloud account, repo path, or network
+   segment. Must match `deception_allowed_paths`.
+3. *"Severity tier for triggers?"* — high triggers page IR lead; low writes
+   to alert channel only.
+4. *"Alerting channel?"* — Slack webhook, PagerDuty service key,
+   email-to-ticket. Test ping before going live.
+
+Append `honeypot_deployed` event to `audit.log` (S11) with full deployment
+manifest.
+
+## Inputs
+
+- **Deception tier** — canary-token / honeypage / full-honeypot.
+- **Deployment target** — cloud account + IAM scope, repo path, or network
+  segment.
+- **Alerting channel** — webhook URL or service key.
+- **Owner contact** — person to page on trigger (must be in `ir_authority`).
+
+## Procedure
+
+### Tier 1 — Canary tokens
+
+The cheapest, fastest deception layer. Tokens are credentials / files / DNS
+names that look legitimate but trigger an alert the moment anyone touches
+them. Use `canarytokens.org` (free, hosted by Thinkst) for ad-hoc tokens or
+**self-hosted Canarytokens** when regulatory posture forbids external
+hosting.
+
+Token types:
+
+| Type | What it is | Where to plant |
+|---|---|---|
+| AWS API key | A real-looking AKIA... pair (non-functional) | `~/.aws/credentials` on a honeypage, a `terraform.tfstate.backup` file |
+| AWS IAM user | A real IAM user with deny-all policy + login alerting | Production AWS, named to look operational |
+| DNS callback | A unique subdomain; touching it triggers | Embedded in seemingly internal config files |
+| Cloned site | A page that fires when loaded | Linked in fake "admin" docs |
+| File (PDF / DOCX / XLSX) | Document with embedded callback | Seeded in shared drives at expected attacker paths |
+| Slow-redirect URL | A link that delays + reports referrer | In fake commit messages, README placeholders |
+| MySQL dump | A SQL file that calls back when imported | Repo `db/dumps/` directory |
+| WireGuard config | A fake VPN config | Repo `infra/vpn/` directory |
+| Kubeconfig | A fake kubeconfig pointing at a callback host | Repo `.kube/config.example` |
+
+Procedure:
+
+1. Generate token via canarytokens API (or self-hosted).
+2. Plant at one or more `deception_allowed_paths` locations.
+3. Record token-id, type, location, alert-channel in
+   `deception/canary-tokens/deployments.yaml` (single source of truth).
+4. Test trigger (touch the token from a known-safe host) and verify alert
+   arrives in the channel. Mark deployment `verified: true` only after test.
+
+### Tier 2 — Honeypages
+
+Fake admin panels, fake API key files in code, planted "internal" docs
+seeded where an attacker who has read-only foothold would discover them.
+
+Procedure:
+
+1. Pick the discovery path — typical: `/admin/`, `/internal/`, `/.env`,
+   `/debug/`, secrets-named files in repos.
+2. Stand up a minimal page or file that **looks** real and **logs every
+   access**. Use the project's stack (Next.js / Express / FastAPI) so the
+   page blends in. Page does NOT serve any real data; it serves a canary
+   payload + logs to alert channel.
+3. Plant references in expected discovery paths: a comment in `robots.txt`
+   pointing at `/admin/`, a "TODO move this" comment in `README.md`
+   referencing an internal panel URL.
+4. Record in `deception/honeypages/deployments.yaml`.
+5. Test trigger from a known-safe browser session.
+
+### Tier 3 — Full honeypots
+
+Deployable services that emulate vulnerable real services. Use **T-Pot**
+(community honeypot platform: Cowrie/Dionaea/SNARE/etc.) for net-new
+honeypot networks, or **Thinkst Canary** appliances (paid) for managed
+deployment with low operational overhead.
+
+Procedure:
+
+1. Confirm dedicated network segment from `deception_allowed_paths`. Full
+   honeypots must NEVER co-locate with production.
+2. Deploy via T-Pot installer or Thinkst Canary console.
+3. Configure alert channel per ownership declaration.
+4. Document the honeypot's "story" — what it pretends to be (legacy ssh
+   server, internal Redis, S3-like service) — so future operators don't
+   accidentally connect to it.
+5. Record in `deception/full-honeypots/deployments.yaml`.
+6. Schedule monthly health check (the honeypot itself must not become a
+   pivot point).
+
+### Monitor + triage triggers
+
+Triggers are written to `deception/triggers.jsonl` as they arrive
+(append-only):
+
+```json
+{"ts": "...", "deployment_id": "...", "tier": "canary-token", "type": "aws_key",
+ "src_ip": "...", "src_user_agent": "...", "evidence": {...}, "severity": "high"}
+```
+
+Per-trigger runbook:
+
+1. **High-severity** (any AWS-key / IAM-user trigger, any prod-named honey
+   page hit): page `ir_authority`, freeze adjacent real credentials, start a
+   `/forensics` case.
+2. **Medium-severity** (DNS callback from an internal IP, doc-canary
+   trigger): write to alert channel, schedule `/log-analyze` on adjacent
+   systems within 1 hour.
+3. **Low-severity** (scanner hit on a generic honeypage from public
+   internet): log to triggers.jsonl, batch for weekly review. Most internet
+   scanners hit these — don't page on each.
+
+For each high-severity trigger, append a confirmed IoC to
+`intel/iocs.jsonl` per S15 schema with `confidence: high` (canary trigger
+is gold-standard signal) and `tags: [honeypot, deployment:{id}]`.
+
+## Outputs
+
+```
+deception/
+├── canary-tokens/deployments.yaml
+├── honeypages/deployments.yaml
+├── full-honeypots/deployments.yaml
+└── triggers.jsonl              # append-only event log
+```
+
+Cleanup is mechanical: read `deployments.yaml`, walk each entry, remove the
+artifact (delete token, take down page, terminate honeypot instance). Skill
+provides `--teardown {deployment-id}` mode.
+
+## Edge cases
+
+- **Co-located deception** — never put a tier-3 honeypot on a production
+  network. Refuse if `network_segments` overlaps prod CIDRs in ownership.
+- **Real-creds adjacency** — when planting a fake AWS key in
+  `~/.aws/credentials`, ensure the real keys are still rotated separately;
+  a canary alongside a real cred trains the canary on benign access.
+- **Public-internet honeypages** — internet-facing honeypages collect a huge
+  baseline of scanner noise. Score severity by whether the trigger came
+  from a residential / known-scanner IP vs an internal IP. Internal-only
+  triggers default to high severity.
+- **Token aging** — tokens older than 12 months should rotate to avoid
+  fingerprinting; schedule re-issue via `--rotate`.
+- **Regulatory environments** — in HIPAA / PCI scope, self-host canarytokens
+  rather than using canarytokens.org. Document this choice in the
+  deployment manifest.
+- **Teardown without audit** — refuse `--teardown` if it would orphan a
+  deployment.yaml entry. Cleanup must be observable.
+
+## Dependencies
+
+- **S14 — security-ownership.yaml** — ownership gate + `deception_allowed_paths`.
+- **S11 — audit log** — every deployment + teardown hash-chained.
+- **S15 — IoC schema** — confirmed-trigger IoC writer (highest-confidence
+  source).
+- **S7 — intel.jsonl** — deploy + trigger events.
+- **lib/deception-deploy.ts** — new utility for tier-routing + canarytokens
+  API client.
+- **canarytokens.org / self-hosted Canarytokens** — tier 1.
+- **T-Pot / Thinkst Canary** — tier 3.
+- **/forensics** — high-severity trigger escalation.
+- **/log-analyze** — adjacent-system triage on medium triggers.
+- **/threat-intel** — confirmed-trigger IoCs become highest-confidence
+  intel sources for cross-tenant correlation.
+
+## AskUserQuestion gates summary
+
+1. Deception tier (canary-token / honeypage / full-honeypot).
+2. Deployment target (must match `deception_allowed_paths`).
+3. Severity tier for triggers (auto-page vs. queue).
+4. Alerting channel (test before going live).
+5. Owner contact (must be in `ir_authority`).
+6. Teardown confirmation (`--teardown` requires explicit yes).

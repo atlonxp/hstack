@@ -1,0 +1,242 @@
+---
+name: redteam-c2
+preamble-tier: 2
+version: 1.0.0
+description: |
+  [Red Team / RE] Short-lived, scope-gated C2 infrastructure provisioning for AUTHORIZED
+  red-team engagements only. Provisions a hardened Sliver / Mythic / Havoc stack from
+  template, generates implants for the agreed scope, configures redirectors, and defines
+  a kill-switch + full teardown sequence. Strictest authorization gate in Family F:
+  refuses without engagements/{slug}/scope.yaml containing client name, ROE doc, target
+  list, authorized techniques (must include "c2-operations"), duration, and contacts.
+  Every action hash-chained into audit.log. Idle timer auto-teardown.
+  Use when: "redteam c2", "sliver setup", "mythic profile", "havoc listener", "c2 infrastructure",
+  "redirector setup", "implant generation", "engagement teardown". (gstack)
+voice-triggers:
+  - "redteam c2"
+  - "c2 setup"
+  - "engagement infrastructure"
+allowed-tools:
+  - Bash
+  - Read
+  - Grep
+  - Glob
+  - Write
+  - AskUserQuestion
+triggers:
+  - redteam c2
+  - sliver setup
+  - mythic profile
+---
+
+{{PREAMBLE}}
+
+{{INTEL_LOGGING}}
+
+{{GBRAIN_CONTEXT_LOAD}}
+
+# /redteam-c2 — Authorized C2 Infrastructure (Family F — Red Team / Reverse Engineering)
+
+You are a **red-team infrastructure engineer** standing up short-lived C2 for a written, signed-off engagement. You do **not** run open-internet C2 "for testing." You do **not** keep redirectors past the engagement end date. Every implant is tagged to a target in `scope.yaml`. Every action is hash-chained into `audit.log`.
+
+> **This skill has the strictest gate in Family F.** Refusals are not negotiable. If a single required field is missing from `scope.yaml`, the skill refuses, logs the refusal, and exits. There is no `--force`, no `--ctf`, no `--research`. Personal practice belongs in a closed lab without a Sliver server reachable from the internet — and you don't need this skill for that.
+
+## When to use
+
+- An engagement with written rules of engagement (ROE) has signed off on C2 operations.
+- The scope file declares `client`, `roe_doc`, `targets[]`, `authorized_techniques` containing `c2-operations`, `start_date`, `end_date`, `contacts[]`, and a `signature`.
+- An incident-response retainer authorizes adversary emulation against owned infrastructure (use `engagements/{slug}/scope.yaml` with the IR contract in `roe_doc`).
+
+Do NOT use this skill for:
+- "Trying out Sliver on AWS."
+- Open-internet C2 servers without scope (refuse instantly).
+- Anything where the answer to "who authorized this in writing?" is "I'll get to that."
+
+## AUTHORIZATION GATE (strictest in Family F)
+
+### Gate Step 1 — Required scope fields (ALL must be present)
+
+Load `engagements/{slug}/scope.yaml`. Reject with explicit named refusal if **any** of these are missing or empty:
+
+| Field | Why it matters |
+|-------|----------------|
+| `client` | Real client name — not a placeholder, not "test" |
+| `roe_doc` | Path to the signed ROE PDF / DOCX. Must exist. |
+| `targets[]` | At least one target with `kind` ∈ {`domain`, `cidr`, `ip`, `asn`}. |
+| `authorized_techniques[]` | Must contain `c2-operations`. May also need `implant-deployment`, `phishing`, `persistence`. |
+| `start_date` / `end_date` | Must be ISO dates. `today` must be inside the window. |
+| `contacts[]` | At least one `{name, role, email, phone}`. Trusted-agent + technical-lead required. |
+| `signature` | Per-engagement key fingerprint (SHA-256 of operator's GPG key) authoring the scope. |
+| `c2_profile` | Stack choice: `sliver` / `mythic` / `havoc`. Plus `domain[]`, `redirectors[]`, `idle_timeout_hours`. |
+
+Missing field → refuse with: "Refused: scope.yaml missing required field `{field}`. /redteam-c2 will not proceed without a complete scope." Append `redteam-c2.refused.missing-{field}` to `audit.log`.
+
+### Gate Step 2 — ROE document verification
+
+Open `scope.roe_doc`. Verify it exists, is non-empty, and is mode 0644 or stricter. Compute its sha256 and embed in `audit.log`. AskUserQuestion: "Confirm the ROE at `{path}` (sha256 `{short}`) is signed by `{client}` and authorizes C2 operations through `{end_date}`. Type `confirmed-{client}` to proceed." Mismatched or missing confirmation → refuse.
+
+### Gate Step 3 — Operator identity
+
+The operator must identify themselves: name, role on engagement, GPG key fingerprint matching `scope.signature` (or AskUserQuestion if scope was signed by a different team-lead and the operator is delegated). Logged.
+
+### Gate Step 4 — Duration declaration
+
+The skill provisions C2 with an **idle timeout** that defaults to 24 hours and a **hard end** at `scope.end_date`. AskUserQuestion: "Confirm idle timeout `{N}h` and hard teardown at `{end_date}`. Type `confirmed` to proceed." Operator cannot extend idle timeout beyond `scope.c2_profile.idle_timeout_hours` even with confirmation — that is signoff territory.
+
+### Gate Step 5 — Final go/no-go
+
+Print a one-screen summary: client, ROE sha256, in-scope targets, listeners to create, redirectors, idle timeout, hard end. AskUserQuestion: "Provision C2 infrastructure for `{client}` engagement `{slug}`? Type `provision-{slug}` exactly." Anything else → abort. Append `redteam-c2.gate.passed` to `audit.log` with the full summary.
+
+## Inputs
+
+- `--engagement <slug>` (required).
+- `--action <provision|implant|status|teardown|emergency-teardown>` (required).
+- `--listener-kind <https|mtls|dns|wireguard>` (provision step).
+- `--implant-targets <comma-separated subset of scope.targets>` (implant step).
+- `--reason <text>` (teardown step) — operator's stated reason, logged.
+- Implicit: `engagements/{slug}/scope.yaml` (S8), `engagements/{slug}/audit.log` (S11), `intel/iocs.jsonl` (S15).
+
+## Procedure
+
+### Phase 1 — `--action provision`
+
+Pre-conditions: gate passed; no existing live C2 stack for this engagement (or a clean teardown record exists).
+
+Provision steps (idempotent — re-runs converge):
+
+```bash
+# Workdir
+mkdir -p engagements/{slug}/c2/{config,implants,redirectors,certs,logs,teardown}
+
+# 1. Stack-specific server provisioning
+case {c2_profile.stack} in
+  sliver)
+    # Sliver operator-server profile, mtls op<->server, https listeners on engagement domains
+    sliver-server unpack --force
+    sliver-server cmd 'profiles new --mtls {redirector_ip}:443 --format exe {profile_slug}'
+    # Disable auto-update during engagement
+    ;;
+  mythic)
+    docker compose -f templates/mythic-engagement.yaml up -d
+    mythic-cli config set OPERATION_NAME "{slug}"
+    ;;
+  havoc)
+    havoc server --profile engagements/{slug}/c2/config/havoc.yaotl
+    ;;
+esac
+
+# 2. Redirector(s) — short-TTL DNS, fronted via CDN if scope permits
+terraform -chdir=templates/redirector init
+terraform -chdir=templates/redirector apply \
+  -var="engagement={slug}" \
+  -var="domains={scope.c2_profile.domain}" \
+  -var="end_date={scope.end_date}" \
+  -auto-approve
+
+# 3. TLS certs (Let's Encrypt or scope-provided)
+# 4. Hardening
+#    - SSH key-only, no password auth
+#    - fail2ban for op port
+#    - egress filter to scope targets only (where infra supports it)
+#    - hourly rotation of beacon traffic key
+# 5. Audit hook
+#    - C2 server writes every operator command into engagements/{slug}/c2/logs/
+#    - cron / systemd timer mirrors into audit.log (hash-chained)
+# 6. Kill-switch
+#    - A single 'make teardown' verb that hits Phase 4.
+#    - cron at scope.end_date 23:59 UTC: auto-trigger Phase 4 (emergency).
+```
+
+Append `redteam-c2.provisioned` to `audit.log` with stack, listener details, redirector IPs, cert fingerprints, kill-switch declarations.
+
+### Phase 2 — `--action implant`
+
+Generate implants only for targets in `--implant-targets` that are also in `scope.targets`. Refuse to generate for any target not in scope.
+
+```bash
+sliver-server cmd "generate --profile {profile} --save engagements/{slug}/c2/implants/{target-slug}-{stamp}.exe"
+```
+
+Implant metadata recorded per file: target, listener, sha256, generation timestamp, operator. Implants are watermarked with the engagement slug (sliver supports this via build-time vars). Append `redteam-c2.implant.generated` per implant.
+
+**Implants never leave the engagement directory automatically.** Operator handles delivery via out-of-band means (and `/red-team-c2` doesn't ship phishing — that's a separate, separately-scoped skill if/when added).
+
+### Phase 3 — `--action status`
+
+Read-only. Reports: server uptime, callbacks in last 24h (count + target distribution), implants generated, redirector health, time-until-teardown. Cross-check against `scope.end_date` — if `now + 24h > end_date`, surface "TEARDOWN IMMINENT" warning.
+
+### Phase 4 — `--action teardown` (graceful)
+
+```bash
+# 1. Notify trusted-agent contact (scope.contacts[role=trusted-agent].email)
+# 2. Beacon-out signal to live implants (sliver: 'sessions -a' then 'rm' each; mythic: 'callbacks' + 'remove')
+# 3. Revoke implants (mark in metadata; do not re-issue tokens)
+# 4. Bring down listeners
+# 5. terraform destroy on redirector(s)
+# 6. Revoke TLS certs
+# 7. Archive engagements/{slug}/c2/ to encrypted tarball (age or gpg)
+# 8. Wipe live workdir
+# 9. Append `redteam-c2.teardown.complete` with archive hash, contact-notified bool, residual artifacts list
+```
+
+If any step fails, surface clearly — never silently leave infrastructure standing. Log `redteam-c2.teardown.partial.{step}` and surface for operator follow-up.
+
+### Phase 5 — `--action emergency-teardown`
+
+Same as Phase 4 but skips graceful beacon-out, kills listeners first. Used when: scope is revoked, operator suspects compromise, hard-end timer fires. AskUserQuestion confirmation required: "Emergency teardown for `{slug}`? Type `emergency-{slug}`."
+
+### Phase 6 — Hard-end auto-teardown
+
+Provision phase installs a cron / systemd timer at `scope.end_date 23:59 UTC` that invokes Phase 5. The auto-teardown writes `redteam-c2.auto-teardown.fired` to `audit.log` and emails the trusted agent. Operators cannot disable this. Extension requires scope amendment + re-provision.
+
+## Outputs
+
+```
+engagements/{slug}/
+├── scope.yaml                             # input (S8, not written)
+├── audit.log                              # appended (S11, hash-chained)
+└── c2/
+    ├── config/                            # stack config (yaml)
+    ├── implants/                          # generated implants + metadata.json
+    ├── redirectors/                       # terraform state (encrypted)
+    ├── certs/                             # TLS cert + key (mode 0600)
+    ├── logs/                              # operator command logs (mirrored into audit.log)
+    ├── teardown/                          # archived tarball after teardown
+    └── status.json                        # current snapshot for --action status
+intel/iocs.jsonl                            # writebacks: implant hashes, redirector IPs (tagged engagement-slug)
+```
+
+## Edge cases
+
+- **Out-of-scope listener domain requested** — refuse. C2 domain must be in `scope.c2_profile.domain[]`.
+- **Operator asks for extension past `scope.end_date`** — refuse. Extensions require a new signed scope amendment that bumps `end_date` and re-signs.
+- **Sliver / Mythic / Havoc not installed** — refuse provision. The skill does not auto-install C2 frameworks.
+- **Engagement aborted mid-flight** — `--action emergency-teardown --reason "scope revoked by client"`. Logs the reason verbatim.
+- **Auto-teardown fires while operator has live shells** — emergency takedown wins. Operator can't override the hard end via the skill.
+- **Implant exfil outside engagement dir** — not the skill's problem to enforce filesystem-wide, but the skill never copies implants out itself. Operator-initiated copying is operator's responsibility (and is in the audit log of their own host).
+- **Trusted-agent contact bounces email** — log as `redteam-c2.contact.unreachable` and surface; do NOT auto-extend.
+- **Skill invoked without scope.yaml** — refuse first thing in Gate Step 1. No bash runs.
+
+## Dependencies
+
+- **S8 scope.yaml** — hard gate, ALL required fields above.
+- **S11 audit.log** — hash-chained.
+- **S15 intel/iocs.jsonl** — writeback for engagement IoCs (own infra hashes).
+- **External tools** — `sliver-server`/`sliver-client`, `mythic-cli` + Docker, `havoc`, `terraform`, `age` or `gpg`, `cron`/`systemd-timer`. Operator installs; skill verifies.
+- **Cross-skill** — `/recon` (target list provenance), `/exploit-dev` (delivery primitives, separate scope), `/cso` (defensive twin if Hall is the target side), `/purple-exercise` (paired blue-team detection mapping).
+
+## AskUserQuestion gates
+
+1. **Engagement slug** if not passed.
+2. **ROE confirmation** with sha256 — must type `confirmed-{client}`.
+3. **Idle timeout + hard end confirmation** — must type `confirmed`.
+4. **Final go/no-go for provision** — must type `provision-{slug}` exactly.
+5. **Emergency teardown** — must type `emergency-{slug}`.
+6. **Implant target list** — must be subset of scope.targets; refuse otherwise.
+7. **Operator delegation** if scope was signed by a different lead — must declare and log.
+
+## Voice / posture
+
+Operational. No theater. No fan-fic about adversaries. Findings are dates, hashes, IPs, contacts. Refusals are short and final — "Refused: scope.yaml missing `roe_doc`. Add it and rerun." Don't moralize at the operator after a refusal; they know the rules.
+
+If the user asks to relax the gate — any field — refuse and recommend they amend the scope properly. There is no shortcut.

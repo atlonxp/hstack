@@ -1,0 +1,320 @@
+---
+name: service-catalog
+preamble-tier: 2
+version: 1.0.0
+description: |
+  [Chief Architect] One-time scaffolding of a Backstage-style service catalog in
+  markdown. Per-service entry with owner, SLOs, runbook link, on-call rotation,
+  dependencies, data classification, and lifecycle state. Auto-detects services
+  from the codebase + IaC + container manifests, proposes entries for missing
+  services, and detects services that have been deleted. Keeps an INDEX.md with
+  ownership and search. Use when: "service catalog", "who owns this", "list our
+  services", "service ownership", or "backstage in markdown". (gstack)
+allowed-tools:
+  - Read
+  - Write
+  - Edit
+  - Grep
+  - Glob
+  - AskUserQuestion
+  - Bash
+triggers:
+  - service catalog
+  - who owns
+  - list services
+  - service ownership
+  - backstage
+---
+
+{{PREAMBLE}}
+
+{{GBRAIN_CONTEXT_LOAD}}
+
+# /service-catalog — Family D — Chief Architect
+
+"Who owns service X? What's its SLO? Where's the runbook?" — nobody knows,
+because the answers live in three Slack channels, a wiki nobody updates, and
+two ex-employees' heads. This skill scaffolds a markdown service catalog that
+sits in the repo where it can't drift silently.
+
+The catalog is **Backstage-shaped but markdown-native**. No Backstage server
+required. The same fields export cleanly to Backstage YAML if you adopt it
+later.
+
+## When to use
+
+- New repo, first time. Bootstrap the catalog.
+- After an org-chart change — re-verify ownership.
+- After a `/c4-diagram` run — the containers it identified should each have a
+  catalog entry.
+- Quarterly drift check — what services exist that aren't in the catalog, and
+  what entries point to services that no longer exist?
+- Before an incident postmortem — the on-call rotation and runbook fields are
+  the things you wish you'd updated last quarter.
+
+**Do not use for:**
+
+- API documentation (that's `/api-design` outputs).
+- Architecture diagrams (`/c4-diagram`).
+- Cost per service (`/cost-optimize`).
+- Source-of-truth for production secrets — never put credentials here.
+
+## Inputs
+
+The skill auto-detects services from:
+
+1. **Monorepo packages** — `package.json` workspaces, `pyproject.toml` projects,
+   `go.work` modules, Cargo workspaces, Gradle subprojects.
+2. **Top-level service directories** — `services/*/`, `apps/*/`, `cmd/*/`.
+3. **Dockerfiles** — every `Dockerfile` is probably a deployable.
+4. **docker-compose services**, **Helm charts** (`Chart.yaml`), Kustomize
+   bases, Terraform modules that emit a deployable resource.
+5. **IaC outputs** — Lambda functions, Cloud Run services, ECS tasks.
+
+If `/c4-diagram` has run, it consumes `docs/architecture/02-container.md` as
+input — every Container should become a catalog entry.
+
+If `/dep-graph` has run, it pulls the service-level node list from
+`~/.gstack/projects/{slug}/graph.json`.
+
+## Catalog entry schema
+
+Each service entry is `docs/services/{service}.md` with YAML frontmatter:
+
+```yaml
+---
+name: billing-api
+display_name: Billing API
+description: Charges, invoices, subscriptions.
+owner:
+  team: payments-team
+  slack: "#team-payments"
+  primary: alice@example.com
+  escalation: bob@example.com
+lifecycle: production    # experimental | beta | production | deprecated | retired
+tier: 0                  # 0 (cannot fail) | 1 | 2 | 3 (best effort)
+type: api                # api | worker | frontend | data-store | infrastructure | cron
+language: go
+runtime: cloud-run
+repo: https://github.com/org/repo/tree/main/services/billing-api
+runbook: https://wiki.example.com/runbooks/billing-api
+on_call:
+  rotation: payments-primary
+  schedule_url: https://pagerduty.com/...
+slos:
+  - name: availability
+    objective: "99.9% of /charges requests return 2xx-3xx in 30d"
+    window: rolling-30d
+    burn_alert: 2h
+  - name: latency
+    objective: "p99 < 500ms"
+    window: rolling-7d
+dependencies:
+  upstream:
+    - postgres-billing
+    - stripe
+  downstream:
+    - web-app
+    - admin-app
+data_classification: pci    # public | internal | confidential | restricted | pci | phi
+data_retention: 7y
+compliance: [PCI-DSS, SOC2]
+last_reviewed: 2026-05-16
+---
+```
+
+Body is free-form markdown: architecture notes, known limitations, recent
+incidents, links to design docs.
+
+## Procedure
+
+### Step 0: Detect existing catalog and current services
+
+```bash
+# Existing catalog
+[ -d docs/services ] && ls docs/services/*.md 2>/dev/null | wc -l | xargs echo "Existing entries:"
+
+# Service detection — quick pass
+find . -maxdepth 4 -type f -name "Dockerfile" -not -path "*/node_modules/*" 2>/dev/null
+find . -maxdepth 3 -type d -name "services" -o -name "apps" -o -name "cmd" 2>/dev/null
+[ -f docker-compose.yml ] && yq '.services | keys' docker-compose.yml 2>/dev/null
+
+# C4 container source
+[ -f docs/architecture/02-container.md ] && echo "c4 container doc: yes"
+
+# Dep graph source
+SLUG=$(basename "$(pwd)")
+[ -f "$HOME/.gstack/projects/$SLUG/graph.json" ] && echo "dep-graph cache: yes"
+```
+
+State the inventory: existing entries, detected services, mismatches.
+
+### Step 1: AskUserQuestion — bootstrap or sync mode
+
+One issue per call. Ask:
+
+- **Mode** — Bootstrap (first time, build catalog from scratch) or Sync
+  (existing catalog, detect drift)?
+- **Source of truth for owners** — pick from: `CODEOWNERS`, a separate
+  `OWNERS` file, AskUserQuestion-per-service, or guess from `git log`
+  contributor stats.
+- **Required fields** — minimal (name, owner, lifecycle), standard (everything
+  except SLOs), or full (every field including SLOs).
+- **Sensitive data** — confirm: no secrets, no PII, no internal hostnames in
+  the catalog. The catalog is checked in.
+
+Do not proceed until the user responds.
+
+### Step 2: Bootstrap — emit one entry per detected service
+
+For each detected service:
+
+1. Pre-fill what we can:
+   - `name` — directory name or container name.
+   - `type` — infer from clues (`Dockerfile` + `CMD ["./server"]` → api,
+     `cron: "...` in compose → cron, `--worker` flag → worker).
+   - `language` / `runtime` — from file extensions, Dockerfile base image.
+   - `repo` — from `git remote get-url origin`.
+   - `dependencies.upstream` — from `/dep-graph` if available, else "TBD".
+2. AskUserQuestion for `owner.team`, `lifecycle`, `tier`, `data_classification`.
+   Group by 3-5 services per question to avoid death by AskUserQuestion.
+3. Mark all SLO fields as `# TODO` if the user picked "standard" — SLO design
+   is its own conversation, not a fill-in-the-blank.
+4. Write the file. Atomic per service.
+
+Use a template under the hood; the entry is regenerable.
+
+### Step 3: Sync — detect drift
+
+Three diffs:
+
+1. **Services in code but not in catalog** — propose new entries with
+   pre-filled defaults. AskUserQuestion before creating.
+2. **Entries in catalog but no service in code** — propose `lifecycle:
+   retired` (move to `docs/services/retired/`, don't delete). AskUserQuestion
+   per entry.
+3. **Field drift** — entry says `language: python` but the code is now Go.
+   Field-by-field diff, AskUserQuestion to update.
+
+Last-reviewed-date watermark: any entry with `last_reviewed` more than 90 days
+ago is flagged for review.
+
+### Step 4: Generate INDEX.md
+
+```markdown
+# Service Index
+
+Last updated: 2026-05-16
+
+## By tier
+
+### Tier 0 (cannot fail)
+- [billing-api](billing-api.md) — payments-team, PCI
+- [auth](auth.md) — security-team, confidential
+
+### Tier 1
+- [web-app](web-app.md) — frontend-team
+...
+
+## By team
+
+### payments-team
+- [billing-api](billing-api.md)
+- [invoice-worker](invoice-worker.md)
+
+## By lifecycle
+
+| Service | Lifecycle | Owner | Tier |
+|---------|-----------|-------|------|
+| billing-api | production | payments-team | 0 |
+| new-thing   | experimental | platform-team | 2 |
+
+## Retired (last 90 days)
+
+| Service | Retired | Replaced by |
+|---------|---------|-------------|
+| old-billing | 2026-04-02 | billing-api |
+```
+
+INDEX.md is generated, not hand-edited. Regenerate every sync.
+
+### Step 5: Cross-link with sibling skills
+
+If the relevant files exist, add links in each service entry to:
+
+- `/c4-diagram` — link to the Container or Component diagram that shows this service.
+- `/dep-graph` — link to the blast-radius computation for the service's root module.
+- `/cost-optimize` — link to the cost line item for this service (if tags match).
+- `/api-design` — link to the OpenAPI / GraphQL / proto spec.
+
+These are markdown links, not embedded content. The catalog stays small.
+
+### Step 6: Emit a CODEOWNERS suggestion (optional)
+
+If the user didn't already have a `CODEOWNERS`, generate one from the
+`owner.team` field:
+
+```
+services/billing-api/    @org/payments-team
+services/auth/           @org/security-team
+```
+
+AskUserQuestion before writing — `CODEOWNERS` controls PR routing, this is a
+real change.
+
+### Step 7: AskUserQuestion — review-and-commit gate
+
+Show the diff summary: N entries created, M entries updated, K entries
+retired. AskUserQuestion: accept / revise / abort.
+
+Do not commit on the user's behalf — leave it staged.
+
+## Outputs
+
+- `docs/services/{service}.md` — one per service.
+- `docs/services/INDEX.md` — generated index.
+- `docs/services/retired/{service}.md` — moved-aside retired entries.
+- `~/.gstack/projects/{slug}/catalog.json` — machine-readable cache for
+  cross-skill consumption (`/c4-diagram`, `/dep-graph`, `/cost-optimize`).
+- Optional: `.github/CODEOWNERS` proposal.
+
+## Edge cases
+
+- **Service-per-tenant** — one codebase deploys N copies (per-tenant or
+  per-region). One catalog entry with a `deployments:` field listing the
+  instances, not N entries.
+- **Library vs service** — a shared library (`packages/utils`) is NOT a
+  service. Catalog only deployables. Libraries get a `LIBRARIES.md` if needed.
+- **Frontend-only** — single-page apps are services too. `type: frontend`,
+  `runtime: cdn` or `static`.
+- **Owner-of-record vs day-to-day owner** — the catalog records `owner.team`
+  (long-term) plus `on_call.rotation` (right now). Don't conflate.
+- **Compliance fields and PII** — `data_classification: pci` triggers a sister
+  field `compliance: [PCI-DSS]` and a stricter retention policy. Do not let
+  these fields be empty for tier 0 services.
+- **Deprecated vs retired** — `deprecated` means new use is discouraged but
+  the service is alive. `retired` means it's been turned off. Don't conflate.
+- **Multiple repos** — if services span repos, catalog goes in the meta repo
+  (`org/platform`). Each service entry's `repo` field points to the specific
+  service repo.
+- **External services** — third-party services (Stripe, Auth0, Datadog) get
+  entries too if they're load-bearing. Mark `type: external`, list the
+  vendor, SLO from the vendor's published SLA.
+
+## Dependencies
+
+- **S1 (Hall-mode preamble)** for trust-gated outputs.
+- `/c4-diagram` (optional, recommended) for Container-level service list.
+- `/dep-graph` (optional, recommended) for dependency edges per service.
+- `yq` for parsing compose/helm YAML.
+- `gh` for `CODEOWNERS` validation.
+
+## Stop gates
+
+- After Step 1 (mode) — do not proceed without user response.
+- Before Step 6 (CODEOWNERS) — confirm before writing; this routes PRs.
+- Before Step 7 (commit) — show the diff summary, get accept/revise/abort.
+
+Catalog entries get stale fast. The skill's `last_reviewed` watermark is the
+hedge — a 1-year-old entry is worse than no entry because people trust it.
+Default to surfacing stale entries every sync.

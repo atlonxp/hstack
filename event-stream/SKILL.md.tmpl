@@ -1,0 +1,351 @@
+---
+name: event-stream
+preamble-tier: 2
+version: 1.0.0
+description: |
+  [Economic Simulation] Designs a real-world event ingestion pipeline for an economic
+  simulator with observability-time modeling — agents react to events when the
+  information would have been observable to them, not at publication time. Sources span
+  news, social signal, macro indicators (FRED), policy announcements, and market data
+  (Alpha Vantage). Outputs a normalized event schema, an observability map per agent
+  class, an ingestion plan with replay vs live-fire modes, and a reproducibility envelope
+  per event-stream run. Pairs with `/econ-sim` (defines the consumer contract),
+  `/counterfactual` (replay mode for shocks), and `/sim-calibrate` (event stream as
+  exogenous input during fit).
+  Use when asked to "design an event stream", "ingest real-world events into a sim",
+  "model information arrival", "news / macro / market event pipeline", "observability-time
+  event modeling", or "replay vs live event ingestion". (gstack)
+allowed-tools:
+  - Bash
+  - Read
+  - Write
+  - Grep
+  - Glob
+  - WebSearch
+  - AskUserQuestion
+---
+
+{{PREAMBLE}}
+
+# /event-stream — Family R — Economic Simulation
+
+You are an event-stream architect for economic simulation. Your job: pick the
+event sources, normalize them to a single schema, model **observability-time**
+correctly (when would each agent class have actually known about this event?),
+and produce an ingestion plan that supports both deterministic replay and
+live-fire modes.
+
+The hard part of putting real-world events into a sim is not the ETL. It is the
+information-arrival model. A central-bank policy decision is announced at
+14:00 UTC, but a rural household learns about it from local news the next
+morning, and a high-frequency trading firm knew about the rumor twelve hours
+earlier from order-book flow. The sim has to reflect that, or every
+counterfactual claim is wrong by construction.
+
+## How this differs from neighboring skills
+
+| Skill | Focus |
+|-------|-------|
+| `/econ-sim` (Family R) | Paradigm + agent classes + clearing; defines event consumer contract |
+| **`/event-stream`** | **Source → schema → observability-time → ingestion. Replay + live.** |
+| `/counterfactual` (Family R) | Paired runs that replay or modify event streams |
+| `/sim-calibrate` (Family R) | Uses event stream as exogenous input during calibration |
+| `/event-design` (Family E) | Generic application event schemas (not real-world events) |
+| `/scrape` | Web scraping; complementary if a source needs custom extraction |
+| `/fred-economic-data` | FRED API; consumed by this skill |
+| `/alpha-vantage` | Market data API; consumed by this skill |
+| `/parallel-web` | News / web search; consumed by this skill |
+
+## When to use
+
+- Hooking a running `/econ-sim` to real-world data so it stops being a toy.
+- Setting up the exogenous-event input that `/sim-calibrate` will use during
+  parameter search.
+- Defining the replay-mode event log that `/counterfactual` will mutate to
+  test interventions.
+- Standing up live-fire mode for a sim used in production (e.g., real-time
+  policy analysis or trading research).
+
+Do NOT use for:
+
+- Internal application event schemas (use `/event-design`).
+- Pure historical price ingestion with no agent-information-arrival model
+  (use `/fred-economic-data` or `/alpha-vantage` directly).
+- Event-sourcing patterns in OLTP systems (this is a sim input pipeline, not
+  a CQRS architecture).
+
+## Inputs
+
+Parse the request, then ask for anything missing.
+
+| Parameter | Examples | Why it matters |
+|-----------|----------|----------------|
+| Target sim | `econ-sims/{slug}/` (must exist) | Consumer contract comes from here |
+| Event sources | news, social, FRED, policy, market data, custom | Drives ingestion + cost |
+| Time horizon | `2008-2025`, `live`, `2020-Q1 forward` | Sets archive vs live posture |
+| Agent observability rules | Per-class lag / channel / noise | Core to this skill |
+| Mode | `replay`, `live`, `replay-then-live`, `replay-only-for-calibration` | Different infra |
+| Reproducibility posture | event-log immutability, replay-determinism | Required |
+
+If the target sim is not specified or does not exist on disk, AskUserQuestion:
+
+"This skill produces an event stream for an existing `/econ-sim` design.
+A) `econ-sims/{slug}/` exists — point me at it.
+B) No sim yet — run `/econ-sim` first; I'll wait."
+
+RECOMMENDATION: Pick A only if the sim's `TIME-MODEL.md` and `INTERACTION.md`
+exist. The event-stream interface comes from those files.
+
+If event sources are missing, AskUserQuestion with the canonical set:
+
+"Which event sources should the stream ingest?
+A) Macro indicators — FRED, Eurostat, national stats (GDP, CPI, unemployment,
+   policy rate, M2). Clock: weekly to quarterly. Latency: hours to weeks.
+B) Market data — Alpha Vantage, Yahoo, exchange feeds (prices, volumes,
+   spreads). Clock: tick to daily. Latency: sub-second to end-of-day.
+C) Policy announcements — central-bank press releases, fiscal bills,
+   regulatory filings. Clock: irregular. Latency: minutes (markets) to
+   days (households).
+D) News — wire services, Parallel Web search, RSS. Clock: continuous.
+   Latency: depends on agent class.
+E) Social signal — public social platforms, sentiment scores. Clock:
+   continuous. Latency: near-zero but noisy.
+F) Custom — domain-specific feed not in the above (specify).
+G) All of the above."
+
+RECOMMENDATION: Start with A + C for policy questions, add B for market
+microstructure, add D + E only when sentiment / behavioral channels are
+load-bearing in the research question. Each added source ~doubles ingestion
+complexity and observability-mapping effort.
+
+If observability rules are missing, do NOT proceed. Surface the rule:
+"Every event must have a per-agent-class observability spec: when does each
+class first see this event? With what lag? Through what channel? With what
+noise?" Then AskUserQuestion to confirm a starting policy (default below).
+
+If mode is missing, AskUserQuestion:
+
+"Which mode does the stream support?
+A) Replay-only (deterministic historical log; counterfactual runs mutate it).
+B) Live-only (production sim consuming live APIs).
+C) Replay-then-live (calibration on history, then live-fire forward).
+D) Replay-only-for-calibration (deferred decision on live).
+
+RECOMMENDATION: C for research; A for paper-grade reproducibility; D when
+the team has not yet decided whether the sim will ever go live."
+
+---
+
+## Procedure
+
+### Phase 1 — Consumer contract from `/econ-sim`
+
+1. Read `econ-sims/{slug}/TIME-MODEL.md` and `INTERACTION.md`. Extract:
+   - Time discretization (daily / weekly / monthly / quarterly / event-driven).
+   - Agent classes and their information sets.
+   - The event-injection interface specified by `/econ-sim`.
+2. If any of those files are missing or contradict each other, stop and tell
+   the user to run `/econ-sim` first or reconcile the contract.
+3. Restate the consumer contract in `SOURCES.yaml` header. The stream's
+   output schema must satisfy that contract exactly.
+
+### Phase 2 — Source selection + cost-of-fidelity tradeoff
+
+4. For each requested source family (A–F above), pick a concrete provider:
+   - Macro: `/fred-economic-data` for US / global aggregates; ECB SDW for
+     EU; OECD.Stat as fallback. Cite series IDs.
+   - Market: `/alpha-vantage` for low-frequency; commercial feed (Polygon,
+     IEX Cloud, Refinitiv) for tick-level. Cite the latency SLA.
+   - Policy: central-bank RSS / press-release feeds, Federal Register,
+     regulator filings. Cite the feed URL.
+   - News: `/parallel-web` for synthesis with citations; raw wire (AP, AFP,
+     Reuters) where licensed. Cite the query template.
+   - Social: public platform APIs with rate-limit budget. Cite the access
+     posture (auth, ToS, rate limit) explicitly.
+5. Write `SOURCES.yaml` listing each source: id, provider, endpoint /
+   series-id, auth posture, rate-limit budget, cost-per-month estimate, the
+   archive coverage (years), and the live coverage (latency).
+
+### Phase 3 — Normalized event schema
+
+6. Define the canonical event record. Required fields:
+   - `event_id` — globally unique, deterministic hash of source + payload.
+   - `source_id` — from `SOURCES.yaml`.
+   - `publication_time` — UTC ISO 8601, when the publisher released the
+     event. This is the ground truth, NOT the agent's perception.
+   - `event_type` — taxonomy (e.g., `policy.rate_decision`,
+     `macro.cpi_release`, `market.price_tick`, `news.headline`).
+   - `payload` — typed payload per event_type (schema defined per type).
+   - `provenance` — fetch URL / API call hash, fetch_time, retrieved_by
+     (skill version, git sha), retry count.
+7. Define event_type taxonomies per source. For each type, define the
+   payload schema. Validate every ingested event against its schema.
+   Reject invalid events to a dead-letter log; do NOT silently drop.
+8. Write `NORMALIZED-SCHEMA.md` with the canonical record, the per-type
+   payload schemas, and the validation rule.
+
+### Phase 4 — Observability-time modeling (the critical phase)
+
+9. For each event_type × agent_class pair, specify:
+   - **Channel** — how this class learns about this event (TV news, Bloomberg
+     terminal, central-bank press release, market-data feed, social
+     timeline, no channel at all).
+   - **Latency distribution** — lag from `publication_time` to perception.
+     Specify as a distribution, not a point. Examples:
+     - Bank trading desk learns of a FOMC decision: `latency ~ Exponential(mean=2s)`.
+     - Household learns of FOMC decision: `latency ~ Mixture(0.6 × Exponential(mean=4h), 0.4 × Exponential(mean=72h))`.
+     - Firm CFO learns of macro release: `latency ~ Lognormal(median=1d, σ=0.5)`.
+   - **Perception noise** — does the agent see the event accurately?
+     A retail-trader sees a CPI print with noise (they read a headline,
+     not the underlying release). A central bank sees its own decision
+     with zero noise. Specify the noise model per pair.
+   - **Information set restriction** — does the agent see this event AT
+     ALL? Some agent classes never observe certain events (e.g., a
+     household never observes a private interbank lending rate).
+10. Codify the per-pair rule in a table. The table is the source of truth.
+    No code path in the sim is allowed to read an event before its
+    observability-time has elapsed for that agent.
+11. Implement the observability filter as `lib/event-observability.ts`
+    (referenced in the roadmap). The filter takes (event, agent, sim_time)
+    and returns `(observable_now, perceived_payload)`. Spec the interface
+    here; do not implement in this skill — defer to the consumer's build.
+12. Write `OBSERVABILITY-MAP.md` with the per-pair table, the latency
+    distribution rationale (cite empirical sources where possible — Mankiw-Reis
+    sticky-information lit for households; Hong-Stein for firms), and
+    the noise model.
+
+### Phase 5 — Ingestion plan: replay vs live
+
+13. For **replay mode**:
+    - Fetch the entire historical event log once. Store immutably at
+      `econ-sims/{slug}/events/log/{date}/{source_id}/{event_id}.json`.
+    - Compute a Merkle-style hash of the log; pin it in `INGESTION.md`.
+    - Re-runs over the same log must be byte-identical. If a source's
+      historical API drifts (FRED revisions, news article edits), capture
+      the snapshot, not the live query.
+    - Replay determinism check: re-fetch a random 1% sample; if the hash
+      drifts, log a revision event and decide whether to freeze or
+      re-snapshot.
+14. For **live mode**:
+    - Spec the polling / streaming cadence per source. Respect rate limits.
+    - Spec the deduplication rule (same `event_id` arriving twice).
+    - Spec the late-arrival rule: events arriving AFTER the sim has
+      advanced past their observability-time go to a late-arrival log
+      and are NOT replayed into the past. The sim's clock is the
+      authority.
+    - Spec the back-pressure rule: if ingestion exceeds the sim's tick
+      budget, queue with bounded size and surface a "stream lag" metric.
+15. For **replay-then-live**:
+    - Spec the cutover protocol: when the replay log ends, the live stream
+      starts at the next observability-time per agent. Document the
+      cutover point as an event in the log itself.
+16. Write `INGESTION.md` with the per-mode pipeline diagram, the
+    cutover protocol if applicable, the dedup / late-arrival / back-pressure
+    rules, and the operational metrics (events/sec, dead-letter rate,
+    stream lag, hash drift).
+
+### Phase 6 — Reproducibility envelope
+
+17. Every event-stream run captures:
+    - `seed` — for any stochastic source (sentiment scoring, sampling
+      from latency distributions).
+    - `config-hash` — hash of `SOURCES.yaml` + `OBSERVABILITY-MAP.md` +
+      `INGESTION.md`.
+    - `git-sha` — repo SHA at run time.
+    - `log-hash` — Merkle hash of the replay log if replay mode.
+18. Replay determinism is enforced by `seed + config-hash + log-hash`.
+    Two runs with the same triple must produce byte-identical perceived-event
+    sequences per agent class.
+19. Pin the reproducibility section into `INGESTION.md` as a final block.
+
+---
+
+## Outputs
+
+Write to `econ-sims/{slug}/events/`:
+
+| File | Contents |
+|------|----------|
+| `SOURCES.yaml` | Per-source provider, endpoint, auth, rate limit, cost, coverage |
+| `NORMALIZED-SCHEMA.md` | Canonical event record, per-type payload schemas, validation |
+| `OBSERVABILITY-MAP.md` | Per-(event_type × agent_class) channel, latency, noise, info-set rule |
+| `INGESTION.md` | Replay / live / cutover pipelines, dedup, late-arrival, back-pressure, reproducibility envelope |
+
+Also append to `.gstack/decisions/event-stream-{slug}.md` the source selection
+rationale, the observability-rule citations (Mankiw-Reis, Hong-Stein,
+microstructure references), and any auth-posture decisions.
+
+---
+
+## Edge cases
+
+- **Look-ahead bias** — the most common failure. An agent reacts to an event
+  before its observability-time has elapsed. Every code path that reads
+  events must go through the observability filter; document the filter as
+  the only legitimate access path.
+- **Revisions** — FRED, BLS, and central banks revise historical data.
+  Replay must use the data **as it was known at the time**, not the latest
+  revision. Snapshot the vintage, not the current value.
+- **Embargoed releases** — some releases have an official embargo (CPI,
+  NFP). The observability-time for high-tier agents may legitimately
+  precede the public publication_time by the embargo window. Document the
+  embargo and which classes are inside it.
+- **Cross-source duplicates** — Reuters and AP cover the same event with
+  different `event_id`s. The dedup rule must operate on event-content hash,
+  not source `event_id`. Spec the content-hash function.
+- **Source outages** — a feed dies. Replay can continue; live cannot.
+  Spec the graceful-degradation rule: which agents fall back to which
+  channel, what perception-noise inflation applies, and the alarm threshold.
+- **Sentiment-score model drift** — if news → sentiment uses an ML model,
+  pin the model version in `SOURCES.yaml`. Re-scoring history with a new
+  model changes the replay log; treat that as a new log version.
+- **Time-zone mistakes** — every timestamp is UTC ISO 8601 with explicit
+  offset. Local-time fields are derived, never primary.
+- **Calibration data leakage** — the event stream consumed by
+  `/sim-calibrate` during the train split must not include events from the
+  test split. Pass the split boundary into the stream as a hard cutoff.
+
+---
+
+## Dependencies
+
+- **`/econ-sim`** (Family R) — defines the consumer contract; required as
+  prerequisite.
+- **`/counterfactual`** (Family R) — consumes replay logs and mutates them
+  for paired runs.
+- **`/sim-calibrate`** (Family R) — consumes event stream as exogenous input
+  during parameter search, with strict train/test split.
+- **`/fred-economic-data`** — macro indicator source.
+- **`/alpha-vantage`** — market data source.
+- **`/parallel-web`** — news / web search source with synthesis.
+- **`/scrape`** — fallback for sources without a clean API.
+- **`/event-design`** (Family E) — DIFFERENT skill; covers internal app
+  events, not real-world events. Link only to disambiguate.
+- **`lib/event-observability.ts`** — new module referenced in the roadmap;
+  this skill specifies its interface, downstream skills implement it.
+
+Reference reading (cite where it informs an observability rule):
+Mankiw-Reis (sticky information), Hong-Stein (gradual information diffusion),
+Coibion-Gorodnichenko (expectations formation), Sims (rational inattention).
+
+---
+
+## Rules
+
+1. **Observability-time is the contract.** No event reaches an agent before
+   its per-class observability-time has elapsed. Look-ahead bias is a
+   correctness bug, not a performance bug.
+2. **Publication_time and observability-time are different fields.** Both
+   are persisted on every event. Mixing them silently is forbidden.
+3. **Vintages, not values.** Replay uses the data as it was known at the
+   time, not the latest revision.
+4. **Replay determinism is bytewise.** Same seed + config + log → identical
+   perceived sequences. If not, there's a bug.
+5. **Late arrivals do not rewrite the past.** Live-mode events arriving
+   after their observability-time has elapsed in sim-time go to a
+   late-arrival log and never back-fill.
+6. **Cite the channel and the latency rationale.** "Households have a 4-hour
+   lag" without a citation is fiction. Mankiw-Reis or empirical sticky-
+   information work goes in `OBSERVABILITY-MAP.md`.
+7. **The schema validator is mandatory.** Invalid events go to dead-letter,
+   not into the stream. Silent drops corrupt every downstream metric.

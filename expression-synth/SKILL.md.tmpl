@@ -1,0 +1,393 @@
+---
+name: expression-synth
+preamble-tier: 2
+version: 1.0.0
+description: |
+  [Avatar & Embodiment] Facial expression synthesis designer. Builds a control
+  surface combining continuous valence-arousal, conversational-beat markers
+  (back-channels, turn-taking cues), intent-driven micro-expressions
+  (curiosity, doubt, recognition), and FACS-based action unit composition.
+  Picks the right backbone (EMOCA / DECA / FACSHuman / FLAME-based regressors)
+  per face rig and writes a build-ready plan. Outputs CONTROL-SURFACE +
+  EMOTION-MODEL + BEAT-CUES + FACS-MAP + EVAL docs.
+  Use when: "facial expression synthesis", "emotion model for avatar", "FACS map",
+  "conversational beats", "micro-expressions", or "expression control surface". (gstack)
+voice-triggers:
+  - "expression synthesis"
+  - "facial expression"
+  - "emotion model"
+  - "facs map"
+  - "micro expressions"
+triggers:
+  - expression synthesis
+  - facial expression synthesis
+  - emotion model avatar
+  - FACS surface
+allowed-tools:
+  - Bash
+  - Read
+  - Write
+  - Glob
+  - Grep
+  - AskUserQuestion
+---
+
+{{PREAMBLE}}
+
+# /expression-synth — Family P — Avatar & Embodiment
+
+You are running the `/expression-synth` skill. This designs the **facial expression
+synthesis surface**: how the avatar's face moves to reflect emotion, intent, and
+conversational beats — not lip-sync (that's `/lip-sync`), not gesture (that's
+`/gesture-synth`).
+
+Discrete-emotion models (Ekman's "Big 6") miss subtlety. Continuous valence-arousal
+misses intent. FACS action units capture composition but say nothing about timing.
+The right surface combines all three plus conversational-beat cues (turn-taking,
+back-channels, agreement nods) and intent-driven micro-expressions (curiosity, doubt,
+recognition).
+
+You are NOT an expression-model trainer. You design the control surface, pick the
+regressor model, write the training-data augmentation plan, and hand off. Do not
+train. Do not download checkpoints.
+
+Expression models are mature-ish: EMOCA (2022), DECA (2020), FACSHuman (2020-current),
+FLAME-based regressors. Pin checkpoints by version. If user wants absolute latest,
+run `/discover --domain expression` first.
+
+---
+
+## When to use
+
+- Avatar architecture is set (via `/avatar-design`) and the face rig supports
+  per-vertex deformation or blendshapes (FLAME / 3DMM / Gaussian Splat w/
+  blendshape head).
+- Existing avatar has the right mouth but a dead face — eyes don't track,
+  brows don't move, no recognition signal mid-conversation.
+- Trust-calibration matters (`/agent-ux-review` flagged that the avatar should
+  express uncertainty when its underlying model is uncertain).
+- Multi-cultural emotion deployment — discrete-emotion mapping fails across
+  cultures.
+
+Do NOT use for:
+- Whole avatar architecture → use `/avatar-design`.
+- Lip-sync / mouth movement → use `/lip-sync`.
+- Body gestures → use `/gesture-synth`.
+- Sign-language non-manual features → use `/avatar-sign` (sign NMFs are
+  grammatical, not emotional).
+- Pure 2D portrait avatars without blendshapes → this skill needs a rig.
+
+---
+
+## Inputs
+
+| Input | Required? | Format |
+|---|---|---|
+| Avatar face rig | yes | From `/avatar-design`: FLAME / 3DMM / MetaHuman / Gaussian-Splat-w-blendshapes / custom blendshape rig |
+| Expression scope | yes | "neutral talking-head" / "discrete emotions (Ekman 6/7)" / "continuous valence-arousal" / "full surface (V-A + beats + intent + FACS)" |
+| Conversational context | yes | "monologue (presenter)" / "dialog (turn-taking)" / "listening-heavy (interview)" / "teaching (back-channels + recognition)" |
+| Cultural context | yes | List of cultures. Emotion display rules differ (Japan vs US for surprise; Thai politeness display) |
+| Trust-calibration requirement | optional | "yes — must visibly express uncertainty when model is uncertain" / "no" |
+| Target latency | yes | ms (e.g., 60ms streaming for real-time turn cues, 500ms+ for cinematic) |
+| Hardware envelope | yes | "cloud GPU" / "consumer GPU" / "edge / mobile" |
+| Training data availability | optional | Hours of paired audio + emotion-annotated video; FACS-annotated stills |
+| License posture | yes | "permissive only" / "research OK" / "commercial w/ attribution" |
+| Existing baseline | optional | If migrating, current model + observed limitation |
+
+Spec mode: `--spec expression-spec.yaml`. Interactive: AskUserQuestion in order.
+
+---
+
+## Procedure
+
+### Step 0: Locate plan root + slug
+
+```bash
+PLAN_ROOT="${CLAUDE_PLANS_DIR:-$HOME/.gstack/projects/$(basename "$PWD")}/avatars"
+mkdir -p "$PLAN_ROOT"
+echo "PLAN_ROOT: $PLAN_ROOT"
+```
+
+Use the avatar slug from `/avatar-design`. Outputs land at
+`$PLAN_ROOT/{slug}/expression/`.
+
+### Step 1: Confirm intent + check avatar-design upstream
+
+AskUserQuestion (preamble format):
+- **Re-ground:** project + branch + avatar slug.
+- **Simplify:** "Facial expression is what makes the difference between an avatar
+  that listens and one that stares. Ekman's Big 6 is the wrong tool — too coarse,
+  too cross-culturally fragile. The right surface combines continuous V-A + beats
+  + intent + FACS. This skill designs that surface."
+- **RECOMMENDATION:** A — read `/avatar-design` ARCHITECTURE.md first so face rig
+  + use case are pinned.
+- **Options:**
+  - A) Architecture is done — design expression layer. Completeness: 10/10.
+  - B) No architecture yet — design standalone (rework risk). Completeness: 7/10.
+  - C) Re-pick existing expression model (current failing). Completeness: 9/10.
+
+### Step 2: Gather the spec (interactive or `--spec`)
+
+For each input row, AskUserQuestion. Gloss the tricky fields:
+
+- **expression scope**: "neutral = mouth only, dead eyes (don't pick unless explicit).
+  Discrete-emotion = labels like happy/sad/angry; works for one-shot scenes, fails
+  in dialog. V-A = continuous valence (positive/negative) + arousal (calm/excited);
+  better for smooth transitions. Full surface = V-A + conversational beats +
+  intent micro-expressions + FACS composition — that's what makes the avatar feel
+  like it's thinking."
+- **conversational context**: "Dialog needs turn-taking cues (eyes-down before
+  yielding floor, brow-up before taking it). Listening-heavy needs back-channels
+  (nods, slight brow-raise on key words). Teaching needs recognition cues
+  (lights-up when the user got it right; subtle confusion when wrong)."
+- **trust-calibration**: "When the underlying model is uncertain, the avatar
+  should look uncertain. If you ship a confident-faced avatar that's hallucinating,
+  trust goes to zero. We expose an uncertainty scalar that drives micro-expressions."
+
+### Step 3: Model recommendation + control surface
+
+Apply the decision matrix below, then write
+`$PLAN_ROOT/{slug}/expression/CONTROL-SURFACE.md`.
+
+**Decision matrix (illustrative — re-verify against current SOTA):**
+
+| If user needs... | Recommended model / approach | Rationale | License |
+|---|---|---|---|
+| FLAME-mesh face, full V-A control | **EMOCA v2** (FLAME blendshape regressor from video + expression code) | SOTA 2022-2024 for FLAME expression regression; gives V-A + per-FAU output | MIT (check current) |
+| 3DMM face, basic V-A regression | **DECA** (FLAME predecessor, 3DMM-friendly) | Predates EMOCA; lighter, faster, less expressive | MIT |
+| Direct FACS action-unit control (composer) | **FACSHuman** / **OpenFace 2 AU detector** + custom composer | If user wants explicit FACS composition (e.g., AU4+AU7 = concern), bypass V-A | per repo |
+| MetaHuman in Unreal | MetaHuman Animator + FACS-derived blendshapes | Unreal-native; uses MetaHuman's built-in FACS-aligned blendshape set | Unreal license |
+| Gaussian-Splat avatar w/ blendshapes | **EMOCA-derived deltas applied to GS blendshape head** | GS handles render; EMOCA drives expression | MIT |
+| Cinematic mocap-derived | Mocap (Faceware / Dynamixyz) + manual FACS labeling | When ML quality is below bar, hybrid mocap + FACS | n/a |
+| Audio-only expression (no video) | **Audio2Face (NVIDIA)** / audio-conditioned EMOCA variants | Drives FACS from audio prosody; weaker than video-driven but works real-time | NVIDIA license |
+| Real-time edge | **Lightweight FAU regressor** + lookup-table FACS composer | ML at edge; manual composition layer for control | per repo |
+
+**Control surface composition.** The full surface combines four layers, blended
+at render-time:
+
+1. **Valence-Arousal scalar** (2D): smooth-changing baseline. Comes from
+   conversational-state model (emotion in user's speech + model's own state).
+2. **Conversational-beat overlay** (discrete events): turn-taking cues, back-channels.
+   Triggered by speech state machine.
+3. **Intent micro-expression overlay** (discrete events): curiosity / doubt /
+   recognition. Triggered by reasoning-state events.
+4. **FACS action units** (per-blendshape deltas): the actual mesh-space output.
+   Composed from layers 1-3 via a composition rule.
+
+Write CONTROL-SURFACE.md describing:
+- Each layer's input source.
+- Blending rule (additive in FAU space with saturation; layer priority on
+  conflict).
+- Latency: V-A smooth at ~10Hz; beats / intent at event-trigger (<100ms); FACS
+  composition at render rate (60Hz).
+- What the user CAN'T control (e.g., per-vertex deltas — that's the rig's job).
+
+### Step 4: Emotion model
+
+Write `$PLAN_ROOT/{slug}/expression/EMOTION-MODEL.md` covering:
+
+- **Primary representation:** continuous V-A (Russell's circumplex). Discrete labels
+  are derived (happy = high-V high-A; sad = low-V low-A; angry = low-V high-A; etc.).
+- **Source signals:** emotion in user's speech (from Family L `/voice-eval` emotion
+  classifier), avatar's own conversational-state emotion (e.g., feigned curiosity
+  during teaching), model uncertainty (drives subtle V-A drift toward low-arousal
+  + slight low-valence).
+- **Cultural display rules:** per-culture override table for amplification /
+  suppression. Examples:
+  - Japanese formal context: suppress high-arousal positive (over-smiling is
+    over-eager). Damp arousal output by 0.5.
+  - American customer-service context: amplify mid-V mid-A (the "service smile").
+  - Thai politeness: low-arousal positive baseline; subtle wai-gesture
+    coordination handled in `/gesture-synth`.
+- **Trust-calibration mapping:** uncertainty scalar (from model confidence) maps
+  to: slight brow-raise (AU1+2 light), gaze-drift (looking away briefly), reduced
+  V toward 0. Specify mapping function (linear / sigmoidal with threshold).
+
+### Step 5: Beat cues
+
+Write `$PLAN_ROOT/{slug}/expression/BEAT-CUES.md` cataloging the conversational
+beats this avatar must express, and the FACS / V-A response for each.
+
+**Beat catalog (default — culture-adjusted):**
+
+| Beat | Trigger | Facial response (FACS / blendshape) | Duration |
+|---|---|---|---|
+| Turn-yield (avatar about to stop talking) | Speech-state: utterance-end-pre-roll | Eye-gaze-down + slight head-incline | 200ms |
+| Turn-take (avatar starting to speak) | Speech-state: starting | Brow-raise (AU1+2 light) + slight head-up | 150ms |
+| Listening (back-channel low) | User speech-state: mid-utterance | Subtle nod (head-yaw 2°) + eye-blink | 100ms |
+| Listening (back-channel high — got it) | User speech-state: key-content detected | Brow-raise (AU1+2 medium) + slight smile (AU12 light) | 200ms |
+| Listening (back-channel — confused) | NLU low-confidence on user speech | Brow-furrow (AU4 light) + head-tilt 5° | 250ms |
+| Agreement | Avatar reasoning: aligned with user | Head-nod (head-pitch ±3°) + smile (AU12 light) | 300ms |
+| Disagreement (soft) | Avatar reasoning: counterpoint | Head-shake (head-yaw ±3°) + brow-furrow (AU4 light) | 300ms |
+| Recognition (a-ha) | Reasoning-state: insight | Brow-flash (AU1+2 high spike) + eye-widen (AU5) | 200ms |
+| Doubt (self) | Model confidence drop | Brow-furrow (AU4) + gaze-up-and-left | 400ms |
+| Curiosity (toward user) | User asks open-ended question | Head-tilt 7° + brow-raise (AU1+2 light) | 300ms |
+| Surprise (mild) | User said something unexpected | Brow-flash (AU1+2 spike) + AU5 + mouth-open (AU26 light) | 200ms |
+
+For each row, include the cultural override table (e.g., agreement nod amplitude
+is larger in casual American, smaller in formal Japanese).
+
+### Step 6: FACS map
+
+Write `$PLAN_ROOT/{slug}/expression/FACS-MAP.yaml` mapping FACS action units to
+the avatar's specific blendshape names. Example:
+
+```yaml
+rig: FLAME-v2
+au_to_blendshape:
+  AU1_inner_brow_raise:
+    blendshape: brow_inner_up
+    saturation: 0.9
+  AU2_outer_brow_raise:
+    blendshape: brow_outer_up
+    saturation: 0.9
+  AU4_brow_lower:
+    blendshape: brow_lower
+    saturation: 1.0
+  AU5_upper_lid_raise:
+    blendshape: eye_wide
+    saturation: 0.8
+  AU6_cheek_raise:
+    blendshape: cheek_raise
+    saturation: 1.0
+  AU7_lid_tighten:
+    blendshape: lid_tighten
+    saturation: 0.7
+  AU12_lip_corner_pull:
+    blendshape: smile
+    saturation: 1.0
+  AU15_lip_corner_depress:
+    blendshape: frown
+    saturation: 1.0
+  AU26_jaw_drop:
+    blendshape: jaw_open
+    saturation: 1.0
+  # ... full inventory
+composition_rule:
+  type: additive_with_saturation
+  conflict_resolution: layer_priority_then_max
+notes: |
+  AU compositions are linear-additive in blendshape space, clamped to [0,1].
+  Conflicting AUs (e.g., AU12 + AU15 in same frame) collapse to higher-priority
+  layer (intent overlay beats V-A baseline).
+```
+
+### Step 7: Eval plan
+
+Write `$PLAN_ROOT/{slug}/expression/EVAL.md`:
+
+- **FAU-recall** vs ground-truth FACS-annotated video.
+- **V-A regression error** (RMSE on circumplex) vs ground truth from emotion-annotated
+  clips.
+- **Beat-alignment latency**: % of conversational beats triggered within ±150ms of
+  the speech/reasoning event.
+- **Cultural-vocab compliance**: forbidden expressions in each culture must not
+  fire above threshold.
+- **Trust-calibration probe**: show clips where avatar is confident vs uncertain.
+  Ask raters: "did the avatar look certain about what it was saying?" — rater
+  answer should correlate with model-confidence scalar.
+- **Human MOS** for production tier — 30+ raters; rate: naturalness, appropriateness,
+  expressive range. Cross-reference `/agent-ux-review` for trust-calibration.
+- **Uncanny-stillness probe**: pick 10s clips where the avatar should be listening.
+  Ask raters: "does the face feel alive?" — separate from any specific expression.
+
+Eval cadence: nightly during training; per-culture gate; full human panel before
+release.
+
+### Step 8: Hand-off
+
+Print the five file paths. AskUserQuestion:
+- **Simplify:** "Expression plan is on disk. Next step is `/autoplan-full`, OR (if
+  sign-performance in scope) `/avatar-sign`, OR start building."
+- **RECOMMENDATION:** A — `/autoplan-full` so CEO + design + eng reviews catch
+  scope problems before training the expression regressor (this is the most
+  scope-creep-prone subsystem).
+- **Options:**
+  - A) Run /autoplan-full. Completeness: 10/10.
+  - B) Continue with `/avatar-sign` (sign performance is also in scope).
+    Completeness: 10/10.
+  - C) Stop — review docs. Completeness: 9/10.
+
+---
+
+## Outputs
+
+```
+$PLAN_ROOT/{slug}/expression/
+├── CONTROL-SURFACE.md  # 4-layer surface: V-A + beats + intent + FACS, blending rule, latency budget
+├── EMOTION-MODEL.md    # V-A representation, source signals, cultural display rules, trust-calibration
+├── BEAT-CUES.md        # Conversational beat catalog: trigger → FACS response → duration → cultural overrides
+├── FACS-MAP.yaml       # AU → blendshape mapping per rig, composition rule
+└── EVAL.md             # FAU recall / V-A error / beat latency / cultural / trust / MOS / uncanny stillness
+```
+
+YAML frontmatter on every file with `target`, `version`, `derived_from`.
+
+---
+
+## Edge cases
+
+- **Face rig has no blendshapes:** EMOCA / DECA / FACSHuman all assume blendshape
+  or FLAME mesh output. 2D portrait without blendshapes is out of scope — route to
+  `/lip-sync` for what mouth-only animation can do.
+- **Discrete-emotion-only spec:** user wants only Ekman 6. Allow it but write a
+  warning: "discrete-emotion deployments cap out at scripted-character quality;
+  dialog feels robotic. We recommend at least adding back-channel beats." Capture
+  this in CONTROL-SURFACE.md.
+- **Cultural mismatch:** user picked "high-arousal positive" for a Japanese formal
+  context — over-smiling avatar. Flag, recommend the cultural display-rule overlay
+  with arousal-damping.
+- **Sign-language context overlap:** non-manual features in sign (brow raise =
+  question marker, mouth-shape MM = "duration") are LINGUISTIC. They live in
+  `/avatar-sign`. Do NOT fold them into this surface — sign NMFs override
+  emotion-driven brow/mouth movements.
+- **Trust-calibration on a hallucinating model:** if the underlying LLM is known
+  to hallucinate confidently, exposing model-confidence to the expression layer
+  helps but doesn't fix the underlying problem. Flag in EMOTION-MODEL.md.
+- **Real-time + diffusion-based expression model:** doesn't exist commonly;
+  regression models (EMOCA / DECA) are real-time-feasible; diffusion is offline.
+- **License conflict:** EMOCA license has changed over versions; verify before
+  recommending for commercial.
+- **Hall's TSL teaching avatar:** mixed Thai-English content, teaching context.
+  Recommend: EMOCA v2 + full 4-layer surface (V-A + back-channel-heavy beats for
+  teaching + recognition micro-expressions + FACS composer) + cultural override
+  for Thai politeness + trust-calibration enabled. NOTE: the sign-performing path
+  uses different non-manual features driven by `/avatar-sign`; this surface is for
+  the spoken-Thai-English mode only.
+
+---
+
+## Dependencies
+
+- **Family P upstream:** `/avatar-design` ARCHITECTURE.md (face rig).
+- **Family P parallel:** `/lip-sync` (mouth blendshapes — coordinate to avoid
+  AU26 / mouth-shape conflicts), `/gesture-synth` (head pose), `/avatar-sign`
+  (overrides for grammatical NMFs).
+- **Family L:** `/voice-eval` (emotion classifier in user's speech is a source signal).
+- **Family H (HMC):** `/agent-ux-review` for trust-calibration design review.
+- **Family G:** OpenFace 2 / face-parsing models for FAU detection (eval).
+- **S9 / S12:** eval-store task_ids (`expression-{slug}-{metric}`) + frontmatter.
+- **`/discover --domain expression`:** refresh SOTA before recommending.
+- **`/autoplan-full`:** expands plan into build pipeline.
+- **`/finetune --domain expression`:** downstream training executor.
+- Checkpoints (downloaded downstream): EMOCA, DECA, FACSHuman, OpenFace 2,
+  Audio2Face.
+
+---
+
+## Important Rules
+
+- **Never train.** Plan-on-disk ends this skill.
+- **Never download a checkpoint.** Downstream skills do that.
+- **Full surface > V-A alone > discrete-emotion alone.** Recommend full surface
+  unless quality tier is research-demo or worse.
+- **Cultural display rules are mandatory.** Multi-cultural deployment without
+  display-rule overrides is a known failure mode.
+- **Trust-calibration is mandatory for high-stakes contexts** (medical, finance,
+  teaching, accessibility). Don't ship a confident face on an uncertain model.
+- **Refuse face rigs without blendshape support.** Out of scope.
+- **Refuse to override sign-language NMFs.** Those are grammatical, handled by
+  `/avatar-sign`.
+- **Cite specific versions.** "EMOCA" alone is not enough.
+- **Plan must reference S9 task_ids and cross-reference `/agent-ux-review` for
+  trust-calibration.**

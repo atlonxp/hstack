@@ -1,0 +1,302 @@
+---
+name: eval-harness
+preamble-tier: 2
+version: 1.0.0
+description: |
+  [AI Engineering / Research] Generates a per-feature eval harness (dataset, metrics, baselines, CI hook)
+  for any LLM/AI feature. Picks pytest/deepeval/ragas/promptfoo per fit. Supports
+  --domain {nlp, cv, speech-tts, speech-asr, multimodal, sign}. Each domain pins
+  the right datasets, metrics, and judge model. Writes typed records to the
+  shared S9 eval store so /rag-design, /agent-design, /finetune, and
+  /prompt-engineering can compare across runs. Use when: "set up evals", "add
+  evals for this feature", "regression test for an AI feature", "I need a
+  benchmark for this model". (gstack)
+voice-triggers:
+  - "eval harness"
+  - "evaluation harness"
+  - "set up evals"
+triggers:
+  - eval harness
+  - evaluation scaffolding
+  - regression baseline
+allowed-tools:
+  - Bash
+  - Read
+  - Write
+  - Edit
+  - Glob
+  - Grep
+  - AskUserQuestion
+---
+
+{{PREAMBLE}}
+
+# /eval-harness — Family G — AI Engineering / Research
+
+You are running the `/eval-harness` skill. Every AI feature ships without an eval
+harness because "we'll add it later." Later never comes; quality regressions ship.
+This skill produces a runnable eval scaffold in under 30 minutes with real
+baselines you can compare across runs.
+
+The output is a directory under `evals/{feature}/` with a dataset, runner, metric
+definition, baseline file, and a CI integration hook. Records are written to the
+shared S9 eval store at `evals/baselines/` so other Family G skills can SELECT
+across runs.
+
+---
+
+## When to use
+
+Use this skill when:
+
+- You're about to ship an AI feature (RAG endpoint, agent, classifier, generator)
+  and there's no regression test that fails when quality drops.
+- You need a baseline number to compare a fine-tune or prompt change against.
+- A downstream skill (`/rag-design`, `/agent-design`, `/finetune`,
+  `/prompt-engineering`) is asking for `evals/{feature}/run.py`.
+- You're authoring a paper and need ablation numbers (hand off to `/paper-pipeline`
+  with the harness already built).
+
+Do NOT use this skill for unit tests on deterministic code paths. Use `bun test`
+or pytest directly for those.
+
+---
+
+## Inputs
+
+Required (collect via AskUserQuestion if not provided):
+
+1. **Feature slug** (e.g., `support-rag`, `sign-translator`, `tts-thai-v2`).
+2. **Target spec** — one sentence describing what good output looks like
+   ("answers user support questions correctly with citation", "translates English
+   to Thai Sign Language gloss with hand-shape phoneme accuracy ≥ 0.85").
+3. **Failure mode being protected against** — required by the AI-eval risk
+   mitigation rule (PLAN-v3-roadmap.md §Risks). Examples: "hallucinated citations
+   in RAG output", "TTS clipping at sentence end", "ASR transcription drift on
+   Thai numerals". Stored alongside the baseline metric.
+4. **Domain** — see `--domain` modes below.
+5. **Dataset source** — existing JSONL, a small seed set to hand-author, or a
+   public benchmark (HumanEval, MMLU, MS-MARCO, LibriSpeech, COCO, etc.).
+6. **Comparison mode** — single-baseline (compare-to-self), pairwise (model A vs
+   B), or rubric (LLM judge with explicit criteria).
+
+---
+
+## --domain modes
+
+The domain flag controls dataset format, metric choice, and judge configuration.
+AskUserQuestion before defaulting.
+
+### `--domain nlp` (default)
+
+- **Datasets:** HumanEval, MMLU, MS-MARCO, custom JSONL with `{input, expected, tags}`.
+- **Metrics:** exact match, pass@k, ROUGE/BLEU/METEOR, LLM-as-judge rubric, Elo
+  for pairwise.
+- **Frameworks:** prefer `deepeval` for rubric/judge flows, `promptfoo` for
+  matrix prompt × model evals, `pytest` for golden-output regressions.
+- **Judge model:** `claude-3-5-sonnet-20241022` (cheap, fast, reliable) — falls
+  back to `gpt-4o-mini` if `ANTHROPIC_API_KEY` is missing.
+
+### `--domain cv`
+
+- **Datasets:** COCO, ImageNet, custom image folders with COCO-format
+  annotations.
+- **Metrics:** mAP@\[.5:.95\], IoU, CLIP-score for generation, FID/KID for
+  diffusion outputs, pixel-accuracy / Dice for segmentation.
+- **Frameworks:** `pytest` + `torchmetrics`. Optional `clip-eval` for CLIP-score.
+- **Judge model:** none for object-detection / segmentation. For generation,
+  CLIP similarity to a reference caption + LPIPS perceptual distance.
+
+### `--domain speech-tts`
+
+- **Datasets:** custom prompt JSONL (`{text, expected_audio_path, voice}`),
+  LibriTTS test split for English baselines.
+- **Metrics:** **MOS** (mean opinion score via MOSNet or UTMOS), **MCD**
+  (mel-cepstral distortion), prosody-RMSE, speaker similarity (ECAPA-TDNN
+  cosine), word-error-rate when piped back through ASR.
+- **Frameworks:** `pytest` + `torchaudio` + `whisper` for cycle-consistency
+  WER. Pulls MOSNet from `huggingface-skills`.
+- **Judge model:** MOSNet (automated MOS) replaces human rating. Flag the
+  caveat — automated MOS correlates ~0.6 with human MOS.
+
+### `--domain speech-asr`
+
+- **Datasets:** LibriSpeech (test-clean / test-other), Common Voice, Hall's
+  custom Thai-speech splits.
+- **Metrics:** **WER** (word error rate), **CER** (character error rate), RTF
+  (real-time factor for latency), per-substitution / insertion / deletion
+  breakdown via `jiwer`.
+- **Frameworks:** `pytest` + `jiwer` + `whisper` for reference.
+- **Judge model:** none (WER is exact).
+
+### `--domain multimodal`
+
+- **Datasets:** VQAv2, GQA, ScienceQA, custom `{image, prompt, expected}`.
+- **Metrics:** task-specific accuracy + LLM-as-judge for free-form answers +
+  CLIP-similarity for caption tasks.
+- **Frameworks:** `deepeval` (multimodal rubric) + `pytest`.
+- **Judge model:** `claude-3-5-sonnet-20241022` with image input.
+
+### `--domain sign`
+
+- **Datasets:** Hall's TSL phoneme + gloss corpora (proprietary, declare path
+  via `--data-root`). For ASL baselines: WLASL, MS-ASL.
+- **Metrics:** **hand-shape phoneme accuracy** (per-frame and sequence-level),
+  **gloss BLEU**, signing-rate (signs/sec), facial-expression-mark
+  preservation rate (eyebrow/mouth/head channels).
+- **Frameworks:** `pytest` + custom phoneme alignment scorer. Cross-references
+  `/feature-build` for TSL avatar features.
+- **Judge model:** none — sign metrics are structural. Optional human-eval
+  hook for naturalness rating, results stored separately.
+
+---
+
+## Procedure
+
+### Step 1 — Detect repo conventions
+
+```bash
+# Where do evals live in this project?
+ls evals/ 2>/dev/null && echo "FOUND_EVALS_DIR" || echo "NO_EVALS_DIR"
+ls pyproject.toml requirements.txt package.json 2>/dev/null
+grep -l "deepeval\|promptfoo\|ragas" pyproject.toml requirements.txt package.json 2>/dev/null
+```
+
+If `evals/` exists with a convention (pytest under `evals/*/test_*.py`, or a
+promptfoo yaml at `evals/promptfooconfig.yaml`), match it. Otherwise create
+`evals/{feature}/`.
+
+### Step 2 — Collect spec via AskUserQuestion
+
+Gather the six inputs above. Be insistent on the **failure mode** — vague specs
+produce reassuring-but-wrong baselines (the risk mitigation in the roadmap).
+
+### Step 3 — Pick the framework
+
+| Signal | Framework |
+|--------|-----------|
+| Golden inputs with exact-match or numeric metric | `pytest` + `pytest-snapshot` |
+| Rubric / LLM-judge / pairwise | `deepeval` |
+| RAG-specific (faithfulness, answer relevance, context precision) | `ragas` |
+| Matrix of prompts × models, headless eval, CI dashboards | `promptfoo` |
+| Hall's mixed-track multimodal + sign | custom `pytest` + S9 writer |
+
+State the choice and why before scaffolding.
+
+### Step 4 — Scaffold the harness
+
+Generate this layout:
+
+```
+evals/{feature}/
+├── dataset.jsonl          # 30-100 seed examples — hand-author or import
+├── run.py                 # the runner — takes --model, writes to S9 store
+├── metric.py              # the metric implementation for the domain
+├── baselines/
+│   └── {model}-{date}.json    # baseline records (one per run, S9 schema)
+└── README.md              # how to run, what the failure mode is
+```
+
+Each baseline record (S9 schema) is:
+
+```json
+{
+  "task_id": "support-rag/answer-quality",
+  "model": "claude-3-5-sonnet-20241022",
+  "dataset_hash": "sha256:...",
+  "metric": "rubric_score_mean",
+  "value": 0.82,
+  "ci": [0.78, 0.86],
+  "run_id": "2026-05-16T12:34:56Z-{slug}",
+  "ts": "2026-05-16T12:34:56Z",
+  "failure_mode": "hallucinated citations",
+  "n": 75
+}
+```
+
+### Step 5 — Wire CI
+
+For projects with `bun test`, add a `bun run eval:{feature}` script and gate it
+in CI per Hall's `EVALS_TIER` two-tier system. For Python-only repos, add a
+GitHub Actions step that runs `pytest evals/{feature}/`.
+
+Decision rule (AskUserQuestion):
+- **Gate** (blocks merge) — pick this only if the eval is deterministic and
+  cheap. WER, exact-match, mAP usually qualify.
+- **Periodic** (weekly cron, manual) — pick this for paid LLM-judge evals,
+  Opus-model evals, multimodal evals, anything > $0.50/run.
+
+### Step 6 — Record the first baseline
+
+```bash
+cd evals/{feature} && python run.py --model {model} --record-baseline
+```
+
+Verify the JSON in `baselines/{model}-{date}.json` matches the S9 schema. Print
+the baseline metric + CI to the user and tell them what regression threshold
+makes sense (default: 2 standard errors below current mean).
+
+---
+
+## Outputs
+
+- `evals/{feature}/dataset.jsonl` — versioned, hashed.
+- `evals/{feature}/run.py` — runnable, prints to stdout + writes S9 record.
+- `evals/{feature}/metric.py` — domain-specific metric impl.
+- `evals/{feature}/baselines/*.json` — typed S9 records (one per run).
+- `evals/{feature}/README.md` — what the failure mode is, how to interpret
+  regressions, who owns the harness.
+
+---
+
+## Edge cases
+
+- **Tiny dataset (< 20 examples):** print a warning, suggest doubling, but
+  proceed. Confidence intervals will be wide.
+- **No ground truth available** (pure generation tasks): fall back to LLM-judge
+  rubric with at least 3 rubric criteria. Flag that scores are model-judge-
+  dependent.
+- **Proprietary dataset:** never inline sample rows in commits. Use
+  `--data-root` pointing to local path; `.gitignore` the dataset.
+- **API rate limits during baselining:** the runner must support
+  `--max-concurrent` and exponential backoff; default to 5 concurrent.
+- **Cross-domain feature (e.g., sign-language TTS):** declare domain as the
+  *output* domain. For sign TTS, that's `--domain sign`, not `--domain
+  speech-tts`. Sign avatar features always win the domain decision.
+- **Existing harness in the repo:** never overwrite. Read it, write a sibling
+  `evals/{feature}-v2/` and ask the user whether to migrate.
+
+---
+
+## Dependencies
+
+- **S9 eval store** (`evals/baselines/`) — schema defined in
+  `PLAN-v3-roadmap.md` §S9. This skill is the primary writer.
+- **Frameworks (one of):** `pytest`, `deepeval`, `ragas`, `promptfoo` — name as
+  CHOICES, install only on AskUserQuestion confirmation.
+- **Per-domain libs:** `torchmetrics` (cv), `jiwer` (speech-asr), `torchaudio`
+  + MOSNet (speech-tts), `clip-eval` (multimodal/cv generation).
+- **Judge auth:** `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` for LLM-as-judge
+  metrics. Probe with `gstack-codex-probe` pattern; fail clearly if missing.
+- **Cross-skill consumers:** `/rag-design`, `/agent-design`, `/finetune`,
+  `/prompt-engineering`, `/paper-pipeline`. Each reads from S9, writes its own
+  baselines through this skill's scaffold.
+
+---
+
+## AskUserQuestion gates
+
+Before scaffolding, REQUIRE these answers:
+
+1. **Domain** — `nlp / cv / speech-tts / speech-asr / multimodal / sign`. No
+   silent default.
+2. **Failure mode being protected against** — free text, must be specific
+   enough that "did we fix it" has an obvious answer.
+3. **Eval tier** — `gate` (deterministic, cheap, blocks CI) vs `periodic`
+   (paid judge, weekly cron).
+4. **Framework** — confirm the recommendation from Step 3 or override.
+5. **Dataset source** — hand-author seed / public benchmark / proprietary
+   path.
+
+Only proceed after all five are answered. Print the chosen config back to the
+user before scaffolding so they can correct it.

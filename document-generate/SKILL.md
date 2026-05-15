@@ -3,7 +3,7 @@ name: document-generate
 preamble-tier: 2
 version: 1.0.0
 description: |
-  Generate missing documentation from scratch for a feature, module, or entire project.
+  [Ship & Release] Generate missing documentation from scratch for a feature, module, or entire project.
   Uses the Diataxis framework (tutorial / how-to / reference / explanation) to produce
   complete, structured documentation. Can be invoked standalone or called by
   /document-release when it finds coverage gaps. Use when asked to "write docs",

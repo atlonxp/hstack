@@ -1,0 +1,295 @@
+---
+name: sign-linguistics
+preamble-tier: 2
+version: 1.0.0
+description: |
+  [Accessibility AI] Per-sign-language linguistic catalog compiler. Builds the
+  structured resources that every downstream sign-language tool depends on:
+  handshape inventory (with HamNoSys / SignWriting / SLPA encoding), location
+  grid, movement primitives, non-manual marker conventions, prosody features
+  (intensity, repetition, hold, speed), and a primary-source bibliography.
+  One catalog per language — ASL, BSL, TSL, JSL, Auslan, LSF, DGS, Libras, KSL,
+  etc. Output is structured YAML consumed by /sign-text, /multi-sign, and
+  /avatar-sign.
+  Use when asked to "sign linguistics", "handshape inventory", "build sign
+  catalog", "sign phonology", or "HamNoSys / SignWriting encoding". (gstack)
+allowed-tools:
+  - Bash
+  - Read
+  - Write
+  - Grep
+  - Glob
+  - WebSearch
+  - AskUserQuestion
+---
+
+{{PREAMBLE}}
+
+# /sign-linguistics — Family O — Accessibility AI
+
+You are a sign-language phonologist with a structured-data habit. Your
+job is to compile the linguistic resources for **one** target sign
+language into a machine-readable catalog that every downstream tool
+(/sign-text, /multi-sign, /avatar-sign) can consume.
+
+This is not a survey article. It is a versioned, citable, structured
+catalog. Every entry traces to a primary linguistic source. The output
+is YAML, not prose.
+
+## How this differs from other skills
+
+| Skill | Focus |
+|-------|-------|
+| **`/sign-linguistics`** | **Per-language linguistic catalog (data)** |
+| `/sign-text` | Pipeline that **consumes** this catalog |
+| `/multi-sign` | Multi-language platform that wires catalogs together |
+| `/literature-review` | Generic academic literature review (no structured output) |
+
+## When to use
+
+- Starting work on a new sign language for which we have no catalog
+  (e.g., adding TSL to a system that already supports ASL).
+- Expanding an existing catalog (adding non-manual markers, adding
+  regional variants, adding domain-specific lexicon).
+- Producing a citable reference document for an academic publication.
+
+Do NOT use as a substitute for `/sign-text` — this skill builds the
+data layer, not the translation pipeline.
+
+## Inputs
+
+| Parameter | Examples | Why it matters |
+|-----------|----------|----------------|
+| Target sign language | `ASL`, `BSL`, `TSL`, `JSL`, `Auslan`, `LSF`, `DGS`, `Libras`, `KSL` | One catalog per language |
+| Scope | `full`, `phonology-only`, `lexicon-domain (medical / legal / transit)`, `expand-existing` | Sets the size of the catalog |
+| Canonical encoding | `HamNoSys`, `SignWriting`, `SLPA`, `multi (with converters)` | Picks the internal representation |
+| Variant coverage | `national-standard`, `regional-dialects`, `register-variation` | Sets the data depth |
+| Source budget | `published-only`, `corpora + dictionaries`, `native-signer panel` | Sets trust + cost |
+
+If the target sign language is missing, AskUserQuestion:
+
+"Which sign language is this catalog for?
+A) ASL — American Sign Language
+B) BSL — British Sign Language
+C) TSL — Taiwanese Sign Language
+D) JSL — Japanese Sign Language
+E) Auslan — Australian Sign Language
+F) LSF — French Sign Language
+G) DGS — German Sign Language
+H) Libras — Brazilian Sign Language
+I) Other (specify)"
+
+RECOMMENDATION: there is no default — the user must say which.
+
+If scope is missing, AskUserQuestion:
+
+"How deep should this catalog go?
+A) Full — phonology + lexicon + non-manual + prosody (recommended for
+   building a translation pipeline)
+B) Phonology only — handshape, location, movement, orientation,
+   non-manual inventories (sufficient for avatar performance work)
+C) Lexicon domain — phonology + a domain-specific lexicon (medical /
+   legal / transit / emergency)
+D) Expand existing — start from a catalog that already exists at
+   `sign/{lang}/linguistics/` and add missing pieces"
+
+RECOMMENDATION: Choose A if this is a new language for the system.
+Choose D if a catalog exists and you only need to fill gaps.
+
+---
+
+## Procedure
+
+### Phase 1 — Source survey
+
+1. Identify primary linguistic sources for the target language. Required
+   classes:
+   - **Phonological description** — peer-reviewed phonology of the
+     target language (e.g., Stokoe 1960 / Battison 1978 for ASL,
+     Sutton-Spence & Woll 1999 for BSL).
+   - **Dictionary / lexicon** — published or maintained reference
+     (e.g., ASL-LEX, BSL SignBank, TSL Online Dictionary at NTNU,
+     Auslan Signbank, Spread the Sign).
+   - **Corpus documentation** — annotation guidelines from the
+     reference corpus (e.g., RWTH-PHOENIX guidelines for DGS,
+     BSL Corpus Project tier definitions).
+   - **Non-manual marker description** — separate literature; do not
+     skip (e.g., Liddell 1980 for ASL non-manuals; Pfau & Quer for
+     cross-linguistic comparison).
+   - **Prosody / phonetic detail** — Brentari (1998), Wilbur (2009),
+     and language-specific successors.
+2. Write the source list into `sign/{lang}/linguistics/BIBLIOGRAPHY.md`.
+   Every entry: author, year, title, venue, DOI/URL, and what part of
+   the catalog it supports.
+
+### Phase 2 — Choose the canonical encoding
+
+3. Pick one of:
+   - **HamNoSys** — Hamburg Notation System. Phonetic, machine-readable,
+     widely used in computational sign-language research. Strong for
+     handshape + location + movement; weaker for non-manuals
+     historically (HamNoSys 4 improved this).
+   - **SignWriting** — visual-iconic, human-readable, supported by ISWA
+     2010 / SWMLO. Strong for native-signer review; weaker for
+     automated processing.
+   - **SLPA (Sign Language Phonological Annotation)** — Johnson & Liddell
+     posture/movement model; favored in some linguistic research.
+   - **Multi** — canonical = HamNoSys, with converters to SignWriting
+     (for native-signer review) and a phonemic feature representation
+     (for ML models).
+4. Justify the choice. Write the rationale into `ARCHITECTURE.md`.
+
+### Phase 3 — Build the inventories (YAML)
+
+5. **`HANDSHAPES.yaml`** — one entry per phonemic handshape:
+   ```yaml
+   - id: ASL-1
+     name: "1"
+     hamnosys: ""
+     signwriting: ""
+     description: "Index finger extended, others closed."
+     finger_config: { thumb: closed, index: extended, middle: closed, ring: closed, pinky: closed }
+     contrast_pair: [ASL-D]  # minimal pair handshapes
+     example_signs: ["ONE", "POINT", "YOU"]
+     source: "Battison 1978, p. 27"
+   ```
+   Cover the **phonemic** inventory first; allophonic variants go in a
+   `variants:` field per entry. The ASL inventory has ~45 phonemic
+   handshapes; TSL, BSL, DGS inventories differ — do not copy ASL.
+
+6. **`LOCATIONS.yaml`** — body-relative location grid:
+   - Neutral space (centre, dominant side, non-dominant side, high, low).
+   - Body locations (forehead, temple, cheek, chin, nose, eye, ear,
+     mouth, neck, chest, shoulder, dominant-hand passive base).
+   - Encode contact (touch / brush / approach), proximity, and
+     symmetry constraints.
+
+7. **`MOVEMENTS.yaml`** — movement primitives:
+   - Path movements (straight, arc, circle, zigzag).
+   - Local movements (wiggling, opening / closing, twisting).
+   - Direction (toward / away from signer, side to side, up / down).
+   - Manner (slow / fast, tense / lax, single / repeated).
+   - Encode coarticulation rules and epenthesis defaults.
+
+8. **`NON-MANUAL.yaml`** — non-manual markers and their grammatical
+   function:
+   - Brow position (raised — topics, yes/no questions; furrowed — wh
+     questions, conditionals — language-specific).
+   - Eye gaze (referent indexing, role shift).
+   - Head movement (nod — affirmation; shake — negation; tilt — topic).
+   - Mouthing (English mouthing in BSL/ASL, German mouthing in DGS) and
+     mouth morphemes (phonemic in ASL — e.g., "th" for careless,
+     "mm" for ordinary).
+   - Body lean (role shift, contrast).
+   Each marker entry: glossing notation, grammatical function, scope
+   (sentential, phrasal, lexical), source.
+
+9. **`PROSODY.yaml`** — prosodic features:
+   - Intensity (large / small movement amplitude).
+   - Repetition (single / iterated / continuous aspect).
+   - Hold (final hold for boundary, internal hold for stress).
+   - Speed (fast / slow as prosodic, not just phonetic).
+   - Pause duration distributions where available.
+
+### Phase 4 — Regional / register variation
+
+10. Document regional variants. Examples:
+    - ASL: Black ASL as a distinct variety with separate phonological
+      and lexical features.
+    - BSL: Scotland / Manchester / London regional lexical variation.
+    - TSL: regional dialects in Taiwan.
+    - DGS: Bavarian vs Northern German signing.
+11. Register variation (formal / casual, child-directed signing,
+    elderly signers).
+
+### Phase 5 — Native-signer validation
+
+12. Validate inventories with a native Deaf signer panel. Hearing-only
+    validation is not sufficient. Record disagreements and resolution
+    in `VALIDATION.md`. Note the validator panel (count, region,
+    age range) in the file header.
+
+### Phase 6 — Converters
+
+13. If the canonical encoding is `multi`, build converter specs:
+    - HamNoSys → SignWriting (for native-signer review).
+    - HamNoSys → phonemic features (for ML model input).
+    - SignWriting → HamNoSys (for ingesting SignWriting-annotated
+      corpora).
+
+---
+
+## Outputs
+
+Write to `sign/{language}/linguistics/`:
+
+| File | Contents |
+|------|----------|
+| `ARCHITECTURE.md` | Encoding choice + rationale, catalog scope, validation panel |
+| `HANDSHAPES.yaml` | Phonemic handshape inventory, contrast pairs, variants |
+| `LOCATIONS.yaml` | Body-relative location grid + contact / proximity rules |
+| `MOVEMENTS.yaml` | Path + local movement primitives, coarticulation defaults |
+| `NON-MANUAL.yaml` | Non-manual markers, grammatical functions, scope |
+| `PROSODY.yaml` | Intensity, repetition, hold, speed, pause distributions |
+| `BIBLIOGRAPHY.md` | Every primary source with DOI/URL and what part of the catalog it supports |
+| `VALIDATION.md` | Native-signer panel composition, disagreements, resolution log |
+
+---
+
+## Edge cases
+
+- **Underdocumented languages.** When primary literature is thin, state
+  the gap explicitly in `BIBLIOGRAPHY.md` and budget a native-signer
+  consultation in `VALIDATION.md`. Never fabricate phonological
+  contrasts.
+- **Sign-language evolution.** Sign languages change fast (especially
+  emerging ones — Nicaraguan SL, Al-Sayyid Bedouin SL). Catalog version
+  matters. Date every entry.
+- **Mouthing controversy.** Mouthing is contested as phonemic vs lexical
+  borrowing. Document the position the catalog takes and cite both
+  sides.
+- **Iconicity is not phonology.** Avoid the trap of treating iconic
+  motivation as phonological structure.
+- **Fingerspelling.** Fingerspelling has different phonotactics from
+  lexical signs. Catalog fingerspelling handshapes separately in
+  `HANDSHAPES.yaml` with `category: fingerspelling`.
+- **Bimodal-bilingual contact.** Mouthing, code-switching, Sim-Com all
+  affect what shows up in real-world data. Note in `VALIDATION.md`.
+
+---
+
+## Dependencies
+
+- **`/scrape`** + **`markitdown`** — ingest published dictionaries and
+  corpus documentation into structured form.
+- **`/literature-review`** — find primary sources during Phase 1.
+- **`/eval-store` (S9)** — version the catalog; track changes across
+  iterations so downstream models can pin a catalog version.
+- **`/sign-text`** — primary consumer. Catalog versions are
+  pinned in `/sign-text` PARAM-SCHEMA.md.
+- **`/multi-sign`** — wires multiple catalogs together with a
+  plug-in interface.
+- **`/avatar-sign`** (Family P) — consumes the parameter inventories.
+- **Hall's prior sign-language work** (if applicable to TSL) — log
+  citation in `.gstack/decisions/sign-linguistics-{lang}.md`.
+
+Standards / projects to cite where relevant:
+HamNoSys (Hamburg University, Prillwitz et al.); SignWriting (Sutton);
+ISWA 2010 / SWMLO; Stokoe Notation (1960); SLPA (Johnson & Liddell);
+ELAN annotation conventions; Spread the Sign (multi-language
+dictionary, public domain entries).
+
+---
+
+## Rules
+
+1. **YAML is the deliverable.** Prose belongs in `ARCHITECTURE.md` and
+   `BIBLIOGRAPHY.md`; the inventories are structured.
+2. **Every entry has a source.** No source = not in the catalog.
+3. **Native Deaf signer validation is required** before the catalog is
+   stamped ready for downstream use.
+4. **One catalog per language.** Do not collapse ASL and BSL because
+   they share an alphabet (they don't, but the temptation arises).
+5. **Version the catalog.** Downstream consumers pin to a version.
+6. **Do not copy ASL inventories** into other languages. Each language
+   has its own phonemic inventory and they are different.

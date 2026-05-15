@@ -1,0 +1,450 @@
+---
+name: db-migration
+preamble-tier: 3
+version: 1.0.0
+description: |
+  [API/DB] Zero-downtime database migration planner. Given a migration intent
+  (add column, change type, add index, rename, backfill, drop), picks the safe
+  pattern — expand-migrate-contract, online DDL, pt-osc / gh-ost for MySQL,
+  CREATE INDEX CONCURRENTLY for Postgres — and emits phased migration scripts
+  with locks-and-load analysis plus rollback at every phase. Supports Postgres,
+  SQLite, and MySQL. Use when: "safely migrate this table", "add NOT NULL
+  column", "rename a column on a live table", "add index without blocking",
+  or "zero-downtime migration". (gstack)
+allowed-tools:
+  - Read
+  - Write
+  - Edit
+  - Grep
+  - Glob
+  - AskUserQuestion
+  - Bash
+  - WebSearch
+triggers:
+  - safely migrate this table
+  - zero downtime migration
+  - add not null column
+  - rename column live
+  - expand migrate contract
+  - online ddl
+---
+
+{{PREAMBLE}}
+
+{{GBRAIN_CONTEXT_LOAD}}
+
+# /db-migration — Family E2 — API/DB
+
+"Add NOT NULL column to a 50M-row table" — small change, terrifying execution.
+Locking, backfill, replication lag, app deploy ordering, rollback — all easy to get
+wrong, and the failure mode is "the site is down". This skill exists to turn that
+class of change into a documented, phased, reversible execution plan.
+
+The skill **never executes migrations on production**. It produces the scripts.
+Execution is a human decision.
+
+## When to use
+
+- Any DDL change on a table that is **large** (over ~1M rows) or **hot** (taking
+  active writes during business hours).
+- Any change that risks a long `AccessExclusiveLock` (Postgres) or a table copy
+  (MySQL pre-online-DDL).
+- Backfilling a column with defaults / derived data on a large table.
+- Renaming a column or table that's referenced from app code.
+- Adding a `NOT NULL` constraint to an existing column.
+- Adding or dropping an index on a hot table.
+- Splitting a column (e.g. `name` → `first_name` + `last_name`) or merging columns.
+
+**Do not use for:**
+
+- Schema design (greenfield) — that's `/db-design`.
+- Slow-query diagnosis — that's `/db-perf`.
+- Tiny tables / dev DBs where a `BEGIN; ALTER TABLE ...; COMMIT;` is fine — just
+  do it directly.
+
+## The core pattern: expand-migrate-contract
+
+Every zero-downtime migration follows the same shape:
+
+```
+                ┌─────────┐
+                │ EXPAND  │  Add the new thing (column / table / index).
+                │ phase   │  Old app still works. Both shapes coexist.
+                └────┬────┘
+                     │
+                ┌────▼────┐
+                │ MIGRATE │  Backfill / dual-write / switch readers.
+                │ phase   │  App rolls out to use the new shape.
+                └────┬────┘
+                     │
+                ┌────▼────┐
+                │CONTRACT │  Remove the old thing once nothing reads it.
+                │ phase   │  Only safe after the previous deploy is fully live.
+                └─────────┘
+```
+
+Each phase is a separate deploy. Between phases, both shapes must work — that's
+how you survive a rollback at any point.
+
+## Database engines supported
+
+| Engine     | Native online DDL                                         | External helpers                              |
+|------------|-----------------------------------------------------------|-----------------------------------------------|
+| PostgreSQL | Most DDL is online with caveats. `CREATE INDEX CONCURRENTLY`, `ALTER TABLE ... ADD COLUMN ... NULL` (instant since PG 11). Some changes still rewrite the table. | None typically needed in modern PG (12+).    |
+| MySQL      | InnoDB online DDL since 5.6+, but with locking caveats (especially metadata locks). | `pt-online-schema-change` (Percona Toolkit) and `gh-ost` (GitHub) for everything risky. |
+| SQLite     | `ALTER TABLE` is limited (rename column needs 3.25+; some changes need the table-copy dance). Single-writer means any DDL blocks all writers. | None — pattern is: create new table, copy data, drop old, rename. |
+
+The skill always asks the engine first; the safe pattern is completely different per engine.
+
+## Procedure
+
+### Step 0: Detect engine + table size
+
+```bash
+# Engine detection (same as /db-design)
+ENGINE=""
+grep -lE "postgres|postgresql|pg_" --include="*.json" --include="*.yaml" --include="*.yml" --include="*.toml" --include=".env*" -r . 2>/dev/null | head -3 && ENGINE="postgres"
+grep -lE "mysql|mariadb" --include="*.json" --include="*.yaml" --include="*.toml" --include=".env*" -r . 2>/dev/null | head -3 && [ -z "$ENGINE" ] && ENGINE="mysql"
+grep -lE "sqlite" --include="*.json" --include="*.yaml" --include="*.toml" -r . 2>/dev/null | head -3 && [ -z "$ENGINE" ] && ENGINE="sqlite"
+echo "Engine guess: ${ENGINE:-unknown}"
+
+# Migration directory
+MIGRATIONS=$(find . -type d \( -name "migrations" -o -name "migrate" \) -not -path "*/node_modules/*" -not -path "*/.git/*" 2>/dev/null | head -3)
+echo "Migration dir: ${MIGRATIONS:-none}"
+```
+
+State what you found. The skill then needs:
+- Engine + version (matters: PG 11 `ALTER TABLE ADD COLUMN ... NOT NULL DEFAULT x` is
+  instant; PG 10 rewrites the table).
+- Table name + approximate row count + approximate size.
+- Whether the table is taking active writes during the planned migration window.
+- Whether replication is in play (logical / physical / read replicas).
+
+AskUserQuestion if any of these is missing.
+
+### Step 1: AskUserQuestion — intent
+
+One issue per call. Use the preamble's AskUserQuestion format. Ask:
+
+- **What is the change?** (Add column, drop column, change type, rename, add index,
+  drop index, add constraint, backfill, split, merge.)
+- **Table size?** Rough row count + bytes. "50M rows, 80GB" is enough.
+- **Write rate?** Quiet, low (under 100 qps), high (over 1k qps)?
+- **Replication?** Logical replication subscribers? Physical replicas with read traffic?
+- **Helper tool preference (MySQL only)?** Native online DDL, `pt-osc`, or `gh-ost`?
+  Default `gh-ost` for sharded / replicated setups, `pt-osc` for older or simpler ones.
+
+Do NOT proceed until the user responds.
+
+### Step 2: Decide the safe pattern
+
+Cross-reference the change intent with the engine. Pick the pattern. Examples:
+
+**Postgres — add NOT NULL column (PG 11+):**
+
+```sql
+-- ✅ Modern PG (11+): instant; uses the default for missing rows without rewriting.
+ALTER TABLE orders ADD COLUMN currency CHAR(3) NOT NULL DEFAULT 'USD';
+```
+
+But if the default is **volatile** (`now()`, `gen_random_uuid()`, an expression
+referencing other columns), this DOES rewrite. Default to expand-migrate-contract:
+
+```sql
+-- Phase 1 (EXPAND): nullable, no default.
+ALTER TABLE orders ADD COLUMN currency CHAR(3);
+```
+Deploy app reading either NULL or value. Then:
+```sql
+-- Phase 2a (MIGRATE — backfill in batches).
+UPDATE orders SET currency = 'USD' WHERE currency IS NULL AND id BETWEEN 1 AND 100000;
+-- repeat in batches; throttle on replication lag.
+```
+Deploy app writing the new column. Then:
+```sql
+-- Phase 2b: add the NOT NULL constraint as NOT VALID first (fast, no full scan),
+-- then VALIDATE in the background.
+ALTER TABLE orders ADD CONSTRAINT orders_currency_not_null CHECK (currency IS NOT NULL) NOT VALID;
+ALTER TABLE orders VALIDATE CONSTRAINT orders_currency_not_null;
+-- Then promote to NOT NULL (instant in PG 12+ if a valid CHECK exists).
+ALTER TABLE orders ALTER COLUMN currency SET NOT NULL;
+ALTER TABLE orders DROP CONSTRAINT orders_currency_not_null;
+```
+
+**Postgres — add an index without blocking writes:**
+
+```sql
+-- CREATE INDEX CONCURRENTLY cannot run inside a transaction.
+CREATE INDEX CONCURRENTLY idx_orders_user_id_created_at
+  ON orders (user_id, created_at DESC);
+-- If it fails partway, the index is left INVALID. Check:
+--   SELECT relname, indisvalid FROM pg_class JOIN pg_index ON oid=indexrelid WHERE relname='idx_...';
+-- If invalid: DROP INDEX CONCURRENTLY and retry.
+```
+
+**Postgres — rename a column on a live table:**
+
+You cannot rename atomically across an app deploy. Expand-migrate-contract:
+
+```sql
+-- Phase 1 (EXPAND): add the new column.
+ALTER TABLE users ADD COLUMN primary_email TEXT;
+-- Backfill (batched).
+UPDATE users SET primary_email = email WHERE primary_email IS NULL AND id BETWEEN ...;
+-- Trigger to keep both in sync during transition.
+CREATE FUNCTION sync_users_email() RETURNS trigger AS $$
+BEGIN
+  IF NEW.email IS DISTINCT FROM OLD.email THEN NEW.primary_email := NEW.email; END IF;
+  IF NEW.primary_email IS DISTINCT FROM OLD.primary_email THEN NEW.email := NEW.primary_email; END IF;
+  RETURN NEW;
+END $$ LANGUAGE plpgsql;
+CREATE TRIGGER trg_users_sync_email BEFORE INSERT OR UPDATE ON users
+  FOR EACH ROW EXECUTE FUNCTION sync_users_email();
+```
+Deploy app reading `primary_email`, falling back to `email`. Then deploy app writing
+`primary_email`. Then:
+```sql
+-- Phase 3 (CONTRACT): drop the trigger and the old column.
+DROP TRIGGER trg_users_sync_email ON users;
+DROP FUNCTION sync_users_email();
+ALTER TABLE users DROP COLUMN email;
+```
+
+**MySQL — large table schema change with pt-osc:**
+
+```bash
+pt-online-schema-change \
+  --alter "ADD COLUMN currency CHAR(3) NOT NULL DEFAULT 'USD'" \
+  --execute \
+  --max-load Threads_running=25 \
+  --critical-load Threads_running=50 \
+  --chunk-size=1000 \
+  --check-replication-filters \
+  D=mydb,t=orders
+```
+
+pt-osc creates a shadow table, copies in chunks, installs triggers to capture
+in-flight writes, then atomically renames at the end. Plan for ~2x table size in
+disk usage during the run.
+
+**MySQL — same change with gh-ost (recommended for large or replicated setups):**
+
+```bash
+gh-ost \
+  --alter="ADD COLUMN currency CHAR(3) NOT NULL DEFAULT 'USD'" \
+  --database=mydb --table=orders \
+  --host=primary.example.com \
+  --max-load='Threads_running=25' \
+  --critical-load='Threads_running=50' \
+  --chunk-size=1000 \
+  --throttle-control-replicas='replica1.example.com:3306' \
+  --postpone-cut-over-flag-file=/tmp/ghost.postpone.flag \
+  --execute
+```
+
+gh-ost reads from a replica's binlog (no triggers on the primary), making it gentler
+on the primary. The `--postpone-cut-over-flag-file` lets you stage the cut-over for
+a controlled moment.
+
+**SQLite — anything beyond simple ADD COLUMN or RENAME COLUMN:**
+
+```sql
+-- 12-step dance from the SQLite docs (https://sqlite.org/lang_altertable.html#otheralter).
+PRAGMA foreign_keys = OFF;
+BEGIN TRANSACTION;
+CREATE TABLE orders_new (
+  id INTEGER PRIMARY KEY,
+  user_id INTEGER NOT NULL,
+  -- new column shape
+  currency TEXT NOT NULL DEFAULT 'USD',
+  ...
+);
+INSERT INTO orders_new SELECT id, user_id, COALESCE(currency, 'USD'), ... FROM orders;
+DROP TABLE orders;
+ALTER TABLE orders_new RENAME TO orders;
+-- Recreate every index, trigger, view that referenced orders.
+COMMIT;
+PRAGMA foreign_keys = ON;
+PRAGMA foreign_key_check;
+```
+
+SQLite blocks all writers during this. For zero downtime on SQLite, you typically
+need application-level read-old-write-new logic, then a maintenance-window swap.
+Document the trade-off if SQLite is required.
+
+### Step 3: Locks-and-load analysis
+
+For every DDL statement in the plan, document:
+
+1. **Lock taken** — Postgres: `ACCESS SHARE`, `ROW SHARE`, `ROW EXCLUSIVE`,
+   `SHARE UPDATE EXCLUSIVE`, `SHARE`, `SHARE ROW EXCLUSIVE`, `EXCLUSIVE`, `ACCESS EXCLUSIVE`.
+   MySQL: metadata lock + DML/DDL lock semantics.
+2. **Lock duration estimate** — instant (under 1s), short (1-5s), table-scan-bound
+   (size × disk speed), or copy-bound (size × time-per-row).
+3. **Effect on app** — reads blocked? writes blocked? both? Replicas? Long-running
+   queries blocking the DDL?
+4. **Statement timeout** — set one explicitly so a stuck DDL doesn't hold a lock forever:
+   ```sql
+   SET lock_timeout = '5s';
+   SET statement_timeout = '60s';
+   ```
+5. **Replication impact** — does this change propagate cleanly? Logical replication
+   needs published-table DDL handling. Physical replication just replays the WAL.
+
+Linter: run **squawk** against the Postgres migration files —
+`squawk migrations/*.sql` — it catches the classics (adding NOT NULL without default,
+adding indexes without CONCURRENTLY, adding a column with default in old PG).
+
+### Step 4: Backfill plan (if applicable)
+
+Backfills are where things actually go wrong at scale. Default pattern:
+
+1. **Batch size:** 1k-10k rows depending on row size + replication lag tolerance.
+2. **Throttle:** sleep between batches based on observed replication lag. For
+   Postgres: monitor `pg_stat_replication.replay_lag`. For MySQL: `SHOW SLAVE STATUS`
+   `Seconds_Behind_Master`.
+3. **Idempotency:** each batch should be safe to re-run. Use a `WHERE new_col IS NULL`
+   clause, not `WHERE id BETWEEN x AND y` alone, so a retry doesn't double-write.
+4. **Progress tracking:** write progress to a control table or a log so you can resume
+   after a crash. Don't rely on shell scripts holding the cursor in memory.
+5. **Validation:** after backfill, run a count: `SELECT count(*) FROM t WHERE new_col IS NULL;`
+   must be 0 before promoting the column to NOT NULL.
+
+Generate a backfill script (Python / SQL / shell) appropriate to the engine. Example
+template:
+
+```bash
+#!/usr/bin/env bash
+# Backfill orders.currency in 5k-row batches with replication-lag throttle.
+set -euo pipefail
+DSN="${DATABASE_URL:?}"
+while :; do
+  rows=$(psql "$DSN" -At -c "
+    WITH batch AS (
+      SELECT id FROM orders WHERE currency IS NULL ORDER BY id LIMIT 5000 FOR UPDATE SKIP LOCKED
+    )
+    UPDATE orders SET currency = 'USD' WHERE id IN (SELECT id FROM batch) RETURNING 1;
+  " | wc -l)
+  echo "Updated $rows rows"
+  [ "$rows" -eq 0 ] && break
+  # Throttle if replication lag exceeds 5s
+  lag=$(psql "$DSN" -At -c "SELECT COALESCE(MAX(EXTRACT(EPOCH FROM replay_lag))::int, 0) FROM pg_stat_replication;")
+  if [ "$lag" -gt 5 ]; then echo "Lag ${lag}s, sleeping"; sleep $((lag * 2)); else sleep 0.2; fi
+done
+echo "Backfill complete."
+```
+
+### Step 5: Rollback per phase
+
+Every phase MUST have a rollback that:
+
+- Returns the system to the previous **working state** (not necessarily byte-identical).
+- Is documented BEFORE the forward step runs.
+- Has been mentally walked through with the app deploy ordering in mind.
+
+Some rollbacks are "deploy the previous app version + drop the new column" — fine.
+Some are "we cannot roll back; we must roll forward" — call those out loudly. The
+forbidden combination is "we don't know how to roll back" — don't ship that.
+
+### Step 6: AskUserQuestion — gate per phase
+
+For each phase, AskUserQuestion individually before generating the scripts:
+
+- "Phase 1 (EXPAND) will add a nullable column to a 50M-row table. Postgres 16 makes
+  this instant. Want me to proceed with the script?"
+- "Phase 2 (BACKFILL) will run 5k-row batches with replication-lag throttle.
+  Expected duration: ~4 hours at 1k rows/sec. Run in a screen / tmux. Continue?"
+- "Phase 3 (CONTRACT) drops the old column. This is destructive and depends on Phase 2
+  app deploy being fully live for at least 24h. Confirm Phase 2 deploy date before
+  generating?"
+
+Each AskUserQuestion is a tool_use, not prose.
+
+### Step 7: Emit outputs
+
+Write one directory per migration:
+
+```
+db/migrations/safe/0042-rename-email-to-primary-email/
+├── README.md           # The locks-and-load analysis, lock matrix, rollback per phase.
+├── phase-1-expand.sql
+├── phase-1-rollback.sql
+├── phase-2-migrate.sh  # backfill script
+├── phase-2-app-deploy-notes.md  # what app code must change between phases
+├── phase-3-contract.sql
+└── phase-3-rollback.sql
+```
+
+The README is the runbook. Anyone with on-call should be able to execute it without
+re-reading the skill.
+
+## Outputs
+
+- `db/migrations/safe/{NNNN}-{slug}/` directory with phased SQL + rollback + runbook.
+- For MySQL pt-osc / gh-ost paths: the helper-command shell script plus monitoring
+  notes.
+- For Postgres `CREATE INDEX CONCURRENTLY`: a separate non-transactional file (most
+  migration frameworks have a flag for this — `disable_ddl_transaction!` in Rails,
+  `-- migrate:up transaction:false` in dbmate, similar in Goose).
+- The runbook documents pre-flight checks (replication lag baseline, free disk for
+  shadow table, no long-running transactions blocking the DDL).
+
+## Edge cases
+
+- **`ALTER TABLE` blocked by a long transaction** — Postgres DDL waits behind any
+  open transaction holding a conflicting lock. Set `lock_timeout` and abort + retry
+  rather than waiting forever. Postgres 9.6+ supports `SET lock_timeout = '5s';
+  ALTER TABLE ...;`.
+- **Foreign-key constraints on huge tables** — `ALTER TABLE ... ADD CONSTRAINT ... FOREIGN KEY (...) REFERENCES ... NOT VALID;`
+  + `ALTER TABLE ... VALIDATE CONSTRAINT ...;` splits the validation off the heavy lock.
+- **Changing a column type** — almost always table-rewriting. Pattern: add a new
+  column with the new type, dual-write, backfill, swap reads, drop old. Don't try
+  `ALTER COLUMN ... TYPE ...` on a hot table.
+- **Index bloat on the shadow table (pt-osc / gh-ost)** — the helper rebuilds all
+  indexes. Disk usage temporarily ~2x; plan ahead.
+- **Logical replication subscribers** — DDL doesn't replicate by default. Apply the
+  same migration on subscribers in lockstep (or use logical replication's
+  `publish_via_partition_root`-style hooks where applicable).
+- **Read replicas with reporting traffic** — a long DDL on the primary can block
+  replay; long-running reads on the replica can block replay too. Coordinate
+  windows.
+- **Postgres TOAST + huge JSONB** — adding a JSONB column to a wide table is fine,
+  but populating it can trigger a full table rewrite via TOAST. Backfill in batches
+  to spread the churn.
+- **Partitioned tables (Postgres declarative partitions)** — `ALTER TABLE` on the
+  parent propagates to partitions. `CREATE INDEX` on the parent does NOT in older
+  versions; in PG 11+ it does, but the partitions need to be online individually
+  with CONCURRENTLY semantics. Walk the partitions explicitly.
+- **MySQL: `algorithm=instant` (8.0+)** — many additions are now instant (adding
+  a nullable column at end of table). Check `INFORMATION_SCHEMA.INNODB_METRICS`
+  for `dml_inserts_post_alter` to confirm. If `INSTANT` works, you usually don't
+  need pt-osc or gh-ost. Document explicitly which algorithm the engine picked.
+- **SQLite + WAL** — DDL still blocks all writers. Plan a maintenance window or
+  the table-swap dance during low-write hours.
+- **Application deploy ordering** — every migration plan assumes a specific
+  app-deploy ordering. State it: "Deploy app v1.5 (reads either column), then run
+  Phase 1, then deploy app v1.6 (reads + writes new column), then run Phase 2
+  backfill, then run Phase 3, then optionally deploy app v1.7 (cleans up the
+  fallback path)." Out-of-order deploys are the #1 cause of "the migration was
+  fine but the site went down".
+
+## Dependencies
+
+- `psql` / `mysql` / `sqlite3` CLI.
+- For MySQL: `pt-online-schema-change` (Percona Toolkit) and `gh-ost` (GitHub).
+- For Postgres: `squawk` linter (optional but strongly recommended).
+- WebSearch for current-version lock semantics ("Postgres 16 ALTER TABLE lock matrix").
+
+No new gstack libs. `lib/db-migration-patterns.ts` is suggested in the roadmap but only
+needed if the skill grows to programmatic plan generation; the SKILL-as-prompt path
+here is sufficient.
+
+## Stop gates
+
+- After Step 1 (intent + engine + size) — refuse to proceed without the basics.
+- After Step 6 (per phase) — every phase needs explicit approval before its scripts
+  are generated. No phase script is created speculatively.
+
+The AskUserQuestion call is a tool_use, not prose — call the tool directly. Loading the
+schema via ToolSearch and writing the recommendation as chat prose is the failure mode
+these gates exist to prevent.

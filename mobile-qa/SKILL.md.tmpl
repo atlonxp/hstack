@@ -1,0 +1,337 @@
+---
+name: mobile-qa
+preamble-tier: 3
+version: 1.0.0
+description: |
+  [Mobile] Mobile QA flow generation + execution across Maestro, Detox, XCUITest, and
+  Espresso. Auto-detects the project's stack, generates a flow for the target screen,
+  runs it against simulators/emulators for the current OS, current+1 (beta), and
+  current-1, and captures screenshots + video on failure. Writes flow files to
+  mobile/qa/flows/ and run artifacts to mobile/qa/runs/. Use when: "mobile qa",
+  "test this screen", "Maestro flow", "Detox flow", "XCUITest flow", "Espresso flow",
+  or "run the app on three OS versions". (gstack)
+allowed-tools:
+  - Read
+  - Write
+  - Edit
+  - Grep
+  - Glob
+  - AskUserQuestion
+  - Bash
+  - WebSearch
+triggers:
+  - mobile qa
+  - test this mobile screen
+  - generate maestro flow
+  - run detox
+  - xcuitest flow
+  - espresso flow
+---
+
+{{PREAMBLE}}
+
+{{BASE_BRANCH_DETECT}}
+
+# /mobile-qa — Family E1 — Mobile
+
+Generate a UI-test flow for a mobile screen, run it across three OS versions, and produce
+a verdict with evidence. The flow is checked in so the same test runs in CI on every PR;
+the runs are local artifacts (gitignored under `mobile/qa/runs/`).
+
+Two modes:
+
+- **Author mode** — generate a new flow file for a screen the user names.
+- **Run mode** — execute existing flow(s) against current+1 and current-1 simulators/
+  emulators and collect artifacts.
+
+## When to use
+
+- A new screen just landed via `/mobile-build` and needs end-to-end coverage.
+- A bug report references "only on iOS 17" or "only on Android 14" and you need to
+  reproduce + lock down the regression with a flow.
+- Pre-release smoke pass — run all flows on the target OS matrix before `/mobile-release`
+  uploads the build.
+
+**Do not use for:**
+
+- Web QA — that's `/qa`.
+- Unit-level testing — that's part of `/mobile-build` step 3 (per-stack test scaffold).
+- Performance profiling — that's `/mobile-perf`.
+
+## Stack auto-detection
+
+Same detection block as `/mobile-build`. The detected stack picks the flow tool:
+
+| Stack          | Flow tool (preferred)        | Fallback                |
+|----------------|------------------------------|-------------------------|
+| React Native   | Maestro (YAML)               | Detox (JS)              |
+| Flutter        | Maestro (YAML)               | `integration_test` + Patrol |
+| Native iOS     | XCUITest (Swift)             | Maestro                 |
+| Native Android | Espresso + Compose-test (Kotlin) | Maestro             |
+| Hybrid         | Maestro                      | Detox per-platform      |
+
+**Maestro is the default for cross-platform** because one YAML drives both iOS and
+Android, and the syntax is small enough to author quickly. Pick the native tool when the
+project already uses it or when the flow needs deep native-only access (e.g., keychain,
+biometrics simulator state).
+
+State the chosen tool and reason out loud before generating any flow.
+
+## Inputs
+
+The skill accepts one or more of:
+
+1. A **screen / flow name** ("checkout", "login", "profile-edit").
+2. A **feature design doc** at `~/.gstack/projects/{slug}/*-feature-design-*.md` — the
+   "Workflow" + "Acceptance criteria" sections become the flow steps.
+3. An **existing flow file** under `mobile/qa/flows/` — run mode only.
+4. **Test data** (login email/password, fixture seeds) — if not provided, AskUserQuestion
+   to collect or to point at the project's existing fixture loader.
+
+## Procedure
+
+### Step 0: Stack + tool detection
+
+Run the detection block. State stack + chosen flow tool. AskUserQuestion only if the
+detection is ambiguous or the user wants to override the default (e.g., RN project but
+they want Detox because the team already has Detox infrastructure).
+
+### Step 1: Mode selection
+
+```bash
+# Author mode if the user named a NEW screen; run mode if flows already exist
+ls mobile/qa/flows/*.yaml mobile/qa/flows/*.test.js mobile/qa/flows/*.swift mobile/qa/flows/*.kt 2>/dev/null
+```
+
+If flows exist and the user said "run the flows" → run mode. Otherwise → author mode.
+AskUserQuestion if unclear.
+
+### Step 2: AskUserQuestion — OS matrix
+
+Pick exactly three OS versions to run against. Defaults:
+
+- **iOS**: current stable (e.g., 17.x), current beta (18.x), current-1 (16.x). Read
+  `xcrun simctl list runtimes` to see what's actually installed.
+- **Android**: current stable API level (e.g., 34), current+1 beta (35), current-1 (33).
+  Read `$ANDROID_HOME/emulator/emulator -list-avds` to see what's available.
+
+If the requested OS isn't installed, AskUserQuestion: install it (long), skip it, or
+substitute the next-closest installed version. Do not silently downgrade.
+
+### Step 3a: Author mode — generate the flow
+
+Read the feature design doc (or the user's natural-language description). Translate the
+"Workflow" steps into the chosen tool's syntax.
+
+#### Maestro (YAML)
+
+`mobile/qa/flows/{screen}.yaml`:
+
+```yaml
+appId: com.example.app
+name: {screen} happy path
+tags:
+  - smoke
+  - {screen}
+---
+- launchApp:
+    clearState: true
+- tapOn: "Email"
+- inputText: "test@example.com"
+- tapOn: "Password"
+- inputText: "password123"
+- tapOn: "Sign In"
+- assertVisible: "Welcome back"
+- takeScreenshot: home
+```
+
+Use `MAESTRO_DRIVER_STARTUP_TIMEOUT` env if the driver is slow to attach. Prefer
+`assertVisible` with the user-visible label over accessibility IDs unless the project
+already standardizes on testIDs.
+
+#### Detox (JS) — RN only
+
+`mobile/qa/flows/{screen}.e2e.js`:
+
+```javascript
+describe('{screen}', () => {
+  beforeAll(async () => { await device.launchApp({ newInstance: true, delete: true }); });
+
+  it('happy path', async () => {
+    await element(by.id('email-input')).typeText('test@example.com');
+    await element(by.id('password-input')).typeText('password123');
+    await element(by.id('signin-button')).tap();
+    await expect(element(by.text('Welcome back'))).toBeVisible();
+  });
+});
+```
+
+Update `e2e/jest.config.js` and `.detoxrc.js` to register the new flow if needed.
+
+#### XCUITest (Swift) — iOS native
+
+`mobile/qa/flows/{Screen}UITests.swift`:
+
+```swift
+final class {Screen}UITests: XCTestCase {
+  func test_happyPath() throws {
+    let app = XCUIApplication()
+    app.launch()
+    app.textFields["email-input"].tap()
+    app.textFields["email-input"].typeText("test@example.com")
+    app.secureTextFields["password-input"].tap()
+    app.secureTextFields["password-input"].typeText("password123")
+    app.buttons["signin-button"].tap()
+    XCTAssertTrue(app.staticTexts["Welcome back"].waitForExistence(timeout: 5))
+  }
+}
+```
+
+Add the file to the UI Test target in the Xcode project.
+
+#### Espresso + Compose-test (Kotlin) — Android native
+
+`mobile/qa/flows/{Screen}UITest.kt`:
+
+```kotlin
+@HiltAndroidTest
+class {Screen}UITest {
+  @get:Rule(order = 0) val hiltRule = HiltAndroidRule(this)
+  @get:Rule(order = 1) val composeRule = createAndroidComposeRule<MainActivity>()
+
+  @Test fun happyPath() {
+    composeRule.onNodeWithTag("email-input").performTextInput("test@example.com")
+    composeRule.onNodeWithTag("password-input").performTextInput("password123")
+    composeRule.onNodeWithTag("signin-button").performClick()
+    composeRule.onNodeWithText("Welcome back").assertIsDisplayed()
+  }
+}
+```
+
+For pure-View Android: use Espresso `onView(withId(...))` + `ViewMatchers`.
+
+### Step 3b: Run mode — execute existing flows
+
+Loop over the OS matrix. For each OS:
+
+1. Boot the simulator/emulator (Xcode `xcrun simctl boot` / Android `emulator -avd ...`).
+2. Build + install the app:
+   - RN/Flutter: project's standard run command.
+   - iOS: `xcodebuild build-for-testing -scheme {Scheme} -destination "platform=iOS Simulator,name={device},OS={version}"`.
+   - Android: `./gradlew :app:installDebug :app:installDebugAndroidTest`.
+3. Run the flow:
+   - Maestro: `maestro --device {udid} test mobile/qa/flows/{flow}.yaml --output mobile/qa/runs/{date}/{os}/`.
+   - Detox: `detox test --configuration ios.sim.debug -o mobile/qa/runs/{date}/ios{ver}/`.
+   - XCUITest: `xcodebuild test-without-building -scheme {Scheme} -destination "..." -resultBundlePath mobile/qa/runs/{date}/ios{ver}.xcresult`.
+   - Espresso: `./gradlew connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class={pkg}.{Screen}UITest`. Pull artifacts from `app/build/reports/androidTests/connected/`.
+4. On failure, capture screenshots + video:
+   - Maestro: artifacts are emitted by default.
+   - Detox: `recordVideos: 'failing'` in `.detoxrc`.
+   - XCUITest: enable `Attachments` in test plan; results live in the `.xcresult`.
+   - Espresso: use `androidx.test:runner` with `--es debug true` + `screenrecord` via adb.
+
+### Step 4: Triage
+
+Parse exit codes + result files. Classify each flow per OS as:
+
+- **pass** — exited 0, no failed assertions.
+- **fail (functional)** — assertion failed; likely a real bug.
+- **fail (flake)** — failed with a timing/race signature (timeout on existing element,
+  intermittent across re-runs).
+- **fail (env)** — simulator/emulator setup error; not the app's fault.
+
+For each functional fail, capture: flow name, OS, step that failed, screenshot path,
+video path, last 100 lines of log.
+
+For flakes: re-run up to 2 times automatically. If 3-of-3 fail, downgrade to functional.
+
+### Step 5: Report
+
+Write `mobile/qa/runs/{YYYY-MM-DD-HHMM}/report.md`:
+
+```markdown
+# Mobile QA Run — {YYYY-MM-DD HH:MM}
+Stack: {stack} · Tool: {tool}
+
+## Matrix
+
+| Flow         | iOS 16.4 | iOS 17.5 | iOS 18.0β | Android 33 | Android 34 | Android 35β |
+|--------------|----------|----------|-----------|------------|------------|-------------|
+| login        | pass     | pass     | fail (E)  | pass       | pass       | pass        |
+| checkout     | pass     | fail (F) | fail (F)  | pass       | pass       | fail (F)    |
+
+Legend: F = functional, E = env, blank = not run.
+
+## Functional failures
+{per-failure section with screenshot + step}
+
+## Environment failures
+{per-failure section with cause}
+
+## Flakes detected
+{flow, OS, attempts}
+```
+
+If invoked from `/mobile-release` Step 2, return the report path + a single-line verdict
+(`PASS` / `FAIL` / `FLAKY`).
+
+## Outputs
+
+- **Flow file(s)** under `mobile/qa/flows/` (Maestro YAML, Detox JS, XCUITest Swift, or
+  Espresso/Compose Kotlin).
+- **Run artifacts** under `mobile/qa/runs/{YYYY-MM-DD-HHMM}/{os}/` — screenshots, videos,
+  raw logs, `.xcresult` bundles.
+- **Run report** at `mobile/qa/runs/{YYYY-MM-DD-HHMM}/report.md`.
+- **CI hook** — if a `.github/workflows/` directory exists, drop a starter
+  `mobile-qa.yml` running Maestro on macOS runners (iOS) and `reactivecircus/android-emulator-runner`
+  (Android). Comment-only by default; do not enable without user confirmation.
+
+## Edge cases
+
+- **Simulator state pollution** — keychain, defaults, and pasteboard survive
+  `simctl boot`. Always `simctl erase` before the run or use Maestro's `clearState: true`
+  / Detox's `delete: true`.
+- **Network mocks** — flaky tests usually come from real network calls. Prefer the
+  project's existing mock layer (MSW, Stripe test mode, fixture server). If none exists,
+  flag as a TODO; do not bake real prod URLs into the flow.
+- **Login state** — split flows into "login required" vs "already authed" groups. The
+  login flow tests login; everything else assumes authed state via a session-seeded
+  build variant.
+- **Permissions dialogs** (camera, push, location) — pre-grant via simulator/emulator
+  CLI before the run. iOS: `simctl privacy <udid> grant camera <bundle-id>`. Android:
+  `adb shell pm grant <pkg> android.permission.CAMERA`.
+- **Push notifications** — full push round-trip requires real APNs/FCM. For UI testing,
+  inject the notification payload via simulator/emulator commands rather than a real send.
+- **Biometrics** — iOS simulator: `Features → Face ID → Enrolled` + `Matching Face`.
+  Android emulator: `adb -e emu finger touch 1`. Both are scriptable.
+- **Device vs simulator parity** — simulators are good enough for ~95% of UI flows;
+  real-device-only failures (GPU bugs, sensors, performance) need a separate device-cloud
+  run (BrowserStack / SauceLabs / Firebase Test Lab). Surface this as a TODO when needed.
+- **Tablet flows** — add a tablet variant to the OS matrix only when the spec demands it;
+  default matrix is phone only.
+
+## Dependencies
+
+- **Maestro** — `curl -Ls "https://get.maestro.mobile.dev" | bash`. Verify with
+  `maestro --version`.
+- **Detox** — `npm i -g detox-cli`; project must already have Detox configured.
+- **Xcode + XCUITest** — Xcode 15+, `xcodebuild`, `xcrun simctl`. Optional `xcbeautify`.
+- **Android SDK + Espresso** — Android SDK 34, `adb`, `emulator`. Gradle wrapper.
+- **iOS Simulators** — `xcodebuild -downloadPlatform iOS` to add OS versions.
+- **Android Emulators** — `sdkmanager "system-images;android-{api};google_apis;arm64-v8a"`
+  + `avdmanager create avd ...`.
+
+No new gstack libs. New `bin/gstack-mobile-qa` wrapper is the only addition.
+
+## Stop gates
+
+- After Step 0 (stack + tool confirmation) — do not generate flows in the wrong syntax.
+- After Step 2 (OS matrix) — never silently substitute an OS version; always confirm
+  with the user.
+- After Step 3a (author mode) — show the generated flow to the user before running it.
+
+The AskUserQuestion call is a tool_use, not prose — call the tool directly. Loading the
+schema via ToolSearch and writing the recommendation as chat prose is the failure mode
+these gates exist to prevent.
+
+{{LEARNINGS_LOG}}

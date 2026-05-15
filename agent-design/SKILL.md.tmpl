@@ -1,0 +1,314 @@
+---
+name: agent-design
+preamble-tier: 2
+version: 1.0.0
+description: |
+  [AI Engineering / Research] Designs an LLM agent as a typed state machine, not an ad-hoc
+  while-loop. Pick a pattern (ReAct / Plan-Solve / Reflexion / Anthropic-style
+  sub-agents), declare tools, prompts, stopping criteria, and an eval plan.
+  Also audits an existing agent for infinite loops, hallucinated tools, lost
+  intent. Outputs agents/{slug}/{state-machine.ts,tools.ts,prompts/,EVAL.md}.
+  Use when: "design an agent", "build a tool-using LLM", "audit my agent loop",
+  "why does the agent keep failing". (gstack)
+voice-triggers:
+  - "agent design"
+  - "design an agent"
+  - "audit my agent"
+triggers:
+  - agent design
+  - llm agent
+  - state machine agent
+allowed-tools:
+  - Bash
+  - Read
+  - Write
+  - Edit
+  - Glob
+  - Grep
+  - AskUserQuestion
+---
+
+{{PREAMBLE}}
+
+# /agent-design — Family G — AI Engineering / Research
+
+You are running the `/agent-design` skill. Most LLM agents are designed by
+typing "while not done: think; act; observe" in a notebook and adding tools
+until something works. The result: tangled prompts, lost intent halfway
+through, infinite tool-loops, hallucinated tool calls, no eval, no way to
+debug what went wrong.
+
+This skill imposes structure: pick a pattern, model the agent as a typed state
+machine, name the tools and their preconditions, define stopping criteria,
+build an eval that catches the agent's specific failure modes.
+
+---
+
+## When to use
+
+Use this skill when:
+
+- You're designing a new agent feature (browser-driving, research, code-gen,
+  customer-support escalation, multi-doc reasoning).
+- An existing agent is failing in production and you don't know whether to
+  blame the prompts, the tools, the stopping criteria, or the model.
+- You want a second opinion on an agent before it ships — pair with `/codex`
+  for the adversarial review.
+
+Do NOT use this skill for single-shot LLM calls (no tools, no multi-turn).
+Those are prompts; use `/prompt-engineering` instead.
+
+---
+
+## Inputs
+
+Required:
+
+1. **Agent slug** (e.g., `support-triage`, `research-deep-dive`, `tsl-translate`).
+2. **Task spec** — what does the agent take in and produce? "Given a customer
+   email, classify, draft response, route to human if confidence < 0.8."
+3. **Mode** — `design-new` (build from scratch) or `audit-existing` (review
+   running code for failure modes).
+4. **Pattern preference** (optional — skill will recommend if blank):
+   `react / plan-solve / reflexion / anthropic-subagents / custom`.
+5. **Available tools** — list of functions the agent can call (with arg
+   schemas if known), or "design these from scratch."
+6. **Stopping criteria** — "done when X" definition. "When the email is sent",
+   "when the user types stop", "max 8 tool calls".
+7. **Eval criteria** — what does success look like? Hands off to
+   `/eval-harness`.
+
+---
+
+## Patterns
+
+This skill knows five canonical patterns. AskUserQuestion to pick one if the
+input doesn't specify.
+
+### ReAct (Reason + Act)
+
+- **Loop:** thought → action → observation → thought → ...
+- **Stops:** explicit `done` action, or max-iteration cap.
+- **Strength:** transparent, easy to debug, models can show their work.
+- **Weakness:** every step is one LLM call → expensive, slow. No replanning.
+- **Pick when:** task is < 10 steps, tools are reliable, you can afford
+  per-step LLM calls.
+
+### Plan-Solve
+
+- **Loop:** one planning call produces an ordered tool plan; an executor
+  runs each step; a verifier checks each output.
+- **Stops:** plan complete, or verifier rejects step + replan triggers.
+- **Strength:** cheap (planning is one call), debuggable plan artifact.
+- **Weakness:** plans go stale when tool output disagrees with the plan.
+- **Pick when:** task has clear phases, tool outputs are predictable, cost
+  matters.
+
+### Reflexion
+
+- **Loop:** Plan-Solve + a verbal-feedback memory that accumulates failures
+  across attempts; the next attempt reads the failure trace and adapts.
+- **Stops:** success on a try, or max-attempts cap.
+- **Strength:** the agent gets better over attempts within a session.
+- **Weakness:** memory contamination — failed attempts can plant bad
+  hypotheses. Latency multiplied by attempt count.
+- **Pick when:** task allows multiple tries (e.g., code-gen with tests as
+  ground truth, math problem-solving).
+
+### Anthropic-style sub-agents
+
+- **Loop:** parent agent spawns child agents per sub-task; children return
+  structured summaries; parent recomposes. Children may spawn grandchildren.
+- **Stops:** parent declares done. Child sub-tasks bounded.
+- **Strength:** clean intent boundary per child, parallelism, context-window
+  preserved by child summary-on-return.
+- **Weakness:** child summaries are lossy; parent must trust a summary it
+  didn't watch produce. Coordination cost.
+- **Pick when:** task decomposes cleanly into independent sub-tasks
+  (research, multi-doc analysis, parallel exploration).
+
+### Custom
+
+- Hand-rolled state machine. Use only if none of the above fit. Document why
+  in EVAL.md.
+
+---
+
+## Procedure
+
+### Step 1 — Read existing agent (audit mode only)
+
+If `--mode audit-existing`: read the agent's loop code, its tools, its
+prompts. Identify the implicit pattern. Use Grep to find:
+
+- Implicit ReAct: a while-loop with one LLM call per iteration.
+- Implicit Plan-Solve: a plan function called once, then a loop.
+- Implicit infinite-loop risk: no iteration cap.
+- Hallucinated-tool risk: tool dispatch by name without strict-match.
+
+Surface findings before redesigning.
+
+### Step 2 — Pick pattern via AskUserQuestion
+
+Show the user the pattern table above. Recommend one based on task spec.
+Confirm or override.
+
+### Step 3 — Model as typed state machine
+
+Write `agents/{slug}/state-machine.ts` (or `.py`). Define:
+
+```ts
+type State =
+  | { kind: "idle" }
+  | { kind: "planning"; input: Input }
+  | { kind: "executing"; plan: Plan; step: number }
+  | { kind: "verifying"; output: StepOutput }
+  | { kind: "reflecting"; failures: FailureTrace[] }
+  | { kind: "done"; result: Result }
+  | { kind: "failed"; reason: FailureReason };
+
+type Event =
+  | { kind: "tool_result"; tool: ToolName; output: ToolOutput }
+  | { kind: "llm_response"; content: string }
+  | { kind: "timeout" }
+  | { kind: "stop_requested" };
+
+function transition(state: State, event: Event): State { /* exhaustive */ }
+```
+
+**Exhaustiveness matters.** Every state × event pair has a defined transition
+(or an explicit "ignore"). The compiler will catch missing cases.
+
+### Step 4 — Declare tools with strict schemas
+
+Write `agents/{slug}/tools.ts`. Each tool gets:
+
+- **Name** — exact string the LLM uses.
+- **Args schema** — JSON Schema / Zod / Pydantic. Type-check before dispatch.
+- **Preconditions** — what state must hold before this tool can run?
+- **Postconditions** — what does success guarantee?
+- **Error contract** — what does failure look like? Tool returns
+  `{ok: true, value} | {ok: false, error}` always.
+- **Side effects** — does this tool write to a system? If yes, gate behind
+  dry-run flag for tests.
+
+Hallucinated-tool defense: dispatch is by exact-string match against a
+registered tool name. Unknown tool name → state transitions to `failed`
+with `reason: "hallucinated_tool"`. Never silently retry.
+
+### Step 5 — Author prompts
+
+Write `agents/{slug}/prompts/`:
+
+- `system.md` — role, capability surface, NON-capabilities, output format
+  contract.
+- `planning.md` (pattern-specific) — input schema, expected output schema.
+- `step.md` — per-step prompt template.
+- `reflect.md` (Reflexion only) — failure-trace summarization template.
+
+Every prompt declares the output format explicitly. JSON output uses
+structured outputs (OpenAI function calling, Anthropic tool use, or
+constrained decoding) — never freeform JSON parsing.
+
+### Step 6 — Define stopping criteria
+
+```ts
+const STOP_CONDITIONS = {
+  max_iterations: 12,
+  max_tool_calls: 20,
+  max_wall_seconds: 300,
+  max_cost_usd: 0.50,
+  user_signal: "stop",
+  explicit_done_state: true,
+} as const;
+```
+
+All five caps fire as `failed` with the cap name. No silent termination.
+
+### Step 7 — Build the eval
+
+Hand off to `/eval-harness` with:
+
+- Feature slug = agent slug.
+- Failure mode = the specific mode this agent struggles with (lost intent,
+  tool-loop, hallucinated tool, dropped step, premature done).
+- Dataset = at minimum 20 task instances with known good outcomes.
+- Metric = task-success rate + cost-per-task + steps-per-task + tool-error
+  rate.
+
+The eval must catch each named failure mode. If "hallucinated tool" is a
+risk, the eval includes prompts that tempt the model toward unknown tool
+names.
+
+### Step 8 — Write EVAL.md
+
+Capture: pattern chosen, why; tool inventory + their failure modes; stopping
+criteria + tested caps; eval seed dataset + baseline metrics; known
+unresolved risks.
+
+### Step 9 — Pair with `/codex` (recommended)
+
+The agent state machine + tools + prompts is exactly the surface where
+`/codex challenge` shines. Ask Codex to break it: "what input causes this
+agent to loop forever?", "what tool call sequence violates a precondition?".
+
+---
+
+## Outputs
+
+- `agents/{slug}/state-machine.ts` — typed state machine + exhaustive
+  transition function.
+- `agents/{slug}/tools.ts` — tool registry with schemas, pre/postconditions,
+  error contracts.
+- `agents/{slug}/prompts/{system,planning,step,reflect}.md` — versioned
+  prompts.
+- `agents/{slug}/EVAL.md` — pattern + tool + stopping + eval baseline.
+- Paired `evals/{agent-slug}/` via `/eval-harness`.
+
+---
+
+## Edge cases
+
+- **Agent has access to a mutating tool** (writes a file, sends an email,
+  charges a card): every mutation tool requires `--dry-run` mode AND a
+  human-in-the-loop confirmation step in the state machine, unless the agent
+  is explicitly declared autonomous in the task spec.
+- **Browser-driving agent** (cross-references `/agent-browser`,
+  `/open-gstack-browser`): tool list includes the full browse command
+  surface; precondition is "browser session active"; cost model includes
+  network latency.
+- **Agent that spawns sub-agents** (Anthropic pattern): set a max-depth cap
+  (3 is sane); each child has its own state machine instance; results are
+  summarized through a structured-output schema.
+- **Reflexion memory leak:** failure traces are summarized after each
+  attempt, never raw-concatenated. Token budget per memory: 1000 tokens max.
+- **Long-running agent** (> 5 min): persist state to disk every transition
+  so crash-recovery is possible. Use a typed durable-execution lib if you
+  have one (Temporal, Inngest); otherwise a versioned JSON file.
+
+---
+
+## Dependencies
+
+- **`/eval-harness`** — every agent design ships with an eval that catches
+  its named failure modes.
+- **`claude-api` skill** — for Claude tool use patterns.
+- **`/agent-browser`** — for browser-driving agents.
+- **`/codex`** — adversarial review of state machine + tools.
+- **LLM SDKs:** `@anthropic-ai/sdk`, `openai`, or `langchain` for the agent
+  runtime. Skill names these as CHOICES — pick what the project uses.
+- **Validation libs:** `zod` (TS), `pydantic` (Python) for tool arg schemas.
+
+---
+
+## AskUserQuestion gates
+
+1. **Mode** — `design-new` vs `audit-existing`. Audit-mode reads code
+   first, doesn't write until findings are confirmed.
+2. **Pattern** — `react / plan-solve / reflexion / anthropic-subagents /
+   custom`. Show the pattern table; let the user pick.
+3. **Named failure mode** — required for eval design. "Loses intent",
+   "loops on tool error", "hallucinates tool", "stops too early", etc.
+4. **Mutation policy** — if any tool mutates external state, confirm
+   dry-run-default and human-in-the-loop policy.
+5. **Pair with `/codex challenge`?** — recommended; let the user opt out.

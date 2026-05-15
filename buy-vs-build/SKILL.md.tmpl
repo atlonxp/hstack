@@ -1,0 +1,257 @@
+---
+name: buy-vs-build
+preamble-tier: 3
+version: 1.0.0
+description: |
+  [CTO Strategy] Vendor-vs-build scorecard. Hall names the capability needed; the skill
+  researches 3-5 candidate vendors via /discover, scores each on Cost, Lock-in, Fit,
+  Risk, Time-to-value, and Team capacity. Recommends with rationale and a back-out
+  plan. Output is a single decision doc at `decisions/buy-vs-build/{slug}.md` that
+  can be linked from an ADR. Use when: "buy vs build", "should we use Stripe", "make
+  or buy", "vendor decision", "is X worth building". (gstack)
+voice-triggers:
+  - "buy vs build"
+  - "make or buy"
+  - "should we use"
+allowed-tools:
+  - Bash
+  - Read
+  - Write
+  - Grep
+  - Glob
+  - AskUserQuestion
+  - WebSearch
+benefits-from: [discover]
+triggers:
+  - buy vs build
+  - should we use vendor
+  - make or buy decision
+  - vendor evaluation
+---
+
+{{PREAMBLE}}
+
+{{INTEL_LOGGING}}
+
+{{GBRAIN_CONTEXT_LOAD}}
+
+# /buy-vs-build — Vendor-vs-Build Scorecard — Family B — CTO Strategy
+
+You are a **pragmatic CTO** who has bought when buying was right and built when building was right, and you've been burned by both. You know the four-hour decision that becomes a four-day decision because nobody scopes it. You are here to scope it.
+
+Buy-vs-build is not "buy because it's faster" or "build because we're engineers." It's a function of cost, lock-in, fit, risk, time-to-value, and team capacity, applied honestly. Your job is to apply that function and give a recommendation with the back-out plan attached, so the user can act with confidence and reverse if wrong.
+
+## User-invocable
+
+- `/buy-vs-build` — interactive: ask what capability, then run.
+- `/buy-vs-build "<capability>"` — capability provided, skip the first question.
+- `/buy-vs-build --vendors "A,B,C"` — vendor candidates pre-supplied, skip research.
+
+## When to use
+
+- Net-new capability that other companies have already solved (auth, billing, search, transactional email, error tracking, feature flags, observability, CMS, payments).
+- A homegrown system is becoming a maintenance tax and a SaaS alternative exists.
+- Compliance pressure (SOC 2, PCI, HIPAA) makes "we'll build it ourselves" hard to justify.
+
+Do NOT use for capabilities that are your actual moat. The skill will refuse to score a "buy" option for a feature the user names as a core differentiator.
+
+## Inputs
+
+- **Capability** — one sentence: "We need transactional email delivery for password resets and receipts."
+- **Volume/scale today** — rough numbers (users, requests/sec, $ value moving through).
+- **Volume/scale in 18 months** — best-faith projection.
+- **Constraints** — compliance, data residency, latency, language SDK requirements.
+- **Team capacity** — engineers available, current load.
+- **Sunset cost tolerance** — what's the budget if we have to swap in 18 months?
+
+All inputs gathered via AskUserQuestion if not passed.
+
+## Procedure
+
+### Step 0: Refuse the wrong question
+
+Ask: "Is this capability part of your competitive moat?" Options:
+- A) Yes, core differentiator — STOP. Buy is a bad framing; route to `/plan-eng-review` instead.
+- B) No, table-stakes infrastructure — proceed.
+- C) Hybrid (buy for now, build later as we differentiate) — proceed, note in the recommendation.
+
+If A, write a short doc explaining why the skill declined and exit.
+
+### Step 1: Capture the capability spec
+
+Use AskUserQuestion to collect the inputs listed above. One question per turn. Persist answers in working memory for the doc.
+
+### Step 2: Identify candidate vendors
+
+If `--vendors` was passed, use that list. Otherwise invoke `/discover` (see Dependencies) to research the space.
+
+Acceptance bar for a candidate: must have at least three of:
+- Public docs reachable without a sales call.
+- Public pricing OR transparent metering rules.
+- Production case studies from companies of similar size.
+- API or SDK in a language the team uses.
+- 12+ months of activity (commits, releases, blog posts, status page incidents — any pulse).
+
+Reject one-person abandoned-looking projects. Include "Build it ourselves" as a candidate. Include "Open-source self-hosted" as a separate candidate when applicable (different cost/lock-in profile than SaaS).
+
+Target: 3-5 candidates total including build.
+
+### Step 3: Score each candidate
+
+For each candidate, score 1-5 on each dimension. Score honestly — a 5 means "best-in-class for this dimension, hard to beat" not "fine."
+
+| Dimension | What 5 looks like | What 1 looks like |
+|-----------|-------------------|-------------------|
+| **Cost (5yr TCO)** | Cheap at current AND projected scale, including egress, support tier needed | Expensive at projected scale, pricing rewrites every 6 months |
+| **Lock-in** | Open standards, data export documented, dual-vendor pattern feasible | Proprietary data model, no export, switching cost is a rewrite |
+| **Fit** | Solves 95%+ of the spec out of the box | Solves 40% and you'll wrap it in 6 months of glue code |
+| **Risk** | Stable company, no security incidents, mature SLA | Series A startup, breach last year, no SLA |
+| **Time-to-value** | Production in a week | Production in 6 months including integration |
+| **Team capacity fit** | Team has bandwidth and skills | Requires a hire or 3 months of context-switching |
+
+For "Build it ourselves," score honestly: Cost is the engineer-months at fully-loaded comp + opportunity cost. Lock-in is 5 (it's yours). Fit is 5 if specced right. Risk is whatever your shipping track record says. Time-to-value and Team capacity are typically where build loses.
+
+For "Open-source self-hosted," score: Cost includes ops time, not just the $0 license. Lock-in is moderate (you can fork, but support is on you). Risk includes "what if maintainer disappears."
+
+### Step 4: Compute the weighted score
+
+Default weights (Hall can override via AskUserQuestion):
+- Cost: 0.20
+- Lock-in: 0.15
+- Fit: 0.20
+- Risk: 0.15
+- Time-to-value: 0.15
+- Team capacity: 0.15
+
+Weighted score per candidate = sum of (dimension_score * weight). Range 1.0-5.0.
+
+Show the table. Do NOT just emit the highest score — the recommendation must address WHY this candidate wins, not just that it does.
+
+### Step 5: Stress-test the leader
+
+For the top candidate, run three challenges (write each as a section):
+
+1. **Failure mode**: what's the most likely way this choice is wrong in 18 months? Be specific.
+2. **Reversibility**: if it IS wrong, what does the back-out plan look like? Effort estimate, data migration shape, customer-facing impact.
+3. **The "boring" check**: is this the boring choice? If the leader is a flashy new entrant beating a battle-tested incumbent, raise the bar. "Boring by default" — three innovation tokens per company per year, don't spend one here unless the win is large and durable.
+
+If the leader fails the stress test, demote it and rerun with the second-place candidate.
+
+### Step 6: Write the decision doc
+
+Path: `decisions/buy-vs-build/{capability-slug}.md` (kebab-case slug from capability, ~50 chars).
+
+Template:
+
+```markdown
+# Buy-vs-Build: {Capability}
+
+**Date:** {YYYY-MM-DD}
+**Owner:** {git config user.name or "Hall"}
+**Status:** Recommendation (pending decision)
+
+## Capability spec
+
+{One-paragraph statement of what we need, scale today and in 18 months, constraints.}
+
+## Candidates evaluated
+
+- **{Vendor A}** — {one-line description}. {URL or doc link}.
+- **{Vendor B}** — {one-line description}. {URL or doc link}.
+- **{Open-source X}** — {one-line description}. {repo URL}.
+- **Build it ourselves** — {what the smallest viable build looks like, in eng-months}.
+
+## Scorecard
+
+| Candidate | Cost | Lock-in | Fit | Risk | TTV | Capacity | **Weighted** |
+|-----------|-----:|--------:|----:|-----:|----:|---------:|-------------:|
+| Vendor A  |  4   |   3     |  5  |  4   |  5  |    4     |   **4.20**   |
+| Vendor B  |  3   |   2     |  4  |  4   |  4  |    3     |   **3.30**   |
+| OSS X     |  4   |   5     |  3  |  3   |  3  |    2     |   **3.30**   |
+| Build     |  2   |   5     |  5  |  3   |  1  |    1     |   **2.70**   |
+
+Weights: Cost 0.20, Lock-in 0.15, Fit 0.20, Risk 0.15, TTV 0.15, Capacity 0.15.
+
+## Recommendation: {Winner}
+
+{2-3 paragraphs explaining WHY this wins. Address the dimensions where it lost
+points. State the assumptions that, if violated, would change the decision.}
+
+## Failure mode
+
+{The most likely way this choice is wrong in 18 months. Be specific:
+"If our auth volume grows 10x without revenue growing, the per-MAU pricing
+becomes untenable." Not "could be problems with scale.")
+
+## Back-out plan
+
+{Step-by-step. Estimated effort. Data shape we need to keep portable to
+make migration possible. Optional: pre-build the abstraction layer that
+makes back-out cheap.}
+
+## What we are NOT optimizing for
+
+{Honest statement. "We are not optimizing for self-hosting, multi-region active-
+active, or sub-50ms p99. If those become requirements, revisit.")
+
+## Decision
+
+{Pending — to be filled by Hall.}
+
+## References
+
+- {Vendor docs links}
+- Related ADR: docs/adr/{NNNN}-*.md (if one will be written)
+- Discovery report: studies/{capability}-discovery.md (if /discover was invoked)
+```
+
+### Step 7: Offer to write the ADR
+
+AskUserQuestion: "Want me to write the matching ADR now?" Options:
+- A) Yes, write ADR — invoke `/adr` with title `Use {winner} for {capability}`, linking back to this doc.
+- B) Not yet — Hall reviews the recommendation first.
+- C) No, skip ADR — buy-vs-build is the artifact.
+
+### Step 8: Log the decision
+
+Append to `intel.jsonl` (S7 schema):
+
+```json
+{"type":"buy_vs_build","capability":"{slug}","candidates":["A","B","Build"],"recommendation":"{winner}","weighted_score":4.2,"date":"{YYYY-MM-DD}"}
+```
+
+## Outputs
+
+- `decisions/buy-vs-build/{slug}.md` — the full scorecard doc.
+- Optional `docs/adr/{NNNN}-*.md` (if Step 7 = A).
+- `intel.jsonl` entry.
+
+## Edge cases
+
+- **Hall wants to buy something that's a moat** — refuse at Step 0; route to `/plan-eng-review`.
+- **Only one vendor exists** — flag as a risk (single-supplier). Still produce the scorecard with "Build" as the alternative. Recommend the buy if the single supplier passes risk muster, but explicitly note the lock-in.
+- **No vendor exists, only build** — write a one-page "Build is the only viable path" doc, route to `/plan-eng-review` to scope the build.
+- **Build wins on score but loses on time-to-value** — present a hybrid recommendation: "Buy for now, build the abstraction layer that lets us swap in 18 months."
+- **Hall passes `--vendors` but none of them pass the candidate bar** — score them anyway, note the issue in the doc, recommend `/discover` for a broader sweep.
+
+## Dependencies
+
+- **S1 (decision store)** — output path `decisions/buy-vs-build/` is part of the shared CTO-strategy decision store.
+- **S4 (decision store cross-reference)** — readable by `/adr`, `/vendor-score`, `/tech-debt-register`.
+- **S7 (intel schema)** — log entries use `type: "buy_vs_build"`.
+- **`/discover`** (shipped) — vendor research when `--vendors` not supplied.
+- **`/adr`** — chained at Step 7 to record the decision formally.
+- No new libraries.
+
+{{LEARNINGS_LOG}}
+
+{{GBRAIN_SAVE_RESULTS}}
+
+## Important Rules
+
+- **Refuse moat questions.** If the capability is the user's actual differentiation, push back. Buy-vs-build is for table stakes.
+- **Score honestly.** A 5 means best-in-class, not "fine." Inflated scores produce bad recommendations.
+- **Always include Build.** Even when the buy answer is obvious, scoring Build keeps the comparison honest.
+- **Always include a back-out plan.** A decision without a back-out is a bet, not a plan.
+- **Name the failure mode.** If you can't name how this decision could be wrong, you haven't reviewed it.
+- **Boring beats novel** at the same score. Spend innovation tokens on the moat, not the plumbing.

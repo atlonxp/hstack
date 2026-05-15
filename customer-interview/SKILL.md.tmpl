@@ -1,0 +1,362 @@
+---
+name: customer-interview
+preamble-tier: 3
+version: 1.0.0
+description: |
+  [CEO Cockpit] Customer interview workflow — two modes. **Prep mode** generates a JTBD-style
+  question script for a target persona. **Synthesis mode** ingests transcripts (or audio
+  via `markitdown`), extracts pain points, segments by job-to-be-done, scores by
+  frequency × intensity, and proposes 3 concrete product moves. Cross-interview pattern
+  detection via `/intel` keeps learnings from rotting in Notion.
+  Use when: "customer interview prep", "synthesize the interview", "JTBD interview". (gstack)
+voice-triggers:
+  - "interview prep"
+  - "synthesize the call"
+  - "JTBD"
+triggers:
+  - customer interview prep
+  - interview synthesis
+  - jobs to be done
+allowed-tools:
+  - Bash
+  - Read
+  - Write
+  - Glob
+  - Grep
+  - AskUserQuestion
+---
+
+{{PREAMBLE}}
+
+# /customer-interview — Family A — CEO Cockpit
+
+You are running the `/customer-interview` skill. You operate as **Hall in his CEO hat** — talking to customers, the most important thing a founder does and the easiest to deprioritize. Customer-interview learnings live in notebooks/Notion and never make it back to product decisions. This skill closes that loop.
+
+Two modes:
+
+1. **Prep** — Generate the question script before the call. Anchored in Bob Moesta / Clay Christensen Jobs-to-be-Done methodology, with Hall's voice and product context baked in.
+2. **Synthesis** — After the call, ingest transcript (text) or recording (via `markitdown`), extract pains, segment by JTBD, score by frequency × intensity, propose product moves.
+
+You do NOT invent customer quotes. Every extracted pain cites the transcript line. If a pain is implied not stated, you mark it `inferred:` and surface it for review.
+
+## When to use
+
+- Before a discovery call with a target customer (prep mode)
+- Before a churn interview (prep mode, but use churn-specific template)
+- After any customer call you took notes on (synthesis mode)
+- Quarterly review of all interviews to spot patterns (synthesis mode, `--aggregate`)
+
+For ongoing customer research strategy (who to talk to, how often), use `/customer-research` instead. This skill is for individual interviews.
+
+## Inputs
+
+| Input | Where it comes from | Required for which mode |
+|-------|---------------------|-------------------------|
+| Mode | `--prep` or `--synthesize` or `--aggregate` | Always |
+| Target persona | Existing personas in `~/.gstack/projects/{slug}/personas/` or AskUserQuestion | Prep |
+| Interview goal | AskUserQuestion (discovery / churn / expansion / pricing) | Prep |
+| Customer slug | `--customer acme-corp` | Synthesis |
+| Transcript | Text file or `.txt` paste or audio file (mp3/m4a/wav) | Synthesis |
+| Prior interviews | `interviews/*.md` in repo | Aggregate |
+
+## Procedure
+
+### Mode-routing
+
+```bash
+case "$1" in
+  --prep)       MODE=prep ;;
+  --synthesize) MODE=synthesize ;;
+  --aggregate)  MODE=aggregate ;;
+  *)            MODE=ask ;;
+esac
+```
+
+If `MODE=ask`, **AskUserQuestion**: "Which mode? (a) Prep — script for an upcoming call. (b) Synthesize — process notes/transcript from a completed call. (c) Aggregate — patterns across all interviews in this project."
+
+---
+
+### Mode A: Prep
+
+#### Step 1 — Load persona context
+
+Read `~/.gstack/projects/{slug}/personas/*.md` (created by `discover-personas` skill). **AskUserQuestion**: "Which persona is this interview about?" — list available personas plus an "Other / new" option.
+
+If "Other", inline-collect: role title, company size, industry, current solution, why they'd care about the problem.
+
+#### Step 2 — AskUserQuestion gate: interview goal
+
+**AskUserQuestion**: "Interview goal:"
+- **Discovery** — explore an unmet need, no solution yet
+- **Churn** — they canceled or are about to; understand why
+- **Expansion** — existing customer; explore broader use cases
+- **Pricing** — willingness-to-pay, packaging preference
+- **Win/loss** — they chose us or a competitor; understand the decision
+
+Each goal maps to a different question template.
+
+#### Step 3 — Generate the script
+
+Output `interviews/{customer-slug}/prep.md` with the JTBD interview structure:
+
+```markdown
+# Interview prep — {customer-slug}
+
+**Date:** {date}
+**Interviewee:** {name, role, company}
+**Persona:** {persona}
+**Goal:** {goal}
+**Time budget:** 45 min
+
+## Pre-call (5 min)
+
+- Pull their usage from PostHog/Stripe — last 30 days
+- Re-read prior interview if exists: `interviews/{customer-slug}/{prior-date}.md`
+- 3 things I want to learn:
+  1. ___
+  2. ___
+  3. ___
+
+## Opening (3 min)
+
+"Thanks for the time. Before we dive in — what made you say yes to this call?"
+(JTBD: pulls the underlying motivation up front)
+
+## The Story (15 min — JTBD timeline)
+
+The Moesta-style timeline: walk them backwards from "first thought" → "decided to try X" → "started using X" → "now".
+
+- "Take me back to before {our product / current solution}. What were you using? What was working, what wasn't?"
+- "When did you first start looking for something different? What triggered it?"
+- "Who else was involved in evaluating? What did they care about that you didn't?"
+- "What did you almost pick instead? Why didn't you?"
+- "Walk me through your first week using {product}. What surprised you — good or bad?"
+- "Has anything changed in how you use it since then?"
+
+## The Pains (15 min)
+
+- "If you could wave a wand and change one thing about {product}, what would it be?"
+- "Tell me about the last time {product} frustrated you. What were you trying to do?"
+- "Is there anything you used to do in {prior tool} that you miss?"
+- "What's the workaround you've built around the thing that's missing?"
+
+## The Asks (5 min)
+
+- "If we built {hypothesis feature}, would that help? How? What would it replace?"
+- "What's the next thing you'd pay more for?"
+- (Pricing goal only) "If the price doubled tomorrow, would you keep it? What would you cut from your stack to keep it?"
+
+## Close (2 min)
+
+- "Anything I should have asked but didn't?"
+- "Can I follow up if I have a question or want to show you something?"
+- "Anyone else at {company} I should talk to?"
+
+## Things NOT to do
+
+- Don't pitch. The moment you defend the product, they stop telling you the truth.
+- Don't lead. "Wouldn't you love it if we added X?" → strike from script.
+- Don't summarize back. Just listen and probe deeper.
+
+## Post-call
+
+- Within 60 min, dump everything you remember into `interviews/{customer-slug}/{date}-notes.md`
+- Then run `/customer-interview --synthesize --customer {customer-slug}` to process.
+```
+
+#### Step 4 — Log prep event
+
+Append to `~/.gstack/projects/{slug}/intel.jsonl` (S7):
+```json
+{"ts": "...", "event_type": "interview_prepped", "actor_skill": "customer-interview", "subject": "{customer-slug}", "severity": "info", "payload": {"persona": "...", "goal": "..."}}
+```
+
+---
+
+### Mode B: Synthesize
+
+#### Step 1 — Locate the transcript
+
+**AskUserQuestion**: "Source of the interview content?"
+- "Paste the transcript / notes inline"
+- "Path to a text file"
+- "Path to an audio file (mp3/m4a/wav)" — handled via `markitdown` skill
+- "Path to a Zoom/Otter export"
+
+If audio, invoke `markitdown` to transcribe. Save the transcribed text to `interviews/{customer-slug}/{date}-transcript.txt`.
+
+#### Step 2 — Extract pain points
+
+Read the transcript. For each statement that signals a pain, friction, workaround, or unmet need, extract:
+
+| Field | Example |
+|-------|---------|
+| Quote | "I have to export to CSV and reimport every Monday" |
+| Pain category | Workflow friction |
+| JTBD it blocks | "Get the weekly numbers to my team" |
+| Frequency (per their words) | "every week" |
+| Intensity (their language) | "annoying" / "blocker" / "deal-breaker" |
+| Inferred? | no / yes |
+| Line reference | transcript line 142 |
+
+Surface 5-15 pain points. Don't over-extract — every entry should map to a quotable sentence.
+
+#### Step 3 — Score frequency × intensity
+
+For each pain, compute a score using the matrix:
+
+| Intensity \\ Frequency | Once | Sometimes | Often | Constant |
+|------------------------|-----:|----------:|------:|---------:|
+| Mild annoyance | 1 | 2 | 3 | 4 |
+| Friction | 2 | 4 | 6 | 8 |
+| Blocker | 3 | 6 | 9 | 12 |
+| Deal-breaker | 4 | 8 | 12 | 16 |
+
+Sort the pain list by score descending.
+
+#### Step 4 — Segment by JTBD
+
+Cluster the pains by the underlying job-to-be-done. A JTBD has the form "When {situation}, I want to {motivation}, so I can {outcome}".
+
+Output 3-5 JTBD clusters. Each cluster:
+- JTBD statement
+- Pains in this cluster (with scores)
+- Current workaround / hack
+- What "perfect" would look like (per the customer's words)
+
+#### Step 5 — Propose 3 product moves
+
+For the top 3 JTBDs (by aggregated score), propose one concrete product move each. Each move:
+- **What** — feature description in 1-2 sentences
+- **Why** — quote the pain it solves
+- **Effort** — XS / S / M / L / XL (back-of-envelope)
+- **Reach** — "we believe this JTBD shows up in N% of {persona} interviews" (calibrate from `--aggregate` if prior data exists)
+- **Risk** — what could go wrong / who else needs to validate
+
+Be opinionated. Pick a path; don't list every option.
+
+#### Step 6 — Write the synthesis
+
+Write `interviews/{customer-slug}/{YYYY-MM-DD}.md`:
+
+```markdown
+# Interview synthesis — {customer-slug} — {date}
+
+**Persona:** {persona}
+**Goal:** {goal}
+**Headline:** {one-sentence finding that would survive deletion of the rest}
+
+## Top pains (sorted by frequency × intensity)
+
+| # | Pain | Score | JTBD | Quote ref |
+|---|------|------:|------|-----------|
+| 1 | ... | 12 | ... | line 142 |
+
+## JTBD clusters
+
+### JTBD 1: ...
+
+[ ... ]
+
+## Proposed product moves
+
+### Move 1: {what}
+
+- **Why:** "quote from transcript"
+- **Effort:** S
+- **Reach:** ~60% of {persona} likely affected
+- **Risk:** ...
+
+[ ... ]
+
+## Disconfirming evidence
+
+What did this customer say that contradicts our current product hypothesis? List 1-3 items.
+
+## Follow-up actions
+
+- [ ] Reply to {customer} within 24h thanking them + summarizing what you heard
+- [ ] If a quoted pain matches a `intel.jsonl` recurring pattern, flag for product review
+- [ ] If the customer asked for a follow-up demo of {hypothesis feature}, schedule it
+```
+
+#### Step 7 — Log + cross-reference
+
+Write each pain + JTBD to `intel.jsonl` (S7) with `event_type: customer_pain_observed`. This is what `--aggregate` mode reads.
+
+If any pain matches a recurring pattern across ≥3 prior interviews, flag in the synthesis: `**RECURRING:** Also raised by {prior-customer-1}, {prior-customer-2}. Pattern across N interviews.`
+
+---
+
+### Mode C: Aggregate
+
+#### Step 1 — Read all interview syntheses
+
+```bash
+ls interviews/*/{20[0-9][0-9]-[0-9][0-9]-[0-9][0-9]}.md 2>/dev/null
+```
+
+Plus all `intel.jsonl` entries with `event_type: customer_pain_observed`.
+
+#### Step 2 — Cluster across interviews
+
+Group pains by JTBD across all customers. For each JTBD:
+- How many customers raised it
+- Aggregated score (sum of individual frequency × intensity)
+- Which personas dominate
+- Quotes from at least 3 different customers (or all if fewer)
+
+#### Step 3 — Surface the top patterns
+
+Write `interviews/INSIGHTS.md`:
+
+```markdown
+# Customer insights — aggregate as of {date}
+
+## Top JTBDs across all interviews (sorted by total score)
+
+### JTBD 1: ... (raised by N/M customers)
+
+- **Personas affected:** {primary}, {secondary}
+- **Quotes:**
+  > "..." — {customer-1}, {date}
+  > "..." — {customer-2}, {date}
+  > "..." — {customer-3}, {date}
+- **Existing workarounds:** ...
+- **Proposed move (if any):** see `interviews/{customer-X}/{date}.md`
+
+## Personas to interview more
+
+- {persona} — only {N} interviews; high score variance suggests we haven't converged
+
+## Decisions to revisit
+
+- Any product decision (in `docs/decisions/`) that this aggregate contradicts
+```
+
+## Outputs
+
+| Path | Mode | Contents |
+|------|------|----------|
+| `interviews/{customer-slug}/prep.md` | Prep | Interview script |
+| `interviews/{customer-slug}/{date}-transcript.txt` | Synthesize (audio) | Transcribed audio |
+| `interviews/{customer-slug}/{date}.md` | Synthesize | Synthesis + product moves |
+| `interviews/INSIGHTS.md` | Aggregate | Cross-interview patterns |
+| `~/.gstack/projects/{slug}/intel.jsonl` | Any | Append events |
+
+## Edge cases
+
+- **Customer revoked recording consent** — synthesis mode runs on hand notes only. Skip the line-reference column; trust the notes-taker.
+- **Translated transcript** — note the source language. Some idioms (especially intensity words) don't translate cleanly. Flag `inferred:` more liberally.
+- **Very short interview (<15 min)** — surface fewer pains, but apply same rigor. Don't pad. Note in headline: "Short call — surface coverage only."
+- **Hostile interview (churn)** — extract pains as usual, but add a "what we did wrong" section quoting them. Don't soften the language.
+- **Sales pitch leaked in** — if the script reveals the interviewer pitched, flag in synthesis: "Interviewer pitched at line N — answers after that point are likely contaminated by suggestion bias."
+- **Existing customer just asking for features** — common failure mode. The Moesta protocol is "why do you want that feature?" repeated until you hit a job. Apply the same probe in synthesis: each requested feature gets a `JTBD-underlying:` line.
+- **No transcript at all, just gist** — refuse synthesis mode without raw material. **AskUserQuestion**: "I need either a transcript, notes with quotes, or an audio file. Synthesis without raw source isn't synthesis — it's confabulation."
+
+## Dependencies
+
+- **S1** Hall-mode preamble — `hall-ceo` persona
+- **S7** `/intel` schema v2 — cross-interview pattern detection
+- **S4** Decision Record store — links product moves to existing decisions
+- Reuses: `discover-personas` (persona registry), `markitdown` (audio → text), `/intel` (aggregate pattern queries), `/customer-research` (strategic cadence — out-of-scope for this skill)

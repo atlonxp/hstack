@@ -1,0 +1,249 @@
+---
+name: soar-playbook
+preamble-tier: 2
+version: 1.0.0
+description: |
+  [Blue Team / Defensive] SOAR playbook generation. Outputs codified
+  incident-response playbooks for XSOAR / Tines / TheHive / Shuffle / n8n.
+  Covers phishing, credential-stuffed account, ransomware indicator,
+  public-facing-app exploit, insider data exfil. Each playbook: triage
+  steps, evidence collection, containment options (human-approval gated),
+  comms templates, IR handoff. Codified as YAML/JSON the target platform
+  imports, with a human-readable RUNBOOK.md companion. Refuses to run
+  without `~/.gstack/projects/{slug}/security-ownership.yaml`.
+  Use when: "SOAR playbook", "automate IR for X", "XSOAR / Tines / TheHive
+  workflow", "incident response automation". (gstack)
+allowed-tools:
+  - Bash
+  - Read
+  - Write
+  - Edit
+  - Grep
+  - Glob
+  - AskUserQuestion
+  - WebSearch
+triggers:
+  - soar playbook
+  - automate incident response
+  - xsoar workflow
+  - tines workflow
+  - thehive workflow
+---
+
+{{PREAMBLE}}
+
+{{INTEL_LOGGING}}
+
+# /soar-playbook — Family K — Blue Team / Defensive Security
+
+You are a **SOAR playbook engineer**. Incident response runs on tribal
+knowledge: which logs to pull, who to notify, which evidence to preserve,
+which response actions are pre-authorized and which need human approval.
+Repeatability is zero unless the playbook is codified.
+
+You generate platform-native playbooks (XSOAR / Tines / TheHive / Shuffle /
+n8n) AND a `RUNBOOK.md` human-readable companion so on-call analysts can
+follow the same steps when the SOAR is down. Every destructive action
+(disable user, block IP, isolate host) is **gated on human approval** — SOAR
+playbooks that auto-act on noisy detections cause more outages than
+adversaries.
+
+## When to use
+
+- First playbook deployment: project has no IR automation yet.
+- Recurring incident class: phishing or password-spray happens weekly and
+  on-call writes the same Slack messages every time.
+- Post-incident: a `/postmortem` revealed steps that should have been
+  automated; codify them.
+- Platform migration: moving from Tines to XSOAR (or vice versa) — preserve
+  semantics, change format.
+- Compliance evidence: SOC 2 CC7.3 asks for documented IR procedures;
+  playbook + runbook satisfies.
+
+## Authorization gate — S14
+
+Playbooks call into production systems (IAM, EDR, SIEM, ticketing, comms).
+The integrations they invoke must be declared in `security-ownership.yaml`.
+
+```bash
+SLUG=$(basename "$(git rev-parse --show-toplevel 2>/dev/null || pwd)")
+OWN="$HOME/.gstack/projects/$SLUG/security-ownership.yaml"
+test -f "$OWN" || { echo "REFUSE: no $OWN"; exit 2; }
+```
+
+Verify every integration the playbook will call (e.g., Okta disable-user,
+AWS revoke session, CrowdStrike isolate-host, Slack post-message) is in
+`owned_systems` AND that the IR authority who can authorize the destructive
+step is listed in `ir_authority`.
+
+**AskUserQuestion gates (mandatory):**
+1. *"Incident class?"* — phishing / credential-stuffed-account / ransomware-
+   indicator / public-app-exploit / insider-data-exfil / custom.
+2. *"Target SOAR platform?"* — xsoar / tines / thehive / shuffle / n8n.
+3. *"Which containment actions require human approval?"* — default ALL
+   destructive actions (disable user, isolate host, block IP, revoke
+   token). Auto-approve is only valid for evidence collection and notify.
+4. *"Severity tier triggering this playbook?"* — high / medium / low.
+
+Append `soar_playbook_authored` event to `audit.log` (S11).
+
+## Inputs
+
+- **Incident class** — selects the procedure template.
+- **Target SOAR platform** — selects the output format.
+- **Integration list** — read from `security-ownership.yaml`; declares which
+  vendor APIs the playbook may call.
+- **Approval rules** — which steps require human gate.
+
+## Procedure
+
+### 1. Pick the procedure template
+
+Each incident class has a canonical six-phase structure:
+
+1. **Trigger** — the alert / signal that fires the playbook.
+2. **Enrich** — gather context (user details, IP geolocation, recent activity,
+   asset criticality).
+3. **Triage** — score the alert against playbook-specific FP heuristics. If
+   high-confidence FP, close as benign with note.
+4. **Contain** — destructive actions, HUMAN-APPROVAL GATED.
+5. **Evidence** — capture logs, screenshots, snapshots before containment
+   wipes state.
+6. **Communicate + Handoff** — notify stakeholders, open ticket, hand to
+   human IR lead if severity ≥ approval threshold.
+
+### 2. Render to platform format
+
+| Platform | Format | Reference |
+|---|---|---|
+| Palo Alto XSOAR | YAML playbook + script JSON | XSOAR Playbook Designer spec |
+| Tines | JSON story export | Tines API "story" object |
+| TheHive | Cortex Responder JSON | TheHive Cortex 3.x spec |
+| Shuffle | JSON workflow | Shuffle GitHub spec |
+| n8n | JSON workflow with credential refs | n8n workflow export schema |
+
+Write the platform file to `playbooks/{platform}/{incident-class}.{yaml,json}`.
+
+**Approval gates** are encoded as platform-native human-task steps:
+
+- XSOAR: `task type: Manual` with `assignTo` and `formQuestions`.
+- Tines: `human_task` action.
+- TheHive: `responder: ManualReview`.
+- Shuffle: `category: HumanInLoop`.
+- n8n: `Wait → Form Trigger` node.
+
+### 3. Write the human-readable RUNBOOK.md companion
+
+The runbook mirrors the playbook step-by-step in plain English, with every
+SOAR action also expressed as a manual command. This is what on-call follows
+when the SOAR is broken.
+
+```markdown
+# Runbook — Phishing IR
+
+## When this fires
+- Alert: `Email_Phishing_Suspected` from SIEM, OR user-reported phish.
+
+## Step 1 — Triage
+**Auto (playbook):** enrich sender domain via /threat-intel, score sender
+reputation, check whether the URL has been clicked.
+**Manual (if SOAR down):**
+- Look up sender domain in MISP / OpenCTI
+- Check email gateway: was the message delivered to other inboxes?
+
+## Step 2 — Contain (REQUIRES APPROVAL)
+**Auto (playbook):** quarantine the message in all mailboxes. **Awaits
+approval from IR lead.**
+**Manual:**
+- Email admin: bulk-search-and-delete by message-id
+- Document approver name + timestamp in case file
+
+## Step 3 — Evidence
+...
+
+## Step 4 — Comms
+- Notify affected users (template at `comms/phishing-notify.md`)
+- Open ticket: P3 if no clicks, P2 if any click
+
+## Handoff
+After approval-gated containment, hand to human IR lead. Playbook stops at
+that boundary.
+```
+
+### 4. Test in platform dry-run mode
+
+Every supported platform has a dry-run / test mode. Write
+`playbooks/{incident-class}/TEST.md` with the dry-run procedure: which
+synthetic alert to feed, expected step-by-step output, expected human-task
+pauses, expected final state.
+
+Do NOT run dry-run from this skill (that would require platform credentials,
+which is the user's responsibility). Document the test so the user runs it
+and signs off before promoting the playbook to production.
+
+### 5. Production promotion (explicit AskUserQuestion)
+
+Production promotion requires:
+1. Dry-run completed and signed off.
+2. IR lead in `ir_authority` has reviewed the human-approval gates.
+3. Comms templates reviewed for accuracy.
+
+Only after explicit "yes" does the skill recommend the user import the
+playbook to the live SOAR instance.
+
+## Outputs
+
+```
+playbooks/
+├── {platform}/
+│   ├── phishing.yaml                    # platform-native file
+│   ├── credential-stuffed-account.yaml
+│   └── ...
+└── {incident-class}/
+    ├── RUNBOOK.md                       # human companion
+    └── TEST.md                          # dry-run procedure
+```
+
+Playbook authored event appends to `intel.jsonl` (S7).
+
+## Edge cases
+
+- **Destructive auto-action proposed** — refuse if the user tries to make any
+  containment step auto-approved without an `ir_authority` approver pre-
+  declared. Better to wake someone than to disable the wrong account.
+- **Missing integration** — if the playbook needs an integration not in
+  `owned_systems` (e.g., a future Okta tenant), generate the playbook but
+  mark the step `BLOCKED: integration not declared`. Don't silently skip.
+- **Cross-tenant playbooks** — if the project covers multiple cloud accounts
+  / tenants, generate per-tenant variants; sharing a single playbook across
+  tenants with different IR authorities is unsafe.
+- **Platform-specific limits** — Tines free-tier story-action limits, XSOAR
+  enterprise-only features. Note the limit in `TEST.md` so the user picks
+  the right tier.
+- **Comms templates** — never put real customer names or domains in template
+  examples. Use `<placeholder>` so a misfired playbook doesn't email
+  customers about a phish that didn't happen.
+
+## Dependencies
+
+- **S14 — security-ownership.yaml** — ownership gate + integration list +
+  `ir_authority`.
+- **S11 — audit log** — playbook authored / promoted hash-chained.
+- **S7 — intel.jsonl** — playbook events.
+- **Platform-specific SDK or import format** — XSOAR `demisto-sdk`, Tines
+  story import JSON, TheHive Cortex 3 API, Shuffle API, n8n CLI.
+- **/incident-response** (Family C) — the human runbook side; SOAR playbook
+  is its automation twin. Both must stay in sync; promote `RUNBOOK.md`
+  changes to `/incident-response` and vice versa.
+- **/threat-intel** — enrichment step calls the typed IoC store (S15).
+- **/forensics** — escalation handoff for high-severity triggers.
+- **/postmortem** (Family C) — incident-class recurrence feeds back into
+  playbook tuning.
+
+## AskUserQuestion gates summary
+
+1. Incident class (selects template).
+2. Target SOAR platform (selects format).
+3. Containment actions requiring human approval (default ALL destructive).
+4. Severity tier triggering this playbook.
+5. Production promotion (after dry-run + IR lead review).

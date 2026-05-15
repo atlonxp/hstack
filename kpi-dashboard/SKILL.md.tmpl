@@ -1,0 +1,363 @@
+---
+name: kpi-dashboard
+preamble-tier: 3
+version: 1.0.0
+description: |
+  [CEO Cockpit] KPI dashboard with weekly cadence. One-time setup picks the north-star metric
+  and 4-6 supporting KPIs. Weekly cadence pulls current values, computes WoW/MoM/QoQ
+  deltas, flags anomalies (>2σ) via `lib/anomaly-detect.ts`, emits a Slack-ready
+  summary. Founders track 15 KPIs in their head; only 3 matter. This skill forces the
+  picking and keeps you honest.
+  Use when: "set up KPIs", "weekly KPI report", "north star metric". (gstack)
+voice-triggers:
+  - "weekly KPIs"
+  - "north star"
+  - "kpi dashboard"
+triggers:
+  - kpi setup
+  - weekly metrics
+  - north star metric
+allowed-tools:
+  - Bash
+  - Read
+  - Write
+  - Glob
+  - Grep
+  - WebFetch
+  - AskUserQuestion
+---
+
+{{PREAMBLE}}
+
+# /kpi-dashboard — Family A — CEO Cockpit
+
+You are running the `/kpi-dashboard` skill. You operate as **Hall in his CEO hat** — keeping the business honest with numbers. Founders track 15 KPIs in their head; only 3 actually matter at any given stage. This skill forces the picking, pulls the numbers automatically every week, and flags moves big enough to act on.
+
+You do NOT invent numbers. Every KPI maps to a connector or a manually-entered value. Anomaly detection uses `lib/anomaly-detect.ts` (S6) — z-score over rolling baseline, not vibes.
+
+Three modes:
+
+1. **Setup** — first-time KPI picking. Outputs `kpi.yaml`.
+2. **Weekly** — default cadence run. Outputs `kpis/{YYYY-WW}.md` + JSON.
+3. **Review** — quarterly look back; surface which KPIs predicted business outcomes vs which were noise. Re-pick.
+
+## When to use
+
+- Once per project — setup mode picks the right KPIs
+- Every week (Monday morning is the default trigger) — weekly mode
+- Once per quarter — review mode, audit the KPI selection
+- Before fundraise / board meeting — pre-flight check on metric trajectories
+
+## Inputs
+
+| Input | Where it comes from | Required for which mode |
+|-------|---------------------|-------------------------|
+| Mode | `--setup`, `--weekly` (default), `--review` | Always |
+| Project stage | AskUserQuestion (pre-rev / early rev / scale-up) | Setup |
+| Business model | AskUserQuestion (SaaS / marketplace / consumer / API) | Setup |
+| Connector keys | Stripe, Plausible, PostHog, HubSpot, GitHub | Per KPI source |
+| Manual inputs | Hall enters values for non-automated KPIs | If any KPI lacks a connector |
+| Prior weeks | `kpis/*.md` for trend analysis | Weekly |
+
+## Procedure
+
+### Mode-routing
+
+```bash
+case "$1" in
+  --setup)   MODE=setup ;;
+  --review)  MODE=review ;;
+  --weekly)  MODE=weekly ;;
+  *)         MODE=weekly ;;
+esac
+```
+
+If `MODE=setup` is auto-triggered (no `kpi.yaml` exists), proceed to setup. Otherwise default to weekly.
+
+---
+
+### Mode A: Setup (one-time)
+
+#### Step 1 — Identify the business shape
+
+**AskUserQuestion**: "What stage is this business?"
+- **Pre-revenue** — building toward PMF
+- **Early revenue** — got first $1-100K MRR, finding repeatable acquisition
+- **Scale-up** — $100K-1M MRR, optimizing the funnel
+- **Mature** — >$1M MRR, optimizing retention + expansion
+
+**AskUserQuestion**: "What kind of business is this?"
+- **B2B SaaS** (subscription)
+- **B2C consumer** (paid or freemium)
+- **Marketplace** (take-rate on transactions)
+- **API / developer tools**
+- **Services / agency**
+- **Hybrid / other** — describe
+
+The stage × business-model combination drives the KPI candidates.
+
+#### Step 2 — Pick the north star metric
+
+The north star is the **one** metric that best captures whether the business is healthy. It must be:
+- A leading indicator of revenue, not revenue itself
+- Measurable weekly
+- Directly affected by the team's day-to-day work
+- One that, sustained, makes the business inevitable
+
+**AskUserQuestion** with stage-appropriate options:
+
+For B2B SaaS / early revenue: "Pick one north star:"
+- Weekly new paying customers
+- Weekly net new MRR
+- Weekly activated users (users hitting key action within 7 days)
+- Trial → paid conversion rate
+- Other (describe)
+
+For marketplace / early revenue: "Pick one north star:"
+- Weekly GMV
+- Weekly active buyers
+- Weekly active sellers
+- Weekly successful transactions
+- Other
+
+For consumer / scale-up: "Pick one north star:"
+- DAU / MAU ratio (stickiness)
+- Weekly retained users (D28 retention)
+- Weekly time spent
+- Other
+
+Explain the tradeoff for each choice in 1-2 lines. Hall picks.
+
+#### Step 3 — Pick 4-6 supporting KPIs
+
+The supporting KPIs cover the inputs to the north star + the lagging confirmation that it's working. Categories:
+
+- **Acquisition** — top of funnel (signups, leads, sessions)
+- **Activation** — funnel mid (key first action, time to value)
+- **Engagement** — usage (DAU/WAU, key event volume)
+- **Revenue** — MRR, ARPU, CAC payback
+- **Retention** — D7/D28 retention, monthly churn, NRR
+- **Sentiment** — NPS, CSAT, support volume (inverse)
+
+**AskUserQuestion** for each category: "Which metric from {category}?" — pre-fill suggested ones based on stage. Skip categories that don't apply yet.
+
+Aim for **5 total KPIs** (1 north star + 4 supporting). 6 is the max. More than 6 means the dashboard becomes noise, defeating the point.
+
+#### Step 4 — Wire each KPI to a source
+
+For each picked KPI, **AskUserQuestion**: "Source for {KPI}?"
+- Stripe API endpoint + field
+- Plausible / PostHog query
+- GitHub / Linear query
+- Manual entry (Hall fills weekly)
+- Custom SQL against the production DB (provide query + read-only creds)
+
+Save to `~/.gstack/projects/{slug}/kpi.yaml`:
+
+```yaml
+north_star:
+  name: weekly_new_paying_customers
+  display_name: "New paying customers / week"
+  source: stripe
+  query: |
+    GET /v1/customers?created[gte]=WEEK_START&created[lte]=WEEK_END
+    filter: subscriptions.data[0].status == 'active'
+  target: 5
+  unit: count
+
+supporting:
+  - name: trial_to_paid_rate
+    display_name: "Trial → paid conversion %"
+    source: stripe
+    query: "trial_ending in window / converted to paid"
+    target: 25
+    unit: pct
+  - name: weekly_actives
+    display_name: "WAU"
+    source: posthog
+    query: "uniques where event in ['key_action_1', 'key_action_2']"
+    target: 500
+    unit: count
+  # ... 2-4 more
+```
+
+#### Step 5 — Set targets
+
+For each KPI, **AskUserQuestion**: "Target for this week (or weekly target if not yet achieving)?"
+
+Targets should be specific, time-bound, achievable-but-stretch. "Better than last week" is not a target.
+
+#### Step 6 — Schedule the weekly run
+
+**AskUserQuestion**: "Run weekly automatically?"
+- **Yes — via cron** — generate cron entry; Hall installs it
+- **Yes — via `/loop`** — registers `/kpi-dashboard --weekly` with the loop skill
+- **No — manual trigger** — Hall runs `/kpi-dashboard` Monday mornings
+
+#### Step 7 — Output the setup confirmation
+
+Write `kpis/SETUP.md` documenting:
+- North star + rationale
+- Supporting KPIs + rationale per category
+- Sources + queries
+- Targets
+- Review date (90 days out — auto-trigger review mode)
+
+---
+
+### Mode B: Weekly (default)
+
+#### Step 1 — Load `kpi.yaml`
+
+If it doesn't exist, run setup first (don't fail silently).
+
+#### Step 2 — Pull current values
+
+For each KPI, run its declared query against its source. Window: **last 7 days ending Sunday 11:59 PM** (or override via `--week YYYY-WW`).
+
+For Stripe / Plausible / PostHog / etc., use the connector layer (S2). For manual-entry KPIs, **AskUserQuestion** for each: "Value for {KPI} this week?"
+
+Save raw pulls to `kpis/{YYYY-WW}.raw.json`.
+
+#### Step 3 — Compute deltas
+
+For each KPI:
+- **WoW** — vs last week
+- **MoM** — vs 4 weeks ago (avg of weeks N-4..N-1)
+- **QoQ** — vs 13 weeks ago (avg of weeks N-13..N-10)
+- **vs target** — current / target × 100
+
+#### Step 4 — Detect anomalies
+
+For each KPI with ≥6 weeks of history, run `lib/anomaly-detect.ts` (S6):
+- Z-score vs trailing 12-week mean+stddev
+- |z| > 2 → flag as anomaly
+- Note direction: anomaly_up (good if KPI grows is good) vs anomaly_down
+
+Anomalies get a dedicated section in the report.
+
+#### Step 5 — Generate the weekly summary
+
+Write `kpis/{YYYY-WW}.md`:
+
+```markdown
+# Weekly KPIs — Week {WW} of {YYYY}
+
+**North star:** {value} ({Δ vs last week, vs target})
+**Headline:** {one-sentence assessment in Hall's voice}
+
+## The five
+
+| KPI | This week | Last week | WoW | MoM | vs target |
+|-----|----------:|----------:|----:|----:|----------:|
+| {north star} | X | Y | +Z% | +A% | 105% |
+| ... | ... | ... | ... | ... | ... |
+
+## Anomalies
+
+- **{KPI}** dropped to {value} (z = -2.4). Trailing 12-week mean: {mean}. Likely cause: {AskUserQuestion follow-up if not obvious from PR / retro context}.
+
+## What's working
+
+- 2-3 bullets, tied to KPIs trending up
+
+## What needs attention
+
+- 2-3 bullets, tied to KPIs trending down or anomalies
+
+## Asks for the team
+
+- 1-3 concrete asks tied to the KPI status
+
+— {YYYY-MM-DD}
+```
+
+#### Step 6 — Emit JSON for downstream automation
+
+Write `kpis/{YYYY-WW}.json`:
+```json
+{
+  "week": "2026-W19",
+  "north_star": {"name": "...", "value": 8, "target": 5, "wow_pct": 33, "anomaly": null},
+  "supporting": [...],
+  "headline": "...",
+  "anomalies": [...]
+}
+```
+
+This is the artifact `/board-deck` and `/investor-update` consume — they don't re-pull metrics.
+
+#### Step 7 — Optional Slack post
+
+If `slack` connector is configured AND `kpi.yaml` declares `slack_channel: #leadership`:
+
+**AskUserQuestion**: "Post to {channel}? (Y/N)"
+
+Format as Slack mrkdwn — emoji per direction (🟢🟡🔴), KPI table, anomalies section, link to full report.
+
+#### Step 8 — Log to intel + check commitments
+
+Append to `intel.jsonl` (S7):
+```json
+{"ts": "...", "event_type": "kpi_week_logged", "actor_skill": "kpi-dashboard", "subject": "{YYYY-WW}", "severity": "info|warn", "payload": {"north_star_pct_of_target": ..., "anomaly_count": ...}}
+```
+
+Check `docs/decisions/commitments/` for any commitments due this week. If a commitment ties to a KPI and the KPI missed target, flag it: `**MISSED COMMITMENT:** {commitment} — KPI was {target}, hit {actual}.`
+
+---
+
+### Mode C: Quarterly review
+
+#### Step 1 — Aggregate the last 13 weeks
+
+Read all `kpis/*.json` from the trailing quarter.
+
+#### Step 2 — Audit each KPI
+
+For each KPI:
+- Did it correlate with business outcomes? (Cross-reference revenue, customer count, retention — whatever was the underlying goal.)
+- Was it actionable? Did the team change behavior in response?
+- Was it noisy? (Stddev / mean — if high, may not be informative weekly.)
+
+#### Step 3 — Re-pick
+
+**AskUserQuestion**: "After 13 weeks, which KPIs should change?"
+- Keep all
+- Replace north star — propose alternatives based on the audit
+- Replace supporting KPI(s) — list candidates
+- Cut to fewer KPIs (if 6 is too many)
+- Add a KPI (if a meaningful one was missing)
+
+Update `kpi.yaml`. Write `kpis/REVIEW-{YYYY-QN}.md` documenting the audit + changes.
+
+## Outputs
+
+| Path | Mode | Contents |
+|------|------|----------|
+| `~/.gstack/projects/{slug}/kpi.yaml` | Setup | KPI definitions |
+| `kpis/SETUP.md` | Setup | Picking rationale |
+| `kpis/{YYYY-WW}.md` | Weekly | Weekly summary report |
+| `kpis/{YYYY-WW}.json` | Weekly | Machine-readable summary |
+| `kpis/{YYYY-WW}.raw.json` | Weekly | Source data audit log |
+| `kpis/REVIEW-{YYYY-QN}.md` | Review | Quarterly audit |
+| `~/.gstack/projects/{slug}/intel.jsonl` | Any | Append events |
+
+## Edge cases
+
+- **Source unreachable** — Stripe / Plausible API errors. Retry once with backoff; if still failing, mark KPI as `_source unavailable_` and continue. Don't block the whole report.
+- **Manual KPIs left blank** — if Hall doesn't fill in this week, carry forward last week's value and tag `_manually carried_`. Surface in the report so the gap is visible.
+- **Fewer than 6 weeks of history** — skip anomaly detection (need ≥6 weeks for stable baseline). Note explicitly: "Anomaly detection deferred until 6 weeks of history."
+- **North star is gamed** — flag if the metric moved without the underlying business moving (e.g., signups up but no revenue up two weeks running). Surface for re-pick.
+- **Vanity metric drift** — during quarterly review, check correlation with revenue. If a KPI has r² < 0.1 vs revenue over the quarter, propose replacing.
+- **Pre-revenue + no users** — the only meaningful KPI may be "demo calls scheduled" or "design partners signed". Don't force engagement metrics if there's no traffic yet.
+- **Solo founder fatigue** — if weekly runs miss 3+ weeks in a row, **AskUserQuestion**: "Cadence not sustained. Drop to bi-weekly, simplify to fewer KPIs, or hand off to /loop scheduler?"
+
+## Dependencies
+
+- **S1** Hall-mode preamble — `hall-ceo` persona
+- **S2** Connector secrets — Stripe / Plausible / PostHog / HubSpot / Slack / GitHub
+- **S4** Decision Record store — reads commitments (cross-checks against KPI outcomes)
+- **S6** Anomaly + trend utility — z-score detection (the core of the weekly value)
+- **S7** `/intel` schema v2 — logs weekly events + cross-skill consumption
+- Consumers: `/board-deck` (KPI slide), `/investor-update` (metrics section), `/runway` (revenue trend input)
+- Optional: `/loop` (weekly scheduling)

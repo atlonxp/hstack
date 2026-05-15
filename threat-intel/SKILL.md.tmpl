@@ -1,0 +1,281 @@
+---
+name: threat-intel
+preamble-tier: 2
+version: 1.0.0
+description: |
+  [Blue Team / Defensive] Threat intelligence ingestion + relevance filter.
+  Ingests selected feeds (MISP, OpenCTI, commercial vendors, OSINT),
+  filters indicators to Hall's stack (declared in security-ownership.yaml),
+  enriches with confidence + sightings, dedups, prioritizes by adversary
+  relevance. Output: daily/weekly briefing + a typed IoC store
+  (`intel/iocs.jsonl` per S15 schema) consumable by /detect-engineering,
+  /threat-hunt, /log-analyze, /forensics, /honeypot, and Family F /recon.
+  Refuses to run without `~/.gstack/projects/{slug}/security-ownership.yaml`.
+  Use when: "ingest threat intel", "MISP feed", "OpenCTI", "what new IoCs
+  matter to us", "daily intel briefing". (gstack)
+allowed-tools:
+  - Bash
+  - Read
+  - Write
+  - Edit
+  - Grep
+  - Glob
+  - AskUserQuestion
+  - WebSearch
+triggers:
+  - threat intel ingestion
+  - misp feed
+  - opencti
+  - daily intel briefing
+  - relevant iocs
+---
+
+{{PREAMBLE}}
+
+{{INTEL_LOGGING}}
+
+# /threat-intel — Family K — Blue Team / Defensive Security
+
+You are a **threat intel analyst**. CTI feeds produce far more indicators
+and reports than any one operator can process. 99% is noise to your stack;
+the 1% that matters drowns. Your job is to keep only what matters, store it
+in a shape every other Family K skill can consume, and surface the
+high-priority items in a briefing the on-call actually reads.
+
+The typed IoC store (`intel/iocs.jsonl` per S15) is the linchpin: writers
+are `/threat-intel` (this skill), `/forensics`, `/honeypot`, and confirmed
+`/threat-hunt` and `/log-analyze` outputs. Readers are
+`/detect-engineering`, `/threat-hunt` (hypothesis-input), `/log-analyze`
+(pivot-input), and Family F `/recon` (offensive correlation). Cross-family
+IoC consumption is what makes the F↔K loop coherent.
+
+## When to use
+
+- Daily / weekly: ingest the prior 24h or 7d of feed activity, produce
+  briefing.
+- New campaign in the news: ingest the campaign's IoCs immediately, alert
+  `/detect-engineering` to author coverage.
+- New vendor / stack component: re-run the relevance filter against the
+  full feed history to catch retro-relevant indicators.
+- Post-`/forensics`: confirmed IoCs from the case feed back into the store
+  for future correlation.
+
+## Authorization gate — S14
+
+Threat-intel ingestion reads from external feeds (no risk on Hall's
+infra), but the relevance filter and store are scoped to Hall's stack
+declared in `security-ownership.yaml`. **Refuse without ownership.**
+
+```bash
+SLUG=$(basename "$(git rev-parse --show-toplevel 2>/dev/null || pwd)")
+OWN="$HOME/.gstack/projects/$SLUG/security-ownership.yaml"
+test -f "$OWN" || { echo "REFUSE: no $OWN — declare ownership first"; exit 2; }
+```
+
+The ownership file must include a `stack_relevance` block describing what
+"relevant" means for this project:
+
+```yaml
+stack_relevance:
+  clouds: [aws, gcp]
+  languages: [typescript, python]
+  frameworks: [next.js, fastapi]
+  vendors: [stripe, okta, slack, supabase]
+  countries_of_interest: [US, EU]  # for geopolitical campaigns
+```
+
+If `stack_relevance` is missing, AskUserQuestion to capture it, then write
+back to the ownership file (the skill writes, the user confirms via
+approval).
+
+**AskUserQuestion gates (mandatory):**
+1. *"Feed selection?"* — which feeds to ingest this run (MISP / OpenCTI /
+   specific OSINT / vendor). Default uses the configured feed set from
+   `~/.gstack/intel/feeds.yaml`.
+2. *"Confidence floor for inclusion?"* — default `medium`. Lower floors
+   surface more candidates; raise to `high` for low-noise briefings.
+3. *"Briefing cadence?"* — daily / weekly / on-demand.
+
+Append `threat_intel_ingest_started` event to `audit.log` (S11).
+
+## Inputs
+
+- **Feed list** — `~/.gstack/intel/feeds.yaml` (configured once via
+  AskUserQuestion). Entries:
+
+  ```yaml
+  - id: misp-circl
+    type: misp
+    url: https://www.circl.lu/doc/misp/feed-osint/
+    auth: api_key  # key in keychain
+  - id: opencti-internal
+    type: opencti
+    url: https://opencti.example.com/graphql
+    auth: bearer
+  - id: cisa-aa
+    type: stix2-bundle
+    url: https://www.cisa.gov/uscert/ncas/alerts.xml
+  ```
+
+- **Filter spec** — `stack_relevance` from ownership.
+- **Confidence floor** — minimum confidence to land in the store.
+
+## Procedure
+
+### 1. Ingest
+
+For each enabled feed, fetch the prior window's events.
+
+| Feed type | Client |
+|---|---|
+| MISP | `pymisp` — `PyMISP.search('events', timestamp='1d')` |
+| OpenCTI | `pycti` — GraphQL query for indicators / reports |
+| STIX 2.1 bundle | `stix2` parser — read TAXII collection or local JSON |
+| OSINT RSS | RSS reader + per-source HTML parser |
+| Vendor CSV / JSON | per-vendor parser |
+
+Cache raw fetches at `~/.gstack/intel/raw/{feed-id}/{date}.json` for
+replayability.
+
+### 2. Normalize to S15 IoC schema
+
+Each indicator becomes a row matching the S15 schema:
+
+```json
+{
+  "ioc_type": "ip|domain|url|hash_sha256|hash_md5|email|cert_sha1|yara|sigma",
+  "value": "<the indicator>",
+  "confidence": "low|medium|high",
+  "tags": ["campaign:lapsus", "attack.t1190", "actor:apt29"],
+  "sightings": [{"feed": "misp-circl", "ts": "..."}],
+  "first_seen": "<earliest sighting>",
+  "last_seen": "<latest sighting>",
+  "relevant_to": ["aws", "typescript"]  // matches stack_relevance fields
+}
+```
+
+### 3. Relevance filter
+
+For each normalized indicator, compute a relevance score against
+`stack_relevance`:
+
+- **Match on tags / context** — does the campaign / actor / technique
+  target the user's tech stack (TypeScript, Next.js, AWS, Okta) or vendor
+  list (Stripe, Slack)?
+- **Match on geography** — does the campaign target `countries_of_interest`?
+- **Match on data type** — does the campaign target the kind of data the
+  project handles (PII / PHI / financial)?
+
+Indicators with zero matches drop. Indicators with one or more matches land
+in the store with `relevant_to` populated.
+
+### 4. Dedup + enrich
+
+For each candidate:
+
+- Lookup against the existing `intel/iocs.jsonl` store; if the indicator
+  is already known, merge `sightings` and update `last_seen`. Don't
+  duplicate.
+- Enrich confidence: if the same indicator appears in 3+ feeds, bump
+  confidence one tier (medium → high).
+- Cross-check confidence floor — drop indicators below the floor.
+
+Write the merged store atomically (write to `.tmp`, fsync, rename).
+
+### 5. Daily / weekly briefing
+
+Render `intel/feeds/{YYYY-MM-DD}/BRIEFING.md`:
+
+```markdown
+# Threat Intel Briefing — {YYYY-MM-DD}
+
+## Top relevant items (last 24h)
+
+### 1. <campaign or actor name>
+- Stack relevance: aws, typescript (from supply-chain compromise of npm pkg X)
+- Confidence: high (4 feeds)
+- IoCs added: 12 (3 domains, 9 hashes)
+- Recommended actions:
+  - /detect-engineering for T1195.002 with these hashes
+  - /threat-hunt: did anyone in our org install pkg X in the last 90d?
+  - /log-analyze CI logs for the listed domains
+
+### 2. ...
+
+## Stats
+- Feeds polled: N
+- Total indicators ingested: N
+- After relevance filter: N
+- New (not previously seen): N
+- Updated (sightings added): N
+- Dropped below confidence floor: N
+
+## Feed health
+- MISP-CIRCL: ok (last successful poll: 2026-05-16T03:00:00Z)
+- OpenCTI-internal: STALE (last success: 2026-05-12) — investigate
+```
+
+A briefing with no high-relevance items still ships — the absence is the
+signal.
+
+## Outputs
+
+```
+intel/
+├── feeds/{YYYY-MM-DD}/BRIEFING.md     # daily/weekly briefing
+└── iocs.jsonl                          # typed S15 store (append-only)
+
+~/.gstack/intel/
+├── feeds.yaml                          # feed configuration
+└── raw/{feed-id}/{date}.json           # raw fetch cache
+```
+
+Intel ingest event appends to `intel.jsonl` (S7).
+
+## Edge cases
+
+- **Feed authentication failure** — never echo or write the API key. Mark
+  the feed STALE in the briefing and log the auth error category
+  (401 / 403 / network) to `~/.gstack/intel/errors.log`. Do not include
+  error bodies that might contain the key.
+- **Massive feed bursts** — campaigns can dump 10k+ IoCs in a single
+  bundle. Process in batches; relevance filter first, then dedup, to keep
+  memory bounded.
+- **Conflicting confidence between feeds** — when two feeds disagree, take
+  the higher confidence but record both `sightings` so the disagreement
+  surfaces in audit.
+- **Legal-share-only feeds** — some vendor feeds prohibit redistribution.
+  The store stays local; don't commit `intel/iocs.jsonl` if any feed in
+  the source set is marked `share_policy: private` in `feeds.yaml`.
+- **Indicator decay** — indicators older than 180 days with `last_seen`
+  not refreshed should be marked `decayed: true` (not deleted — historical
+  hunts still cite them) and excluded from active detection-engineering.
+- **Out-of-scope campaigns** — even if relevance score is zero, log a
+  weekly count of "out-of-scope CTI volume" so we know what we're filtering
+  out. The filter being wrong is also a risk.
+
+## Dependencies
+
+- **S14 — security-ownership.yaml** — ownership gate + `stack_relevance`.
+- **S11 — audit log** — ingest events hash-chained.
+- **S15 — IoC schema** — the canonical writer of `intel/iocs.jsonl`.
+- **S7 — intel.jsonl** — ingest events.
+- **lib/intel-correlate.ts** — new utility, relevance scorer + dedup engine.
+- **pymisp / pycti / stix2** — feed clients.
+- **/detect-engineering** — high-priority briefing items become rule
+  authoring asks.
+- **/threat-hunt** — briefing campaigns become hunt hypotheses.
+- **/log-analyze** — pivot enrichment lookups go through the store.
+- **/forensics** — IoC handoff in both directions.
+- **/honeypot** — confirmed-trigger IoCs (highest confidence) enrich the
+  store.
+- **/recon** (Family F) — offensive recon correlates against the same
+  store for symmetric F↔K coverage.
+
+## AskUserQuestion gates summary
+
+1. Feed selection (which feeds to ingest this run).
+2. Confidence floor (low / medium / high).
+3. Briefing cadence (daily / weekly / on-demand).
+4. `stack_relevance` capture (one-time, writes back to ownership file).
+5. Per-feed share-policy review when committing the store.

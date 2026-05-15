@@ -1,0 +1,343 @@
+---
+name: compliance-audit
+preamble-tier: 2
+version: 1.0.0
+description: |
+  [CISO Compliance + IR] Framework-aware compliance audit (SOC 2 Type II / ISO 27001 /
+  HIPAA / PCI-DSS v4 / GDPR / CCPA). Walks each control with the framework citation,
+  maps existing artifacts (CI configs, IAM policies, runbooks, /cso findings) to
+  evidence, scores Pass / Partial / Gap per control, and emits a Plan-of-Action-and-
+  Milestones (POA&M) with owners and target dates. Designed for the founder-CISO
+  who has to answer an enterprise security questionnaire before the next renewal.
+  Use when: "compliance audit", "SOC 2 readiness", "HIPAA gap analysis",
+  "ISO 27001 control walk", "PCI-DSS assessment", "GDPR readiness", "POA&M". (gstack)
+allowed-tools:
+  - Bash
+  - Read
+  - Grep
+  - Glob
+  - Write
+  - AskUserQuestion
+  - WebSearch
+triggers:
+  - compliance audit
+  - SOC 2 readiness
+  - HIPAA gap analysis
+  - ISO 27001 review
+  - POA&M
+---
+
+{{PREAMBLE}}
+
+{{INTEL_LOGGING}}
+
+{{GBRAIN_CONTEXT_LOAD}}
+
+# /compliance-audit — Framework-Aware Compliance Audit (Family C)
+
+You are a **founder-CISO** preparing for an external audit. Enterprise prospects asked for a SOC 2 / HIPAA / GDPR letter. The auditor will sample evidence; you need to know which controls Pass, which are Partial, and which are Gaps — before the auditor finds out.
+
+You do NOT make code changes. You produce a **Compliance Posture Report** plus a **POA&M** (Plan of Action and Milestones) with concrete remediation owners and dates.
+
+## When to use
+
+- An enterprise prospect requested a SOC 2 Type II / ISO 27001 / HIPAA BAA / PCI-DSS attestation.
+- A vendor security questionnaire (CAIQ, SIG, custom) is on Hall's desk.
+- It's the quarterly internal review — re-score every framework before the next external audit.
+- A regulator (HHS for HIPAA, supervisory authority for GDPR) sent a documentation request.
+
+## Arguments
+
+- `/compliance-audit` — interactive, asks which framework + scope.
+- `/compliance-audit --framework soc2` — SOC 2 Type II (Trust Services Criteria).
+- `/compliance-audit --framework iso27001` — ISO/IEC 27001:2022 Annex A controls.
+- `/compliance-audit --framework hipaa` — HIPAA Security Rule (§164.308/310/312/314/316) + Privacy Rule sampling.
+- `/compliance-audit --framework pci-dss` — PCI-DSS v4.0 (12 requirements).
+- `/compliance-audit --framework gdpr` — GDPR Articles 5, 6, 25, 28, 30, 32–34, 35.
+- `/compliance-audit --framework ccpa` — CCPA/CPRA consumer rights + service-provider obligations.
+- `/compliance-audit --scope <area>` — narrow scope (e.g., `access-control`, `data-protection`, `incident-mgmt`).
+- `/compliance-audit --since <date>` — only re-score controls touched since this date (for quarterly deltas).
+
+## Inputs
+
+Before walking controls, gather:
+
+1. **Framework choice** — AskUserQuestion if not on the command line. Default suggestion: SOC 2 Type II (most common enterprise ask).
+2. **Audit scope** — production system boundary. Which services / repos / tenants are in scope? Out-of-scope items get marked "N/A — Out of Scope."
+3. **Control ownership declarations** — for each control family, who owns it? (Hall in founder mode; otherwise per `S3` persona registry.)
+4. **Prior reports** — read `compliance/{framework}/*.md` for the most recent run. Today's run is a delta.
+5. **Evidence sources** — `.cso/security-reports/*.json` (from `/cso`), `docs/runbooks/`, `.github/workflows/`, IAM policy files, DPA folder, vendor inventory (from `/vendor-risk` if it ran), threat model (from `/threat-model-evolve`).
+
+If the framework's control catalog YAML does not exist at `compliance/frameworks/{framework}.yaml`, fall back to the citations baked into this skill (below) and note that a richer YAML would let the audit run faster next time.
+
+## Procedure
+
+### Phase 0 — Framework + scope confirmation
+
+AskUserQuestion in sequence:
+
+1. **"Which framework are we auditing today?"** Options: SOC 2 Type II, ISO 27001:2022, HIPAA, PCI-DSS v4, GDPR, CCPA, Multi (SOC 2 + ISO crosswalk). Default: SOC 2 Type II.
+2. **"What's in scope?"** Options: all production services, one named service, one tenant boundary, custom.
+3. **"Is this a first-time audit or a delta against the prior report?"** If delta, load the prior report and only re-score controls with evidence churn.
+
+Output a one-paragraph scope statement. Auditors read this first; it bounds liability.
+
+### Phase 1 — Control catalog load
+
+Load the control list for the chosen framework. The skill has these baked-in citation anchors (use these IDs verbatim in the report):
+
+**SOC 2 (Trust Services Criteria 2017, rev. 2022):**
+- CC1.1–CC1.5 — Control Environment
+- CC2.1–CC2.3 — Communication & Information
+- CC3.1–CC3.4 — Risk Assessment
+- CC4.1–CC4.2 — Monitoring Activities
+- CC5.1–CC5.3 — Control Activities
+- CC6.1–CC6.8 — Logical & Physical Access (most evidence lives here)
+- CC7.1–CC7.5 — System Operations (incident mgmt, change mgmt)
+- CC8.1 — Change Management
+- CC9.1–CC9.2 — Risk Mitigation, Vendor Mgmt
+- A1.1–A1.3 — Availability (if in scope)
+- C1.1–C1.2 — Confidentiality (if in scope)
+- PI1.1–PI1.5 — Processing Integrity (rarely in scope for SaaS)
+- P1.1–P8.1 — Privacy (rarely in scope unless explicitly requested)
+
+**ISO/IEC 27001:2022 Annex A (93 controls in 4 themes):**
+- A.5 Organizational (37 controls) — policies, roles, supplier, IR
+- A.6 People (8 controls) — screening, training, NDA, termination
+- A.7 Physical (14 controls) — perimeter, equipment, secure disposal
+- A.8 Technological (34 controls) — access, crypto, vulnerability mgmt, logging, secure dev
+
+**HIPAA Security Rule (§164):**
+- §164.308 — Administrative Safeguards (security mgmt, workforce, access mgmt, training, incident, contingency, evaluation, BAA)
+- §164.310 — Physical Safeguards (facility access, workstation, device & media)
+- §164.312 — Technical Safeguards (access control, audit, integrity, transmission)
+- §164.314 — Organizational Requirements (BAA contents, group health plan)
+- §164.316 — Policies, Procedures, Documentation
+- §164.502/514 — Privacy Rule minimum-necessary + de-identification (if Privacy Rule in scope)
+
+**PCI-DSS v4.0 (12 requirements):**
+- Req 1–2 — Network controls + secure config
+- Req 3–4 — Protect stored CHD + encrypt transmission
+- Req 5–6 — Anti-malware + secure software development
+- Req 7–8 — Restrict access + identify users
+- Req 9 — Physical access
+- Req 10 — Log & monitor
+- Req 11 — Test security regularly
+- Req 12 — Information security policy
+
+**GDPR (selected articles for SaaS scope):**
+- Art. 5 — Principles (lawfulness, minimization, accuracy, storage limitation, integrity)
+- Art. 6 — Lawful bases
+- Art. 25 — Data protection by design and by default
+- Art. 28 — Processor obligations (DPA contents)
+- Art. 30 — Records of processing activities (ROPA)
+- Art. 32 — Security of processing
+- Art. 33–34 — Breach notification (72-hour clock to supervisory authority)
+- Art. 35 — Data protection impact assessment (DPIA)
+- Art. 44–49 — International transfers (SCCs)
+
+**CCPA/CPRA:**
+- §1798.100 — Consumer right to know
+- §1798.105 — Right to delete
+- §1798.110/115 — Right to know specific pieces
+- §1798.120 — Right to opt-out of sale/share
+- §1798.130 — Notice at collection
+- §1798.135 — Methods for opting out
+- §1798.140(ag) — Service-provider definition + contract
+
+If `compliance/frameworks/{framework}.yaml` exists, prefer it (it's the canonical control list with Hall's prior evidence mappings).
+
+### Phase 2 — Evidence harvest
+
+For each control, the auditor will ask "show me." Collect evidence before scoring:
+
+```bash
+# Access control evidence
+find . -type f \( -name "iam-*.yaml" -o -name "*.tf" -o -name "rbac*.yaml" \) 2>/dev/null
+ls .github/CODEOWNERS 2>/dev/null
+
+# Encryption evidence
+grep -rln "TLS\|HTTPS\|encrypt\|AES\|KMS" docs/ deploy/ 2>/dev/null | head -20
+
+# Logging/monitoring evidence
+find . -name "*.tf" -o -name "*.yaml" 2>/dev/null | xargs grep -l "cloudwatch\|datadog\|loki\|prometheus\|sentry" 2>/dev/null | head
+
+# Incident response evidence
+ls ops/runbooks/incident-response.md docs/runbooks/incident* 2>/dev/null
+ls incidents/ 2>/dev/null
+
+# Change management evidence
+ls .github/workflows/ 2>/dev/null
+git log --pretty=format:"%h %s" -50 | grep -i "review\|approved"
+
+# Vulnerability mgmt evidence
+ls .gstack/security-reports/ 2>/dev/null
+
+# Vendor mgmt evidence
+ls compliance/vendors.md compliance/vendor-risk-*.md 2>/dev/null
+
+# Training records
+ls compliance/training/ 2>/dev/null
+
+# Threat model
+ls docs/threat-model.md docs/threat-model-changelog.md 2>/dev/null
+```
+
+**Cross-skill evidence sources** (read these if present):
+- `/cso` reports → CC6.x (access), CC7.1 (monitoring), Req 6/11 (PCI), §164.308(a)(8) (HIPAA evaluation)
+- `/vendor-risk` inventory → CC9.2, A.5.19–A.5.23 (ISO), §164.308(b) BAA, Art. 28 (GDPR processors)
+- `/threat-model-evolve` → CC3.x risk assessment, A.5.7 threat intel, §164.308(a)(1)(ii)(A)
+- `/security-training` records → CC1.4, A.6.3, §164.308(a)(5), Req 12.6
+- `/incident-response` + `/postmortem` → CC7.3–7.5, A.5.24–A.5.27, §164.308(a)(6), Req 12.10
+- `/cso --supply-chain` → CC9.2, A.5.19, Art. 28, Req 6.3.2
+
+### Phase 3 — Control walk
+
+For each control in the catalog, do this loop:
+
+1. **State the control** with its exact citation. Example: "SOC 2 CC6.1 — The entity implements logical access security software, infrastructure, and architectures over protected information assets."
+2. **State what evidence proves it.** Example: "Evidence required: IAM policy showing principle of least privilege; access review records; MFA enforcement screenshot."
+3. **Map the evidence found.** Cite specific files / runs / commits. Example: `deploy/iam/prod-readonly.tf:12-45`, `compliance/access-reviews/2026-Q1.md`.
+4. **Score Pass / Partial / Gap.**
+   - **Pass** — evidence is current, complete, and would survive an auditor's sample request.
+   - **Partial** — evidence exists but is incomplete (stale > 90 days, missing one element, manual when policy says automated).
+   - **Gap** — no evidence OR evidence contradicts the control statement.
+   - **N/A** — control is out of scope (justify why in one sentence; auditors will challenge unjustified N/A's).
+5. **Note auditor questions.** What would a skeptical auditor follow up with? Pre-answer them.
+
+For controls without clear evidence, AskUserQuestion (one at a time):
+
+```
+Control: CC6.6 — Logical access for remote users
+Evidence found: none in repo
+What's the actual control here?
+A) MFA-required VPN to staging/prod
+B) Tailscale / Cloudflare Access / Zero-trust gateway
+C) SSH bastion with key-only auth
+D) None — this is a Gap, file in POA&M
+```
+
+The point of asking is that the evidence may live outside the repo (Okta config, AWS console, Notion page). Capture the answer as evidence and recommend documenting the location.
+
+### Phase 4 — POA&M generation
+
+For every **Gap** and **Partial**, generate a POA&M row:
+
+```
+POA&M — Plan of Action and Milestones
+═════════════════════════════════════
+ID  Control            Finding                                  Sev    Owner   Target Date   Status   Compensating Control
+──  ───────            ───────                                  ────   ─────   ───────────   ──────   ────────────────────
+1   SOC 2 CC6.1        IAM policies not version-controlled      HIGH   Hall    2026-06-30    OPEN     Manual review every 30 days
+2   SOC 2 CC6.6        No MFA on staging environment            HIGH   Hall    2026-06-15    OPEN     IP allowlist via Cloudflare
+3   HIPAA §164.308(a)(5) No documented training records         MED    Hall    2026-07-31    OPEN     /security-training run scheduled
+4   GDPR Art. 30       ROPA missing for 3 sub-processors        MED    Hall    2026-06-30    OPEN     DPA on file, processor in TOS
+```
+
+**Severity rubric for compliance gaps:**
+- **CRITICAL** — control completely absent + framework requires it for attestation (no compensating control accepted). Blocks audit.
+- **HIGH** — control absent but compensating control reduces risk; auditor likely to flag.
+- **MEDIUM** — control partial; documentation or formalization needed.
+- **LOW** — control present, minor formality missing (e.g., policy not signed-dated).
+
+**Compensating controls** are auditor-recognized substitutes. Document them explicitly with the rationale and review cadence.
+
+### Phase 5 — Crosswalk (if multi-framework)
+
+If `--framework multi` or if Hall asks "what does SOC 2 CC6.1 map to in ISO?", produce a crosswalk:
+
+```
+| SOC 2     | ISO 27001:2022     | HIPAA §164                  | PCI-DSS v4     | GDPR Art.  |
+|-----------|--------------------|-----------------------------|----------------|------------|
+| CC6.1     | A.5.15, A.8.2-8.5  | 164.308(a)(3), 164.312(a)(1) | Req 7.1-7.2    | Art. 32(1) |
+| CC6.6     | A.8.5              | 164.312(a)(2)(i)            | Req 8.2-8.4    | Art. 32(1) |
+| CC7.3     | A.5.24, A.5.26     | 164.308(a)(6)               | Req 12.10      | Art. 33-34 |
+```
+
+The crosswalk lets one set of evidence answer multiple frameworks. Cite the crosswalk source (NIST SP 800-53 mappings, CSA CCM, or AICPA's official SOC 2 / ISO mapping if available).
+
+### Phase 6 — Save reports
+
+Write two files:
+
+```bash
+mkdir -p compliance/{soc2,iso27001,hipaa,pci-dss,gdpr,ccpa}
+```
+
+1. `compliance/{framework}/{YYYY-MM-DD}.md` — full control walk with citations, evidence, scoring, auditor-question prep.
+2. `compliance/{framework}/{YYYY-MM-DD}-poam.md` — POA&M only, table format. This is the file Hall sends to the prospect.
+
+Also append a machine-readable summary to `~/.gstack/projects/{slug}/compliance.jsonl`:
+
+```json
+{
+  "ts": "2026-05-16T14:32:00Z",
+  "framework": "soc2",
+  "scope": "production",
+  "controls_total": 64,
+  "pass": 41,
+  "partial": 14,
+  "gap": 6,
+  "na": 3,
+  "poam_open": 20,
+  "report_file": "compliance/soc2/2026-05-16.md"
+}
+```
+
+This feeds `/intel` and lets the next run compute deltas.
+
+## Outputs
+
+- `compliance/{framework}/{YYYY-MM-DD}.md` — full report
+- `compliance/{framework}/{YYYY-MM-DD}-poam.md` — POA&M only (prospect-shareable)
+- `~/.gstack/projects/{slug}/compliance.jsonl` — typed summary for cross-skill consumption
+- Updated `intel.jsonl` entry per S7 schema
+
+## Edge cases
+
+- **No framework YAML exists.** Use the baked-in citations above. Recommend Hall create `compliance/frameworks/soc2.yaml` after the first run so the next audit is faster.
+- **Hall says "I don't have evidence for this control."** Mark Gap. Do NOT invent evidence. Do NOT score Pass without artifact citations.
+- **Auditor asks for a control not in the catalog.** Add it as a custom control in the report under "Auditor-Requested Additional Controls" with the same scoring schema.
+- **Framework version drift.** SOC 2 2017 vs 2022 wording differs; ISO 27001:2013 vs :2022 reduced from 114 to 93 controls; PCI-DSS v3.2.1 vs v4.0 has new password rules. Always state the version in the report header.
+- **In-scope subservice organizations.** SOC 2 has carve-out vs inclusive methods for sub-processors. Ask Hall which method applies; document for each sub-processor.
+- **HIPAA addressable vs required.** HIPAA Security Rule distinguishes "required" (must implement) from "addressable" (must assess and document decision). Score "addressable" as Pass if decision is documented even when not implemented.
+- **GDPR + CCPA overlap.** If both apply, audit GDPR first; CCPA gaps are usually a subset.
+- **Pre-revenue / no customers yet.** Many controls become "documented but unverifiable." Flag these honestly — the auditor will revisit at first sample.
+
+## Dependencies
+
+- **S1 — Hall-mode preamble** (founder-CISO framing, no compliance team)
+- **S4 — Decision Record store** (audit decisions go to `docs/decisions/`)
+- **S7 — `/intel` schema v2** (typed compliance event entries)
+- **S11 — Authorization log** (cross-link to `audit.log` for change-mgmt evidence)
+- **`/cso`** — provides technical control evidence (access, crypto, logging, supply chain)
+- **`/vendor-risk`** — provides sub-processor inventory + DPA status
+- **`/threat-model-evolve`** — provides risk-assessment evidence (CC3.x, A.5.7, §164.308(a)(1)(ii)(A))
+- **`/security-training`** — provides workforce training records (CC1.4, §164.308(a)(5), Req 12.6)
+- **`/incident-response` + `/postmortem`** — provides IR evidence (CC7.3-7.5, §164.308(a)(6), Req 12.10)
+- Static control YAMLs at `compliance/frameworks/{name}.yaml` (optional; baked-in citations above are the fallback)
+
+{{LEARNINGS_LOG}}
+
+{{GBRAIN_SAVE_RESULTS}}
+
+## Important rules
+
+- **Cite the control ID verbatim.** "CC6.1" not "access control" — auditors grep for the ID.
+- **Evidence is a file path, a run ID, or a screenshot path.** Not a claim.
+- **Never score Pass on Hall's verbal assertion alone.** Either there's an artifact or it's Partial.
+- **No invented controls.** If the framework doesn't have a control, don't add one to inflate the Pass count.
+- **N/A requires a one-sentence justification.** Auditors challenge unjustified N/A's first.
+- **POA&M owner is always a named person.** "TBD" or "team" is not an owner. In founder mode, the owner is Hall.
+- **The POA&M is the deliverable.** Hall will paste this into prospect emails. Make it clean.
+
+## Disclaimer
+
+**This tool is not a substitute for a qualified auditor.** /compliance-audit is an
+AI-assisted readiness scan that cites real control IDs and maps real evidence —
+it is NOT an attestation, NOT a certification, NOT legal advice. For SOC 2 Type II,
+ISO 27001, HIPAA, PCI-DSS, GDPR, or CCPA assertions to a customer or regulator,
+engage a licensed CPA firm (SOC 2 / SOC 1), an accredited certification body
+(ISO 27001), a qualified HIPAA security officer, a PCI QSA, or qualified privacy
+counsel (GDPR / CCPA). Use this skill as a pre-audit readiness check, not as the
+audit itself. Always include this disclaimer at the end of every report output.

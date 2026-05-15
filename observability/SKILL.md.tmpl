@@ -1,0 +1,437 @@
+---
+name: observability
+preamble-tier: 2
+version: 1.0.0
+description: |
+  [Cloud-Native] Generate an OpenTelemetry-first observability stack: per-language
+  SDK setup, exporters (Prometheus + Tempo + Loki, or Datadog/Honeycomb/New Relic),
+  trace propagation, log-trace correlation, RED/USE dashboards, and alert rules.
+  Vendor-neutral — the SDK stays OTel, the backend is a swappable exporter choice.
+  Use when: "set up observability", "wire up tracing", "OpenTelemetry SDK",
+  "Prometheus + Grafana", "Datadog setup", "log-trace correlation". (gstack)
+allowed-tools:
+  - Read
+  - Write
+  - Edit
+  - Glob
+  - Grep
+  - Bash
+  - AskUserQuestion
+  - WebSearch
+triggers:
+  - set up observability
+  - wire up tracing
+  - opentelemetry
+  - prometheus grafana
+  - datadog setup
+  - log trace correlation
+---
+
+{{PREAMBLE}}
+
+{{GBRAIN_CONTEXT_LOAD}}
+
+# /observability — Family E3 — Cloud-Native
+
+Logs in CloudWatch, metrics in Prometheus, traces in Jaeger, dashboards in
+three different tools, no correlation IDs, no consistent service names. Every
+incident starts with "where do I even look?"
+
+This skill wires up a unified observability stack using **OpenTelemetry as
+the SDK layer** (vendor-neutral) and a chosen backend (Prom/Tempo/Loki for
+self-hosted, or Datadog / Honeycomb / New Relic / Grafana Cloud as managed
+exporters). The SDK code never changes; only the exporter changes if you
+switch vendors.
+
+Output is everything you need: per-service SDK init code, propagation config,
+log-trace correlation, baseline RED/USE dashboards, and starter alert rules.
+
+## When to use
+
+- New service that needs telemetry from day one.
+- Existing service that has metrics but no traces, or logs but no correlation.
+- Migrating from a fragmented stack (CloudWatch + Prometheus + Jaeger) to
+  unified OTel.
+- "We picked Datadog / Honeycomb, wire it up properly."
+
+NOT for: building a custom telemetry backend, writing tracing libraries from
+scratch, or replacing managed-vendor agents that are already working fine.
+
+## Inputs (gather via AskUserQuestion)
+
+1. **Languages in the stack** — multi-select. Affects SDK choice and
+   instrumentation library set:
+   - Node.js / TypeScript
+   - Python
+   - Go
+   - Java / Kotlin (JVM)
+   - Ruby
+   - Rust
+   - .NET
+   - Other (manual setup, fewer auto-instrumentations)
+2. **Backend choice**
+   - A) **Self-hosted (Prom + Tempo + Loki + Grafana)** — open source, runs
+     in cluster, you own ops. Recommended for cost-sensitive teams >50 services.
+   - B) **Datadog** — least friction, highest cost. Recommended for small teams
+     who don't want to run telemetry infra.
+   - C) **Honeycomb** — best for high-cardinality debugging, event-based model.
+   - D) **New Relic / Dynatrace** — enterprise; pick if already standardized.
+   - E) **Grafana Cloud** — Prom/Tempo/Loki as a service, less ops than
+     self-host.
+   - F) **AWS X-Ray + CloudWatch** — AWS-native; fine if AWS-only and small.
+3. **Deployment target**
+   - Kubernetes — install OTel Collector as DaemonSet + Deployment.
+   - VMs / bare metal — OTel Collector as a systemd service.
+   - Serverless (Lambda) — OTel Lambda layer or vendor-specific lightweight SDK.
+4. **What you're starting from**
+   - Greenfield (no telemetry yet)
+   - Have Prometheus but no traces
+   - Have traces in Jaeger / Zipkin (migrating)
+   - Have a vendor agent (Datadog, NR) and want to add OTel without losing it
+
+Persist to `CLAUDE.md` under `## Observability`.
+
+## Procedure
+
+### Step 1: Detect the current state
+
+```bash
+# Already using OTel?
+grep -r "@opentelemetry" package.json 2>/dev/null
+grep -r "opentelemetry" requirements.txt go.mod Gemfile pom.xml 2>/dev/null
+
+# Existing Prometheus / metrics
+find . -name 'prometheus.yml' -o -name 'servicemonitor*.yaml' 2>/dev/null
+grep -r "prom-client\|prometheus_client\|micrometer" . --include="*.json" --include="*.txt" 2>/dev/null | head
+
+# Vendor agents
+find . -name 'datadog.yaml' -o -name 'newrelic.yml' 2>/dev/null
+grep -r "dd-trace\|newrelic" . --include="package.json" 2>/dev/null
+```
+
+Detect what's installed so we don't double-instrument (which doubles the cost
+and breaks span counts).
+
+### Step 2: Define the three signals + the correlation glue
+
+For each service, generate code that emits:
+
+1. **Metrics** — RED (Rate, Errors, Duration) for request-handling services;
+   USE (Utilization, Saturation, Errors) for resources like queues, caches,
+   databases.
+2. **Traces** — W3C `traceparent` propagation across all hops. Sampling
+   strategy: **head-based 10% by default**, with **tail-based** sampling
+   added later via OTel Collector if cost matters.
+3. **Logs** — JSON-structured, with `trace_id` and `span_id` injected
+   from the active span. This is the correlation glue.
+
+The boring rule: **every log line that happens inside a request handler must
+carry the trace_id**. If you can't click from a 500 in a dashboard to the
+exact log line that crashed, the stack is broken.
+
+### Step 3: Generate per-language SDK init
+
+Place under `apps/{service}/src/observability/`. Init MUST run BEFORE the
+HTTP framework loads (auto-instrumentation patches at require time).
+
+**Node.js / TypeScript** (`tracing.ts` loaded by `node --require ./tracing.js`):
+
+```typescript
+import { NodeSDK } from '@opentelemetry/sdk-node';
+import { getNodeAutoInstrumentations } from '@opentelemetry/auto-instrumentations-node';
+import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-proto';
+import { OTLPMetricExporter } from '@opentelemetry/exporter-metrics-otlp-proto';
+import { PeriodicExportingMetricReader } from '@opentelemetry/sdk-metrics';
+import { resourceFromAttributes } from '@opentelemetry/resources';
+import { SemanticResourceAttributes } from '@opentelemetry/semantic-conventions';
+
+const sdk = new NodeSDK({
+  resource: resourceFromAttributes({
+    [SemanticResourceAttributes.SERVICE_NAME]: process.env.OTEL_SERVICE_NAME!,
+    [SemanticResourceAttributes.SERVICE_VERSION]: process.env.SERVICE_VERSION!,
+    [SemanticResourceAttributes.DEPLOYMENT_ENVIRONMENT]: process.env.ENV!,
+  }),
+  traceExporter: new OTLPTraceExporter({
+    url: process.env.OTEL_EXPORTER_OTLP_ENDPOINT,
+  }),
+  metricReader: new PeriodicExportingMetricReader({
+    exporter: new OTLPMetricExporter({
+      url: process.env.OTEL_EXPORTER_OTLP_ENDPOINT,
+    }),
+    exportIntervalMillis: 30_000,
+  }),
+  instrumentations: [getNodeAutoInstrumentations({
+    '@opentelemetry/instrumentation-fs': { enabled: false },   // way too noisy
+  })],
+});
+sdk.start();
+process.on('SIGTERM', () => sdk.shutdown());
+```
+
+**Python** (`otel_init.py`, loaded before app import):
+
+```python
+from opentelemetry import trace
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
+from opentelemetry.sdk.resources import Resource
+from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
+from opentelemetry.instrumentation.auto_instrumentation import sitecustomize  # noqa
+import os
+
+resource = Resource.create({
+    "service.name": os.environ["OTEL_SERVICE_NAME"],
+    "service.version": os.environ["SERVICE_VERSION"],
+    "deployment.environment": os.environ["ENV"],
+})
+provider = TracerProvider(resource=resource)
+provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter()))
+trace.set_tracer_provider(provider)
+```
+
+Run with `opentelemetry-instrument python -m app` to pick up auto-instrumentations.
+
+**Go** — no auto-instrumentation; explicit middleware per framework. Generate
+a `pkg/obs/init.go` with otlptracegrpc exporter + the framework middleware
+(otelhttp, otelgrpc, otelmux, etc.).
+
+**JVM** — Java agent is the path: `-javaagent:opentelemetry-javaagent.jar`.
+No code changes needed; configure via env vars.
+
+### Step 4: Log-trace correlation
+
+Each log line MUST include `trace_id` and `span_id` from the active span.
+
+**Node** (pino):
+
+```typescript
+import pino from 'pino';
+import { trace, context } from '@opentelemetry/api';
+
+export const log = pino({
+  level: process.env.LOG_LEVEL ?? 'info',
+  formatters: {
+    log(obj) {
+      const span = trace.getSpan(context.active());
+      if (span) {
+        const ctx = span.spanContext();
+        return { ...obj, trace_id: ctx.traceId, span_id: ctx.spanId };
+      }
+      return obj;
+    },
+  },
+});
+```
+
+**Python** (structlog):
+
+```python
+import structlog
+from opentelemetry import trace
+
+def add_otel(_, __, event_dict):
+    span = trace.get_current_span()
+    if span.is_recording():
+        ctx = span.get_span_context()
+        event_dict["trace_id"] = format(ctx.trace_id, "032x")
+        event_dict["span_id"] = format(ctx.span_id, "016x")
+    return event_dict
+
+structlog.configure(processors=[add_otel, structlog.processors.JSONRenderer()])
+```
+
+Verify: trigger a request, find the log line, paste the `trace_id` into the
+trace UI. If the trace appears, correlation works.
+
+### Step 5: Generate the OTel Collector config (always — even for managed vendors)
+
+The Collector is the seam that lets you swap backends without redeploying
+apps. Even Datadog users should use the Collector with the Datadog exporter
+rather than dd-agent direct, so the SDK stays vanilla OTel.
+
+```yaml
+# deploy/observability/otel/collector.yaml
+receivers:
+  otlp:
+    protocols:
+      grpc: { endpoint: 0.0.0.0:4317 }
+      http: { endpoint: 0.0.0.0:4318 }
+
+processors:
+  batch: { timeout: 10s, send_batch_size: 1024 }
+  memory_limiter: { check_interval: 1s, limit_percentage: 80, spike_limit_percentage: 20 }
+  resourcedetection: { detectors: [env, system, k8s] }
+  # Tail sampling — opt-in once head-sampling is too lossy
+  # tail_sampling:
+  #   decision_wait: 30s
+  #   policies:
+  #     - { name: errors, type: status_code, status_code: { status_codes: [ERROR] } }
+  #     - { name: slow, type: latency, latency: { threshold_ms: 1000 } }
+  #     - { name: baseline, type: probabilistic, probabilistic: { sampling_percentage: 1 } }
+
+exporters:
+  # PICK ONE based on backend choice
+  otlphttp/tempo:
+    endpoint: http://tempo:4318
+  prometheusremotewrite:
+    endpoint: http://prometheus:9090/api/v1/write
+  loki:
+    endpoint: http://loki:3100/loki/api/v1/push
+  # OR managed:
+  # datadog: { api: { site: datadoghq.com, key: ${DD_API_KEY} } }
+  # otlphttp/honeycomb: { endpoint: https://api.honeycomb.io, headers: { x-honeycomb-team: ${HONEYCOMB_KEY} } }
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, resourcedetection, batch]
+      exporters: [otlphttp/tempo]
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, resourcedetection, batch]
+      exporters: [prometheusremotewrite]
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [loki]
+```
+
+Deploy as a DaemonSet (agent mode, per-node) + Deployment (gateway, cluster
+egress). Apps send to the agent on `localhost:4317`; the agent forwards to
+the gateway.
+
+### Step 6: Baseline dashboards
+
+Generate Grafana dashboard JSON (works for self-hosted Grafana AND for
+Grafana Cloud; managed vendors have their own dashboard formats — generate
+those if applicable):
+
+1. **Service RED dashboard** — per service: request rate, error rate,
+   p50/p95/p99 duration, by route.
+2. **USE dashboard** — for queues, caches, DBs: queue depth, cache hit ratio,
+   DB connections, replication lag.
+3. **SLO overview** — wires up to `/sre-slo` output.
+4. **Resource dashboard** — pod CPU/memory by service, restarts, OOMKills.
+
+Place under `deploy/observability/grafana/dashboards/`.
+
+### Step 7: Starter alert rules
+
+```yaml
+# deploy/observability/prometheus/alerts.yaml
+groups:
+  - name: service-health
+    interval: 30s
+    rules:
+      - alert: HighErrorRate
+        expr: |
+          sum by (service) (rate(http_server_request_duration_seconds_count{status_code=~"5.."}[5m]))
+          / sum by (service) (rate(http_server_request_duration_seconds_count[5m])) > 0.05
+        for: 10m
+        labels: { severity: page }
+        annotations:
+          summary: "< $labels.service > 5xx rate > 5% for 10m"
+          runbook: "https://runbooks.example.com/< $labels.service >/high-error-rate"
+      - alert: HighLatencyP95
+        expr: histogram_quantile(0.95, sum by (service, le) (rate(http_server_request_duration_seconds_bucket[5m]))) > 1
+        for: 10m
+        labels: { severity: ticket }
+      - alert: PodCrashLoop
+        expr: rate(kube_pod_container_status_restarts_total[10m]) > 0.1
+        for: 5m
+        labels: { severity: page }
+```
+
+Page sparingly. Ticket alerts (Slack, low priority) for the rest. Every alert
+MUST link a runbook URL — alerts without runbooks become alerts that get
+ignored.
+
+### Step 8: Write outputs
+
+```
+deploy/observability/
+├── README.md
+├── otel/
+│   ├── collector.yaml          # gateway + agent
+│   └── values.yaml             # if installed via Helm chart
+├── prometheus/
+│   ├── servicemonitors/        # per-service ServiceMonitor CRDs
+│   └── alerts.yaml
+├── grafana/
+│   └── dashboards/             # JSON per dashboard
+├── tempo/                      # config (if self-hosted)
+├── loki/                       # config (if self-hosted)
+└── runbooks/                   # one stub per alert
+apps/{service}/
+└── src/observability/          # SDK init + log correlation
+    ├── tracing.{ts,py,go,...}
+    └── logger.{ts,py,go,...}
+```
+
+### Step 9: Verify
+
+For each service, trigger a request and confirm:
+
+1. **Trace appears in backend** within ~30s.
+2. **Metrics show up in Prometheus / vendor** within ~1 min.
+3. **Log line has `trace_id`** matching the trace.
+4. **Service name + version + environment** show up as resource attributes
+   (not as "unknown_service").
+
+If any of these fail, fix before declaring done. Half-instrumented services
+are worse than uninstrumented ones because they make people trust the
+dashboard that's lying.
+
+## Outputs
+
+- `apps/{service}/src/observability/` — per-service SDK init + logger.
+- `deploy/observability/otel/` — Collector config.
+- `deploy/observability/prometheus/` — ServiceMonitors + alert rules.
+- `deploy/observability/grafana/dashboards/` — baseline RED + USE.
+- `deploy/observability/runbooks/` — one stub per alert.
+- `docs/observability-decision.md` — backend choice rationale.
+
+## Edge cases
+
+- **Serverless (Lambda).** The Node SDK init pattern doesn't apply — cold-start
+  cost is real. Use the OTel Lambda layer (one extra layer ARN per region) and
+  configure via env vars only.
+- **Very high cardinality (per-user labels).** Prometheus dies. Datadog charges
+  exponentially. Honeycomb thrives. If you NEED per-user dimensions, push for
+  Honeycomb OR move that data to traces (high cardinality is cheap in traces,
+  expensive in metrics).
+- **Existing vendor agent.** Run side-by-side for one sprint, compare counts,
+  THEN cut over. Going dark on telemetry for an afternoon is fine; going dark
+  for a week because "we'll figure it out" is how you miss the outage.
+- **Multi-tenant SaaS.** `tenant_id` belongs on the span as an attribute, not
+  on the metric as a label. Metric cardinality explodes; trace cardinality
+  doesn't.
+- **Sampling cost vs visibility.** Head-based 100% is great in dev, bankrupting
+  in prod. Start at 10%, layer tail-based for errors and slow requests, then
+  drop head-based to 1-5%.
+- **Trace context across queues.** Kafka / SQS / RabbitMQ require manual
+  propagation of `traceparent` in message headers — the auto-instrumentations
+  don't do it consistently across libraries. Generate explicit producer +
+  consumer helpers.
+
+## Dependencies
+
+- **S1 (Hall-mode preamble)** — provided by `{{PREAMBLE}}`.
+- **S5 (cloud creds)** — optional; needed only to push managed-vendor exporter
+  config (Datadog API key, Honeycomb key).
+- `/k8s-design` — for the Collector DaemonSet/Deployment manifests.
+- `/sre-slo` — consumes the metrics this skill emits.
+- `/service-mesh` — mesh-emitted metrics flow into the same Prometheus.
+
+## Important rules
+
+- **OTel SDK first, exporter second.** Never write code against the vendor
+  SDK directly. The SDK is vanilla OTel; only the exporter changes.
+- **Log-trace correlation is non-negotiable.** Every log line in a request
+  handler carries `trace_id` or the instrumentation isn't done.
+- **No alerts without runbooks.** Every PrometheusRule includes a runbook URL.
+- **Service name + version + environment** are mandatory resource attributes
+  — anything less makes filtering useless.
+- **Don't double-instrument.** If a vendor agent is already there, remove it
+  before adding OTel (or run side-by-side temporarily with explicit intent).

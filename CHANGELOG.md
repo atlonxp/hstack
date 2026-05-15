@@ -1,5 +1,65 @@
 # Changelog
 
+## [1.40.0.0] - 2026-05-16
+
+### **hstack v3 launches: 107 new skills, 19 new families, the four executive hats and four practitioner specialties stop being context switches.**
+
+This is the biggest hstack release since the fork — **173 skills live in Claude Code**, up from 66. Hall wears nine hats (CEO, CTO, CISO, Chief Architect, Senior Engineer + CPENT/CEH-grade red-team, AI engineering & research, cognitive computing & HMC, Operations Research with applied behavioral science). v1 made the engineer hat fast. v2 made it automatic. v3 compresses the other eight hats into one-command workflows.
+
+#### What's new (Wave 1 — start using today)
+
+- **`/adr`** — Architecture Decision Record generator + linter (Michael Nygard format)
+- **`/postmortem`** — blameless 5-whys postmortem with timeline reconstruction
+- **`/compliance-audit`** — SOC 2 / ISO 27001 / HIPAA / PCI-DSS v4 / GDPR / CCPA control walk with POA&M
+- **`/api-design`** — REST / GraphQL / gRPC + OpenAPI / SDL / .proto generation with style audit
+- **`/investor-update`** — monthly investor update drafted from git + Stripe + retro
+- **`/eval-harness`** — per-feature eval scaffolding (pytest / deepeval / ragas / promptfoo) with `--domain {nlp,cv,speech-tts,speech-asr,multimodal,sign}`
+
+#### Full family table
+
+| Family | Skills | Purpose |
+|---|---|---|
+| **CEO Cockpit** | 6 | `/investor-update` `/board-deck` `/runway` `/customer-interview` `/pricing-experiment` `/kpi-dashboard` |
+| **CTO Strategy** | 6 | `/adr` `/buy-vs-build` `/vendor-score` `/tech-debt-register` `/hiring-loop` `/team-velocity` |
+| **CISO Compliance + IR** | 6 | `/compliance-audit` `/incident-response` `/postmortem` `/vendor-risk` `/security-training` `/threat-model-evolve` |
+| **Chief Architect** | 6 | `/c4-diagram` `/iac-review` `/cost-optimize` `/migration-plan` `/dep-graph` `/service-catalog` |
+| **Mobile** | 5 | `/mobile-build` `/mobile-qa` `/aso` `/mobile-release` `/mobile-perf` |
+| **API/DB** | 6 | `/api-design` `/api-contract-test` `/db-design` `/db-perf` `/event-design` `/db-migration` |
+| **Cloud-Native** | 5 | `/k8s-design` `/service-mesh` `/observability` `/sre-slo` `/chaos` |
+| **Multi-Repo** | 5 | `/multi-repo-refactor` `/monorepo-graph` `/cross-repo-pr` `/workspace-sync` `/shared-lib-bump` |
+| **Red Team / RE** | 6 | `/recon` `/exploit-dev` `/reverse-engineer` `/redteam-c2` `/purple-exercise` `/bug-bounty-triage` |
+| **Blue Team / Defensive** | 8 | `/detect-engineering` `/threat-hunt` `/siem-tune` `/log-analyze` `/honeypot` `/soar-playbook` `/threat-intel` `/forensics` |
+| **AI Engineering / Research** | 6 | `/eval-harness` `/rag-design` `/agent-design` `/finetune` `/paper-pipeline` `/prompt-engineering` |
+| **Cognitive Computing / HMC** | 5 | `/agent-ux-review` `/mental-model-trace` `/collaboration-pattern` `/cognitive-load-audit` `/explanation-design` |
+| **Operations Research / Behavioral** | 6 | `/optimize-decision` `/simulate` `/incentive-design` `/behavioral-experiment` `/game-theory-analysis` `/biases-audit` |
+| **Product Transposition** | 4 | `/blueprint` `/transpose` `/clone-and-twist` `/recipe` (constructive RE pipeline — supertonic-v3 + fingerspelling.xyz → TSL patterns) |
+| **Speech & Voice AI** | 4 | `/tts-design` `/voice-clone` `/prosody-control` `/voice-eval` (expression + accent + tone + multilingual) |
+| **Accessibility AI** | 5 | `/indoor-nav` `/sign-text` `/sign-linguistics` `/accessibility-audit` `/multi-sign` (PhD area + sign language pipelines) |
+| **Avatar & Embodiment** | 5 | `/avatar-design` `/lip-sync` `/gesture-synth` `/expression-synth` `/avatar-sign` (mixed track) |
+| **FinTech / Algo Trading** | 5 | `/strategy-design` `/backtest` `/risk-engine` `/paper-trade` `/strategy-eval` (PIT data + realistic costs + regime-aware) |
+| **Economic Simulation** | 4 | `/econ-sim` `/event-stream` `/counterfactual` `/sim-calibrate` (real-time event-aware ABM/SD/DSGE) |
+
+#### Plus v2 deferred items shipped
+
+- **`/auto-guard`** — pre-commit security scan (OWASP Top 10, <5s budget, fail-open) + post-push QA hook (async, non-blocking)
+- **`/dashboard`** — parallel-agent review with live ANSI progress (presets: review, qa, full)
+
+#### Family tag system
+
+Every existing gstack-derived skill now carries a `[Family]` tag in its description: `/cso [Investigate & Security]`, `/ship [Ship & Release]`, `/qa [QA & Bugs]`, `/office-hours [Planning & Review]`, etc. 12 retroactive families for the 66 existing skills. Combined with 19 v3 families, the skill picker now organizes 173 skills by intent.
+
+#### Designed-but-deferred (in roadmap, awaiting Wave-2/3/4 sequencing)
+
+The Research & Development Pipeline composition (`/blueprint → /transpose → /clone-and-twist → /recipe → /paper-pipeline`) is documented in `PLAN-v3-roadmap.md` with three canonical workflows: supertonic-v3 (paper + inference code → fine-tuning), fingerspelling.xyz → TSL (product → domain transposition), and internal-code-to-new-idea (self-RE for new product ideas). Framework-agnostic by design.
+
+#### For contributors
+
+- 107 new SKILL.md.tmpl files written via parallel subagent dispatch (20 agents, all green)
+- All 10 host outputs regenerated (claude / codex / factory / kiro / opencode / slate / cursor / openclaw / hermes / gbrain)
+- 14 shared-infrastructure items (S1-S15) referenced by skills but not yet implemented in lib/ — Wave-1 backlog
+- Documentation hygiene: 4 doc-inventory tests still fail (AGENTS.md + docs/skills.md need 107 new entries, 3 codex descriptions over 900-char warning threshold, 1 zsh-glob bash block) — non-blocking but in next-patch backlog
+- VERSION + CHANGELOG follow standard release-summary format; package.json bumped to 1.40.0.0
+
 ## [1.39.1.1] - 2026-05-16
 
 ### Merged upstream gstack v1.28.0.0 → v1.39.1.0 (18 upstream releases)

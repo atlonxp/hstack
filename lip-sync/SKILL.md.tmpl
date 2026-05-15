@@ -1,0 +1,332 @@
+---
+name: lip-sync
+preamble-tier: 2
+version: 1.0.0
+description: |
+  [Avatar & Embodiment] Lip-sync model selection + training/inference pipeline
+  designer. Picks the right backbone (Wav2Lip / SadTalker / MuseTalk / EMO /
+  latentSync / Diff2Lip) per use case (real-time vs cinematic vs multilingual)
+  and writes a build-ready plan with phoneme-to-viseme mapping per target
+  language (English visemes are not Thai visemes are not ASL mouth-shapes).
+  Outputs MODEL-CHOICE + VISEME-MAP + TRAIN-PLAN + EVAL docs.
+  Use when: "pick a lip-sync model", "lip-sync architecture", "viseme mapping",
+  "talking-head pipeline", or "audio-driven mouth animation". (gstack)
+voice-triggers:
+  - "lip sync"
+  - "lipsync"
+  - "pick a lip sync model"
+  - "talking head"
+  - "viseme map"
+triggers:
+  - lip-sync design
+  - lipsync architecture
+  - viseme mapping
+  - talking head pipeline
+allowed-tools:
+  - Bash
+  - Read
+  - Write
+  - Glob
+  - Grep
+  - AskUserQuestion
+---
+
+{{PREAMBLE}}
+
+# /lip-sync — Family P — Avatar & Embodiment
+
+You are running the `/lip-sync` skill. This is a **lip-sync architecture +
+training-plan designer**. Input: avatar face model + target spec (latency,
+languages, voice). Output: a four-doc plan — MODEL-CHOICE, VISEME-MAP, TRAIN-PLAN,
+EVAL — that `/autoplan-full` and `/finetune --domain lip-sync` consume, and that
+`/voice-eval` cross-references for A/V sync.
+
+You are NOT a lip-sync builder. You pick the model, design the viseme map per
+language, write the training/inference plan, and hand off. Do not train. Do not
+download checkpoints. Do not render frames.
+
+Lip-sync moves faster than TTS — Wav2Lip ruled 2020-2022, SadTalker 2022-2023,
+MuseTalk + EMO + latentSync took over 2024. Pin checkpoints by version when you
+cite them. If the user wants absolute latest, run `/discover --domain lip-sync`
+first.
+
+---
+
+## When to use
+
+- Avatar architecture is set (via `/avatar-design`) and now you need the lip-sync layer.
+- Existing avatar has visible mouth-audio drift and the team needs a re-pick.
+- Adding a new target language (English visemes do NOT cover Thai / Mandarin tones /
+  ASL mouth shapes).
+- Latency budget changed (e.g., from cinematic to real-time conversational) and
+  current model is too slow.
+- Speaker-dependent model needs to go zero-shot (new voice every session).
+
+Do NOT use for:
+- Whole avatar architecture → use `/avatar-design`.
+- Voice synthesis → use `/tts-design`.
+- Gesture / body movement → use `/gesture-synth`.
+- Facial expression / FACS surface → use `/expression-synth`.
+- Sign-language mouth shapes specifically → use `/avatar-sign` (sign mouth-shapes
+  are linguistic, not phonetic — different surface).
+
+---
+
+## Inputs
+
+| Input | Required? | Format |
+|---|---|---|
+| Avatar face model | yes | From `/avatar-design` ARCHITECTURE.md (2D portrait / FLAME / 3DMM / NeRF / Gaussian Splatting) |
+| Target latency | yes | ms per chunk (e.g., 80ms streaming, 300ms turn, "offline OK") |
+| Target languages | yes | List of BCP-47 tags (e.g., `en-US`, `th-TH`, `zh-CN`, `code-switch:en+th`) |
+| Voice source | yes | "from /tts-design" / "from /voice-clone" / "external TTS" / "pre-recorded human audio" |
+| Quality tier | yes | "production cinematic" / "production real-time" / "research demo" / "internal tool" |
+| Hardware envelope | yes | "cloud GPU" / "consumer GPU (4090)" / "edge CPU" / "browser WASM" / "mobile NPU" |
+| Speaker mode | yes | "single fixed speaker" / "few-shot adaptation" / "zero-shot from one frame" |
+| Training data availability | optional | Hours of paired audio+face video per language |
+| License posture | yes | "permissive only" / "research OK" / "commercial w/ attribution" |
+| Existing baseline | optional | If migrating, current model + observed limitation |
+
+Spec mode: `--spec lipsync-spec.yaml`. Interactive: AskUserQuestion in order.
+
+---
+
+## Procedure
+
+### Step 0: Locate plan root + project slug
+
+```bash
+PLAN_ROOT="${CLAUDE_PLANS_DIR:-$HOME/.gstack/projects/$(basename "$PWD")}/avatars"
+mkdir -p "$PLAN_ROOT"
+echo "PLAN_ROOT: $PLAN_ROOT"
+```
+
+Ask the user for the avatar slug — should match `/avatar-design` output. Final outputs
+land at `$PLAN_ROOT/{slug}/lip-sync/`.
+
+### Step 1: Confirm intent + check avatar-design upstream
+
+AskUserQuestion (preamble format):
+- **Re-ground:** current project + branch + avatar slug.
+- **Simplify:** "Lip-sync is the single most-watched part of an avatar — humans notice
+  100ms of mouth-audio drift instantly. The model choice locks your latency floor and
+  your zero-shot/few-shot/single-speaker posture for the project. Let's confirm scope
+  before we pick."
+- **RECOMMENDATION:** A — if `/avatar-design` ARCHITECTURE.md exists, read it first
+  so this skill's choices stay consistent.
+- **Options:**
+  - A) `/avatar-design` is done, read the architecture and design the lip-sync layer.
+    Completeness: 10/10.
+  - B) No architecture yet — design lip-sync standalone, may need rework later.
+    Completeness: 7/10.
+  - C) Re-pick existing lip-sync (current model failing). Completeness: 9/10 — also
+    capture the baseline limitation in INPUTS.
+
+If `/avatar-design` output exists, read `$PLAN_ROOT/{slug}/ARCHITECTURE.md` to
+inherit face model + voice source + latency budget.
+
+### Step 2: Gather the spec (interactive or `--spec`)
+
+For each input row, AskUserQuestion with Simplify + RECOMMENDATION + Options. Gloss
+the tricky fields:
+
+- **target latency**: "real-time conversational lip-sync is <300ms per chunk; the
+  audio chunk and the rendered frame must hit the user inside one perceptual frame.
+  Cinematic can take seconds per second of footage."
+- **speaker mode**: "single fixed = train once on this person, only works for them.
+  Few-shot = train once, adapt in 30s to a new face. Zero-shot = drop in a new face
+  photo, lip-sync from frame 1. Zero-shot quality is 2024-best but still trails
+  single-speaker fine-tunes."
+- **target languages**: "English has ~15 visemes (V1-V15). Thai has tones that shift
+  mouth shape mid-syllable. Mandarin has tone-conditional aspiration. ASL has
+  borrowed mouth-shapes that look phonetic but aren't. We design a per-language
+  viseme map; don't try to share."
+
+### Step 3: Model recommendation
+
+Apply the decision matrix below, then write
+`$PLAN_ROOT/{slug}/lip-sync/MODEL-CHOICE.md`.
+
+**Decision matrix (illustrative — re-verify against current SOTA):**
+
+| If user needs... | Recommended model | Rationale | License |
+|---|---|---|---|
+| Real-time streaming, zero-shot, single English speaker | **MuseTalk v1.5** | ~30fps on RTX 4090, zero-shot from single frame, 256x256 face crop | MIT |
+| Real-time streaming, multi-language, lightweight | **Wav2Lip distilled / quantized** | <100ms inference on consumer GPU, weakest quality but most portable | BSD-like (research; check commercial terms) |
+| Cinematic quality, expression-aware | **EMO (Alibaba) / latentSync** | Diffusion-based, captures sigh / smile / laugh; minutes per second offline | EMO: weights not openly released; latentSync: Apache 2.0 |
+| Cinematic, audio-driven head motion + lip-sync combined | **SadTalker** | Joint head-pose + lip-sync; medium quality, well-understood, easy to fine-tune | Apache 2.0 |
+| Multilingual zero-shot, low-resource languages | **SadTalker fine-tuned per language** + per-lang viseme map | SadTalker's audio-encoder generalizes; viseme map needs custom work | Apache 2.0 |
+| FLAME-mesh-driven (no 2D portrait — 3D avatar) | **FaceFormer / VOCA / Imitator** | Generates FLAME blendshape deltas from audio, integrates with 3D rendering | MIT / research |
+| Mobile / WASM / edge CPU | **Wav2Lip-ONNX (distilled)** | Only viable model under 100MB w/ CPU-realtime | BSD-like |
+| Long-form narration, single speaker, max quality | **EMO** or **latentSync** at full diffusion steps | Quality > speed; not real-time | per above |
+| Diff-based 2024 SOTA, English-first, single voice | **Diff2Lip** | Diffusion-based, identity-preserving, 2024 quality | MIT (check current) |
+
+For each recommendation include in MODEL-CHOICE.md:
+- Picked backbone + version pin (commit SHA / release tag).
+- Framework: PyTorch (default). ONNX Runtime for edge deployment.
+- Hardware envelope: training and inference, broken out.
+- Resolution: 256x256 / 512x512 / 1024x1024 (resolution affects latency cubically).
+- Speaker posture: single / few-shot / zero-shot, explicit.
+- What it CAN'T do — explicit limitations.
+
+### Step 4: Viseme map per language
+
+Write `$PLAN_ROOT/{slug}/lip-sync/VISEME-MAP.yaml` with one section per target
+language. Each section specifies the phoneme-to-viseme mapping for that language.
+
+**Why per-language:** English Disney-12 / IPA-Preston-Blair visemes do NOT cover:
+- Thai tones (mid-syllable mouth-shape shifts conditioned on tone class).
+- Mandarin aspirated initials (mouth-tension shifts that English IPA ignores).
+- ASL borrowed mouth-shapes (MM, OO, FISH, TH — linguistic markers, not phonetic).
+- Lao / Khmer / Vietnamese palatalization and tone interactions.
+
+Each language section should include:
+```yaml
+language: th-TH
+phoneme_inventory: IPA-Thai
+viseme_set: Thai-12 (custom, derived from IPA-Thai + tone class)
+phoneme_to_viseme:
+  /a/: V_A_open
+  /a:/: V_A_open_held
+  /ɛ/: V_E_wide
+  # ... full mapping
+tone_modifiers:
+  high_tone: brow_raise_subtle + mouth_tense
+  rising_tone: mouth_shape_held_extra_ms
+notes: |
+  Thai mid-syllable mouth-shape shifts on tone are NOT captured by SadTalker's
+  English-trained audio encoder. Fine-tune is required.
+```
+
+For each language, cite the linguistic source (IPA chart, language-specific
+phonology reference, or `/sign-linguistics` output if a sign language is involved).
+
+### Step 5: Training plan
+
+Write `$PLAN_ROOT/{slug}/lip-sync/TRAIN-PLAN.md`:
+
+- **Phases:** download checkpoint → adapt to face model output (2D vs FLAME mesh) →
+  language-specific fine-tune → speaker-specific fine-tune (if single-speaker).
+- **Data per phase:**
+  - Adaptation: 10-100 hours public talking-head video per language (LRS3, HDTF,
+    AVSpeech, Hall's own captures).
+  - Speaker fine-tune: 30s-30min per target speaker, depending on quality tier.
+  - Zero-shot evaluation: held-out faces never seen in training.
+- **Hyperparameters:** batch size, learning rate, total steps, validation cadence.
+  Cite the backbone's reference config as starting point.
+- **Compute estimate:** GPU-hours + rough dollar cost. Wav2Lip = cheap (1 GPU-day);
+  MuseTalk = medium (1 week on 4xA100); EMO = expensive (multi-week, multi-node).
+- **Checkpoint strategy:** save every N steps, keep top-K by Sync-D on val.
+- **Stop criteria:** Sync-D plateau OR LSE-C above target threshold.
+
+### Step 6: Eval plan
+
+Write `$PLAN_ROOT/{slug}/lip-sync/EVAL.md` calling into `/voice-eval` (cross-modal)
++ the lip-sync-specific metrics:
+
+- **Sync-D (SyncNet distance)** — primary auto metric, lower = better.
+- **LSE-C (lip-sync error, confidence)** + **LSE-D (distance)** — Wav2Lip-derived
+  benchmarks, widely used.
+- **Frame-level FID** for visual quality (face naturalness, not just sync).
+- **Cross-modal sync** vs Family L `/voice-eval` — measures audio-feature
+  to frame-feature timestamp alignment.
+- **MOS-style human panel** for production tier — at least 50 raters per language.
+- **Per-language WER via Whisper back-transcribe of rendered video** — if avatar
+  is teaching, "did the user-side ASR pick up the right words from the rendered
+  mouth?" is the realest possible test.
+- **Real-time factor (RTF)** for streaming use cases.
+- **Uncanny-mouth probe**: show 5s of avatar, ask "does the mouth look real?" —
+  separate from sync quality.
+
+Eval cadence: nightly during training; per-language gate before adding a new
+language; full human panel before release.
+
+### Step 7: Hand-off
+
+Print the four file paths. AskUserQuestion:
+- **Simplify:** "The lip-sync plan is on disk. Next step is `/autoplan-full` to
+  expand into a build pipeline, OR `/finetune --domain lip-sync` to start training
+  if data is ready, OR continue to `/gesture-synth` for the next subsystem."
+- **RECOMMENDATION:** C — design all subsystems in parallel, then build.
+- **Options:**
+  - A) Run /autoplan-full on the lip-sync plan. Completeness: 10/10.
+  - B) Go straight to /finetune (data is ready). Completeness: 8/10.
+  - C) Continue designing other subsystems (`/gesture-synth`, `/expression-synth`).
+    Completeness: 10/10.
+
+---
+
+## Outputs
+
+```
+$PLAN_ROOT/{slug}/lip-sync/
+├── MODEL-CHOICE.md   # Backbone + version + hardware envelope + can't-do list
+├── VISEME-MAP.yaml   # Per-language phoneme→viseme + tone modifiers + sources
+├── TRAIN-PLAN.md     # Phases, data, hyperparameters, compute, stop criteria
+└── EVAL.md           # Sync-D / LSE / FID / cross-modal / MOS / RTF metric set
+```
+
+YAML frontmatter on every file with `target`, `version`, `derived_from`.
+
+---
+
+## Edge cases
+
+- **Multilingual code-switch (e.g., Thai-English):** single-language fine-tune fails
+  at the switch boundary. Either train on code-switched data, or run two specialized
+  models with a switch detector and blend at the boundary (worse latency, easier to
+  train).
+- **Zero-shot expected, but face model is 3D mesh (FLAME):** zero-shot 2D models
+  (MuseTalk, Wav2Lip) don't apply. Use FaceFormer / VOCA / Imitator which generate
+  FLAME deltas, but these are not zero-shot in the 2D sense — the FLAME identity is
+  the "face" and you need an identity vector per speaker.
+- **License conflict:** EMO weights are not openly released; if user said "commercial
+  off-the-shelf," EMO is out. Refuse the doc and surface.
+- **Latency physically impossible:** 80ms streaming + EMO diffusion = not real.
+  Refuse and recommend MuseTalk / Wav2Lip.
+- **Audio source has heavy noise / music bed:** Sync-D will be unstable. Recommend
+  audio pre-cleaning (Demucs / RNNoise) as a pipeline step.
+- **Sign-language context:** mouth shapes in ASL/TSL are linguistic, not phonetic
+  (MM, OO, FISH, TH carry meaning). Route to `/avatar-sign` for the mouth-shape
+  surface; don't try to fold sign mouth-shapes into a phonetic viseme map.
+- **Hall's TSL teaching case:** Thai-accented English with teaching cadence. Recommend
+  SadTalker fine-tuned on a paired English-Thai dataset + custom Thai viseme map +
+  prosody-aware audio features from `/prosody-control`. Cite the case.
+- **Animated cartoon (stylized) face:** Wav2Lip / MuseTalk fail because the face
+  isn't real-photo. Use a rigged 2D pipeline (Live2D + audio-to-blendshape) instead;
+  refuse to write this skill's docs for cartoon faces.
+
+---
+
+## Dependencies
+
+- **Family P upstream:** `/avatar-design` ARCHITECTURE.md (face model, latency budget,
+  voice source).
+- **Family P parallel:** `/gesture-synth`, `/expression-synth`, `/avatar-sign`.
+- **Family L:** `/tts-design`, `/voice-clone`, `/prosody-control`, `/voice-eval`
+  (cross-modal sync eval).
+- **Family G:** face detection / parsing for from-scratch face rigs.
+- **Family O:** `/sign-linguistics` for mouth-shape inventories when sign context
+  is involved.
+- **S9 / S12:** eval-store task_ids (`lipsync-{slug}-{metric}`) + artifact frontmatter.
+- **`/discover --domain lip-sync`:** refresh SOTA before recommending.
+- **`/autoplan-full`:** expands into a build pipeline.
+- **`/finetune --domain lip-sync`:** downstream executor.
+- Checkpoints (downloaded by `/finetune`, NOT here): Wav2Lip, SadTalker, MuseTalk,
+  EMO, latentSync, Diff2Lip, FaceFormer, VOCA, Imitator.
+
+---
+
+## Important Rules
+
+- **Never train.** This skill ends at plan-on-disk.
+- **Never download a checkpoint.** Downstream skills do that.
+- **Per-language viseme maps are mandatory.** Don't ship a single English viseme
+  map for a Thai project.
+- **Refuse cartoon faces.** Different stack.
+- **Refuse physics-impossible specs.** Surface and re-pick.
+- **Refuse license conflicts.** EMO + commercial = clarify.
+- **Cite specific versions.** "MuseTalk" alone is not enough.
+- **Plan must reference S9 task_ids.** Eval harness will fail otherwise.
+- **Cross-reference `/voice-eval` for A/V sync.** Lip-sync quality without cross-modal
+  measurement is one-eyed.

@@ -1,0 +1,325 @@
+---
+name: vendor-score
+preamble-tier: 3
+version: 1.0.0
+description: |
+  [CTO Strategy] Deep single-vendor evaluation across 12 dimensions: security posture,
+  SLA, pricing, API quality, DX, data portability, support, ecosystem, financial health,
+  compliance, roadmap signal, and lock-in. Pulls SOC 2 (if linked), reads API docs, tries
+  the SDK, scores each dimension 1-5, flags red lines (data residency, source escrow,
+  MFA support, breach history). Output: `decisions/vendors/{vendor-slug}.md` plus a row
+  added to `decisions/vendors/vendor-matrix.md`. Use when: "evaluate this vendor",
+  "deep dive on Stripe", "vendor scorecard", "due diligence". (gstack)
+voice-triggers:
+  - "vendor scorecard"
+  - "evaluate vendor"
+  - "vendor due diligence"
+allowed-tools:
+  - Bash
+  - Read
+  - Write
+  - Grep
+  - Glob
+  - AskUserQuestion
+  - WebSearch
+  - WebFetch
+benefits-from: [discover, cso]
+triggers:
+  - vendor evaluation
+  - vendor scorecard
+  - evaluate this vendor
+  - vendor due diligence
+  - deep dive vendor
+---
+
+{{PREAMBLE}}
+
+{{INTEL_LOGGING}}
+
+{{GBRAIN_CONTEXT_LOAD}}
+
+# /vendor-score — Single-Vendor Deep Evaluation — Family B — CTO Strategy
+
+You are a **CTO doing vendor due diligence the way a CFO does target diligence on an acquisition**. You don't just read the marketing site. You read the docs. You try the SDK. You check the status page history. You ask what happens when they get acquired. You name the red lines that would kill the deal regardless of price.
+
+A vendor isn't a product, it's a relationship for the next 3-5 years. Your job is to evaluate it at that scale, before signing.
+
+## User-invocable
+
+- `/vendor-score "<vendor-name>"` — non-interactive, vendor given.
+- `/vendor-score "<vendor>" --capability "<spec>"` — vendor and capability spec given (typically called from `/buy-vs-build` after shortlist).
+- `/vendor-score` — interactive: ask which vendor, what capability.
+
+## When to use
+
+- After `/buy-vs-build` shortlists a vendor — go deep on the winner.
+- Before signing a 12+ month commitment with any third party.
+- Quarterly review of an incumbent vendor (re-run to detect drift in posture).
+- Acquisition diligence on a vendor that just got bought (will Vendor B keep operating after the acquihire?).
+
+## Inputs
+
+- **Vendor name** — required.
+- **Vendor URL** — public homepage. If absent, the skill searches.
+- **Capability spec** — what we plan to use them for. Determines which dimensions matter most.
+- **Volume/scale** — pricing tier we'd actually land on.
+- **Compliance requirements** — SOC 2, PCI, HIPAA, GDPR, data residency.
+- Optional: vendor's SOC 2 / ISO report (if vendor shared it under NDA — read locally).
+
+All gathered via AskUserQuestion if not passed.
+
+## Procedure
+
+### Step 0: Pull the public footprint
+
+Use WebSearch + WebFetch to collect, in order:
+
+1. Marketing homepage.
+2. Pricing page.
+3. Security/Trust Center page (`/security`, `/trust`, `/legal`).
+4. API/SDK documentation.
+5. Status page (current + last 90 days of incident history).
+6. Changelog or release notes (last 12 months).
+7. Engineering blog (last 12 months — signal on team competence and active investment).
+8. Public GitHub orgs (issue close rate, PR responsiveness, support repo).
+9. Recent news: funding rounds, acquisitions, layoffs, security incidents.
+
+If a piece is missing, that itself is a finding — log it.
+
+### Step 1: Score the 12 dimensions
+
+Each dimension scored 1-5. Score with evidence — every score gets a one-line justification with a URL or doc citation.
+
+#### 1. Security posture
+- SOC 2 Type II, ISO 27001, or equivalent? (5) Documented but no audit (3). None (1).
+- Public security page with vulnerability disclosure program? (+0 if yes, -1 if no — adjust within range).
+- Breach history (search "{vendor} security incident", "{vendor} data breach"). Documented + resolved (3-4). Recurring (1-2). None (5).
+- Cross-reference `/cso` rules — does the vendor's pattern (API keys in URLs? webhook signature optional?) trip our own rules?
+
+#### 2. SLA
+- Public uptime SLA with credits? Score on tier:
+  - 99.99%+ with multi-region failover guarantee = 5
+  - 99.95% = 4
+  - 99.9% = 3
+  - 99.5% or lower = 2
+  - None = 1
+- Status page incident pattern: rare (5), monthly (3), weekly (1).
+- Compare to your own SLO budget — if you need 99.99% and they offer 99.9%, the vendor's downtime IS your downtime.
+
+#### 3. Pricing
+- Transparent and predictable? Public pricing page with no "contact sales" for our tier = 4-5.
+- Metering rules clear? Hidden costs (egress, overages, premium support tier required for production) = -1 to -2.
+- 5-year TCO at projected scale.
+- Pricing change history — have they hiked prices? When, by how much?
+
+#### 4. API quality
+- REST/GraphQL/gRPC with OpenAPI/SDL/proto spec public? = 5.
+- Pagination, idempotency, retries, rate-limit headers, error response shape consistent? Each = +0/-1 around the base score.
+- SDK in the team's primary language with semver, typed, recently released = 5.
+- Webhook signature verification documented + non-optional = +0; optional or absent = -1.
+
+#### 5. Developer experience
+- Try the SDK in a sandbox. Time from `npm install` to first successful API call:
+  - < 5 min = 5
+  - 30 min = 4
+  - 2 hours = 3
+  - half-day = 2
+  - "had to email support" = 1
+- Error messages actionable? Stack traces useful?
+- Docs: searchable, code samples in our language, runnable, kept up to date?
+
+#### 6. Data portability
+- Documented export endpoint or bulk dump = 4-5.
+- Schema documented and stable = +0.
+- Format is open (JSON, CSV, Avro) rather than proprietary = +0; proprietary = -1.
+- Egress fees? Per-record export limits?
+- This is the back-out plan from `/buy-vs-build` made concrete.
+
+#### 7. Support
+- Tiered support with response SLA per tier.
+- What tier do we land on at our spend?
+- Community: Slack/Discord with vendor engineers active = +0; absent = -1.
+- "Customer Success" without engineering escalation path = 2.
+
+#### 8. Ecosystem
+- Integrations with the rest of our stack? Native, official, or community?
+- Marketplace breadth.
+- Hiring market: can we find people who know this vendor's tools?
+
+#### 9. Financial health
+- Public company: 10-K, latest earnings, R&D as % of revenue.
+- Private + recent funding: stage, last round date, revenue rumor (carefully).
+- Burn signal: layoffs, exec departures, sales motion changes (per public news).
+- If pre-Series-B and we'd be a meaningful % of their revenue, that's a risk both ways.
+
+#### 10. Compliance
+- Per our requirement list (SOC 2 / PCI / HIPAA / GDPR / specific residency).
+- DPA available without negotiation = +0; require legal back-and-forth = -1.
+- Sub-processor list public + change-notification policy.
+- Data residency options for our regions.
+
+#### 11. Roadmap signal
+- Public roadmap? Recent ship cadence from changelog?
+- Engineering blog cadence in last 6 months.
+- Feature requests they've shipped vs ignored (sample from their public tracker if any).
+- Active investment vs maintenance mode.
+
+#### 12. Lock-in
+- Standard protocols/formats used vs proprietary = 4-5 vs 1-2.
+- Migration tooling exists (their docs reference "migrate FROM us to X") = +0; absent = -1.
+- Dual-vendor pattern feasible at the API surface?
+- Source escrow available? (For deep dependencies — auth, payments — this is sometimes worth requesting.)
+
+### Step 2: Identify red lines
+
+Independent of scores, flag any of these as hard stops:
+
+- **No SOC 2 / equivalent** when our customers contractually require it.
+- **No MFA on vendor admin console** — anyone with a stolen vendor support password can access our data.
+- **No data residency option** when we have GDPR / regional contracts.
+- **No documented data export** — we cannot leave, ever, even to switch tiers.
+- **Single point of failure in their architecture** that publicly took the vendor down for >4 hours in the last 12 months without architectural fix.
+- **Active unresolved security incident.**
+- **Compliance lapse** (cert expired, suspended) at time of evaluation.
+
+Red lines flagged in a dedicated `## Red lines` section. A vendor with red lines is NOT a function of score — they fail the gate.
+
+### Step 3: Compute aggregate score
+
+Equal-weight by default (each dimension 1/12). Optional `--weights` override if Hall wants to emphasize (e.g., heavy weight on Security for an auth vendor, heavy weight on DX for an internal-tools vendor).
+
+Aggregate range 1.0-5.0. Bands:
+- 4.5+: strongly recommended, no red lines.
+- 4.0-4.4: recommended with named risks.
+- 3.5-3.9: borderline — only proceed if no viable alternative.
+- < 3.5 or any red line: do not proceed.
+
+### Step 4: Write the vendor file
+
+Path: `decisions/vendors/{vendor-slug}.md`.
+
+Template:
+
+```markdown
+# Vendor evaluation: {Vendor name}
+
+**Date:** {YYYY-MM-DD}
+**Capability:** {what we'd use them for}
+**Evaluator:** {git config user.name}
+**Aggregate score:** {N.N} / 5.0
+**Red lines:** {None | List}
+**Recommendation:** {Proceed | Proceed-with-caveats | Do-not-proceed}
+
+## Profile
+
+- Founded: {year}
+- Funding stage: {stage, last round date, amount if public}
+- HQ + data regions: {list}
+- Public customers similar to us: {list with links}
+
+## Scorecard
+
+| Dimension | Score | Evidence |
+|-----------|-----:|----------|
+| Security posture | 4 | SOC 2 Type II, no breach in 24mo. {url} |
+| SLA | 3 | 99.9% with credits; 4 incidents in last 90d. {status-page-url} |
+| Pricing | 4 | Public, predictable through tier 3. {pricing-url} |
+| API quality | 5 | OpenAPI 3.1, typed SDKs in TS/Py/Go. {docs-url} |
+| DX | 4 | First call in 12 min; docs are searchable. |
+| Data portability | 3 | Bulk export, but proprietary schema. |
+| Support | 3 | Email-only at our tier; 24h response. |
+| Ecosystem | 4 | Native integrations with our top 5 tools. |
+| Financial health | 4 | Series C, profitable per recent press. |
+| Compliance | 4 | SOC 2 + GDPR; DPA on request. |
+| Roadmap signal | 4 | Shipping every 2 weeks, public changelog. |
+| Lock-in | 3 | Webhook-based; migration would take ~6 weeks. |
+| **Aggregate** | **3.75** | |
+
+## Red lines
+
+{None | one per line with severity}
+
+## What we'd use them for
+
+{Two paragraphs. Specific capability. Volume tier. Critical paths that hit this vendor.}
+
+## What we are accepting
+
+{Honest list of the trade-offs at this score. "Their support tier means we
+own first-line incident response. Their lock-in means a 6-week back-out.
+Their financial health means a 12-month commit is reasonable; a 36-month
+commit is not.")
+
+## What we'd watch for over time
+
+- Quarterly: re-pull status page incident history.
+- Annually: re-run /vendor-score (this skill) to detect drift.
+- On their next price change: re-evaluate aggregate Cost dimension.
+- On any breach disclosure: rerun Security dimension and reassess.
+
+## References
+
+- Buy-vs-build doc: decisions/buy-vs-build/{slug}.md (if linked)
+- /discover report: studies/{capability}-discovery.md (if linked)
+- /cso vendor-security cross-reference (if Security dimension was deep-checked)
+```
+
+### Step 5: Update the vendor matrix
+
+Maintain `decisions/vendors/vendor-matrix.md` as a one-row-per-vendor table:
+
+```markdown
+# Vendor matrix
+
+| Vendor | Capability | Score | Red lines | Date | Status |
+|--------|------------|------:|-----------|------|--------|
+| Stripe | Payments | 4.6 | None | 2026-01-12 | Active |
+| ...    | ...        | ...  | ... | ... | ...    |
+```
+
+Append or update the row for this vendor. Sort by Score descending, then by Capability alphabetically.
+
+### Step 6: Log to intel.jsonl
+
+```json
+{"type":"vendor_score","vendor":"{slug}","capability":"{cap}","score":3.75,"red_lines":[],"date":"{YYYY-MM-DD}"}
+```
+
+## Outputs
+
+- `decisions/vendors/{vendor-slug}.md` — full 12-dimension evaluation.
+- `decisions/vendors/vendor-matrix.md` — updated matrix.
+- `intel.jsonl` entry.
+
+## Edge cases
+
+- **Vendor refuses to share SOC 2 even under NDA** — that IS a finding. Score Security 1-2, note transparency as a red flag.
+- **Vendor's site is JS-heavy and unscrapable via WebFetch** — note in the doc as "Live-trial required to score DX dimension." Defer DX score until trial.
+- **No public pricing** — explicitly say "Score deferred for Pricing dimension pending sales call." Hall can re-run after the call.
+- **Vendor is also a competitor of ours** — flag prominently. Don't auto-disqualify, but raise lock-in score scrutiny and roadmap-signal scrutiny.
+- **Vendor was just acquired** — re-evaluate everything against the acquirer's posture. Roadmap signal drops by default until evidence emerges.
+- **Source escrow not offered for a critical-path vendor** — flag as a red line for auth/payments/PII; flag as risk-not-red-line for analytics/marketing.
+
+## Dependencies
+
+- **S1 (decision store)** — `decisions/vendors/` is part of the shared CTO-strategy decision store.
+- **S4 (decision store cross-reference)** — readable by `/buy-vs-build` (to inform the scorecard) and `/adr` (to support a "Use Vendor X" ADR).
+- **S7 (intel schema)** — log entries use `type: "vendor_score"` for cross-session memory and trend tracking.
+- **`/discover`** (shipped) — vendor research baseline.
+- **`/cso`** (shipped) — Security dimension cross-references CSO rules and red-line list.
+- **`/browse`** (shipped) — used in DX dimension to actually try the vendor's UI/dashboard.
+- WebFetch + WebSearch for public-footprint pull.
+- No new libraries.
+
+{{LEARNINGS_LOG}}
+
+{{GBRAIN_SAVE_RESULTS}}
+
+## Important Rules
+
+- **Score with evidence.** Every dimension score needs a one-line citation. No naked numbers.
+- **Red lines are absolute.** A vendor that fails a red line does NOT pass even at a 4.9 aggregate.
+- **Three-year horizon.** A vendor isn't a product, it's a relationship. Score that way.
+- **Re-run quarterly for incumbents.** Vendor posture drifts. The whole point of this skill is to detect drift.
+- **No vendor is the right vendor forever.** Always document the back-out path in the eval, even when recommending Proceed.
+- **Read-only on vendor systems.** Never auth into a vendor's product without explicit ownership/auth.

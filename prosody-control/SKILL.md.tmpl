@@ -1,0 +1,322 @@
+---
+name: prosody-control
+preamble-tier: 2
+version: 1.0.0
+description: |
+  [Speech & Voice AI] Expression / tone / accent / cadence control surface for a TTS
+  system. Designs the right technique stack — reference-audio conditioning, learned
+  style tokens (GST), explicit SSML extensions, IPA + tone marks, per-sentence style
+  embeddings, multi-speaker mixing — per use case. Generates the training-data
+  augmentation strategy. Built for cases like Thai-accented English with
+  teaching-cadence prosody (fingerspelling → TSL) where no off-the-shelf model carries
+  the full surface.
+  Use when: "control prosody", "voice expression", "TTS emotion control", "accent control",
+  "cadence control", "SSML design", "style tokens", "GST". (gstack)
+voice-triggers:
+  - "control prosody"
+  - "tts expression"
+  - "accent control"
+  - "teaching cadence"
+triggers:
+  - prosody control
+  - tts expression
+  - accent control
+  - style tokens
+  - ssml design
+allowed-tools:
+  - Bash
+  - Read
+  - Write
+  - Glob
+  - Grep
+  - AskUserQuestion
+---
+
+{{PREAMBLE}}
+
+# /prosody-control — Family L — Speech & Voice AI
+
+You are running the `/prosody-control` skill. This designs the **prosody-control
+surface** for a TTS system: how the user (or the agent calling the TTS) shapes
+expression, tone, accent, cadence, and emphasis. Out-of-the-box TTS sounds flat —
+this skill picks the right combination of techniques and lays out the training-data
+strategy to make them work.
+
+This is a **design** skill. It produces planning documents, not trained models.
+Downstream `/finetune --domain speech-tts` consumes the plan; `/voice-eval` measures
+whether the surface is doing what it claims.
+
+The fingerspelling.xyz → TSL case is the canonical motivating example: Thai-accented
+English with teaching-cadence prosody (slow, repeated, exaggerated syllable boundaries
+for a learner). No off-the-shelf model does this. The prosody-control surface is what
+makes it buildable.
+
+---
+
+## When to use
+
+- TTS sounds flat / robotic and needs expression.
+- Need accent control (e.g., American → Thai-accented English) without re-training a
+  whole base model.
+- Need emotion control (happy / serious / urgent) on a fixed voice.
+- Building a teaching / explainer voice with deliberate cadence (Hall's TSL case).
+- Multi-speaker mixing (blend two voices, e.g., 70% Hall + 30% another speaker).
+- Per-sentence style needed in long-form narration (e.g., audiobook chapters with
+  different moods).
+
+Do NOT use for:
+- Cloning the voice itself → `/voice-clone`.
+- Picking the base TTS architecture → `/tts-design` first.
+- Eval-only work → `/voice-eval`.
+
+---
+
+## Inputs
+
+| Input | Required? | Format |
+|---|---|---|
+| Base TTS slug | yes | The `/tts-design` slug or backbone name (must be picked first) |
+| Expression set | yes | List of named styles (e.g., `["neutral", "happy", "urgent", "teaching"]`) |
+| Accent set | optional | List of accent tags (e.g., `["en-US-neutral", "en-th-accented"]`) |
+| Tone variants | optional | `["formal", "casual", "intimate"]` |
+| Cadence variants | optional | `["normal", "slow-teaching", "fast-newsreader"]` |
+| Available reference audio | optional | Path to dir of style-tagged audio |
+| Control interface preference | yes | "SSML tags" / "Style embeddings (vector)" / "Both" / "Natural-language prompt" |
+| Languages | yes | BCP-47 list, including code-switch tags |
+
+---
+
+## Procedure
+
+### Step 0: Locate plan root + slug
+
+```bash
+PLAN_ROOT="${CLAUDE_PLANS_DIR:-$HOME/.gstack/projects/$(basename "$PWD")}/tts"
+[ -d "$PLAN_ROOT" ] || { echo "ERROR: /tts-design has not been run yet. Run it first." >&2; exit 1; }
+echo "PLAN_ROOT: $PLAN_ROOT"
+```
+
+Ask the user for the TTS slug (must match an existing `/tts-design` output).
+Outputs land at `$PLAN_ROOT/{slug}/PROSODY/`.
+
+### Step 1: Verify base architecture is prosody-friendly
+
+Read `$PLAN_ROOT/{slug}/ARCHITECTURE.md`. Some backbones support rich prosody surfaces
+out of the box; others need bolt-ons; one or two won't carry it without rebuild.
+
+| Backbone | Native prosody support | Style-token support (GST) | Reference-audio conditioning | Notes |
+|---|---|---|---|---|
+| **StyleTTS2** | Strong (style diffusion) | Yes (style encoder) | Yes | Best canvas for accent + emotion control |
+| **XTTSv2** | Medium (zero-shot style transfer) | Implicit via reference | Yes | Code-switch + cross-lingual native |
+| **VITS** | Weak | Add GST head (extension) | Add (extension) | Needs work; OK for single-style + accent |
+| **Tacotron2 + WaveRNN** | Medium | Yes (original GST paper) | Yes | Legacy; good for research replication |
+| **Bark** | Native emotion tags (`[laughter]`, `[sigh]`) | No | No | Limited to its tag vocabulary |
+| **Tortoise** | Reference-audio driven | Implicit | Yes | Slow inference; offline only |
+| **F5-TTS** | Reference-audio conditioning | Implicit | Yes | Research license; flow-matching |
+| **Piper / Glow-TTS** | Weak | No | Limited | Edge-only — accept flat prosody |
+
+If the user's base backbone is in the "weak" row, AskUserQuestion:
+- **Simplify:** "Your base TTS doesn't natively carry the prosody surface you want.
+  We can either add the surface as an extension (more work, full control) OR switch
+  the base to a prosody-friendly model (faster, but `/tts-design` rework)."
+- **RECOMMENDATION:** B if expression scope is moderate; A if scope is heavy.
+- **Options:**
+  - A) Add GST + reference-audio extension to the existing backbone. Completeness: 8/10.
+  - B) Re-run /tts-design with prosody-first constraints (likely → StyleTTS2). Completeness: 10/10.
+
+### Step 2: Pick the control surface composition
+
+The prosody-control surface is composed of 1-5 layers. Pick the combination per
+use case.
+
+| Layer | What it does | When to use | Cost |
+|---|---|---|---|
+| **Reference-audio conditioning** | "Style transfer from this clip" | Have clean style examples; want zero-shot transfer | Low |
+| **Global Style Tokens (GST)** | Learn N latent style vectors from training data | Want categorical control ("happy/sad/teaching") with smooth interpolation | Medium (training) |
+| **SSML extensions** | Explicit `<prosody rate="slow" pitch="+15%">` + custom `<style>` / `<accent>` / `<emphasis>` tags | Want author-controlled, deterministic output | Low (parsing only) |
+| **IPA + tone marks** | Phoneme-level control with tone diacritics (Mandarin, Thai, Vietnamese) | Tonal languages, accent control, pronunciation fixes | Medium (g2p infra) |
+| **Per-sentence style embeddings** | Compute style vector per utterance from text + tags | Long-form with shifting mood (audiobooks, explainers) | Medium |
+| **Multi-speaker mixing** | Linear-interpolate speaker embeddings (e.g., 0.7·SpeakerA + 0.3·SpeakerB) | Voice blending, persona dial | Low |
+| **Natural-language style prompts** | "Read this in a calm teacher voice" → embedded by an aux text encoder | Modern flow-matching models (F5-TTS, some 2024 SOTA) | High (extra model) |
+
+AskUserQuestion (for each layer): include or skip? Show the cost + use case fit.
+
+Write the composition to `$PLAN_ROOT/{slug}/PROSODY/CONTROL-SURFACE.md` with:
+
+- One layer per section.
+- For each: which technique, which library / config flag, what the user-facing
+  control looks like (SSML tag? Style ID? Reference WAV path? Prompt string?).
+- An end-to-end example: "User wants Thai-accented English in teaching cadence
+  for sentence X. They call `tts(text, style='teaching', accent='en-th',
+  reference_wav='samples/teacher-3.wav')` → here's how each layer activates."
+
+### Step 3: SSML / tag vocabulary
+
+If SSML or custom tags are in the surface, write
+`$PLAN_ROOT/{slug}/PROSODY/SSML-EXTENSIONS.md` defining:
+
+- **W3C SSML 1.1 baseline:** `<break>`, `<prosody rate pitch volume>`, `<emphasis>`,
+  `<say-as>`, `<phoneme>`, `<sub>`.
+- **hstack extensions (custom):**
+  - `<style name="...">` — references a GST token or a style embedding by name.
+  - `<accent code="en-th">` — pushes the synthesizer toward an accent embedding.
+  - `<cadence preset="teaching">` — preset that combines rate, pitch range, pause
+    distribution.
+  - `<repeat count="2" mode="exaggerate">` — for teaching cadence (repeat with
+    increasing emphasis).
+  - `<ipa>θa˨˩</ipa>` — explicit IPA with tone diacritics; passes verbatim to g2p.
+  - `<lang code="th">` — code-switch boundary.
+
+Each tag gets: syntax, attribute table, behavior, fallback when synthesizer doesn't
+support it (graceful degradation, not silent drop).
+
+### Step 4: Style data plan
+
+Write `$PLAN_ROOT/{slug}/PROSODY/STYLE-DATA-PLAN.md`. This is the augmentation
+strategy to make the layers actually work.
+
+| Layer | Data requirement | Augmentation |
+|---|---|---|
+| Reference-audio conditioning | 10-50 clean utterances per style (already in target voice) | None — keep clean |
+| GST | 50-500 utterances per style, balanced across speakers | Speed perturbation (±10%), pitch shift (±2 semitones) — careful not to wash out style |
+| SSML extensions | Test corpus where each tag is exercised + annotated ground truth | Synthetic — generate matched pairs by varying tags on same text |
+| IPA + tone marks | Phoneme-aligned corpus; for tonal langs, tone-balanced | Forced alignment via Montreal Forced Aligner |
+| Per-sentence style embeddings | Long-form corpus with sentence-level style annotation | Crowdsource style tags OR derive from emotion classifier |
+| Multi-speaker mixing | Multi-speaker corpus with consistent recording conditions | Volume + RIR normalization |
+| Natural-language style prompts | Paired (prompt, audio) corpus | Hard to augment; data quality > quantity |
+
+For each row, also write:
+- **Existing public datasets:** ESD (emotion), IEMOCAP (emotion), CSS10 (multi-lang),
+  LibriTTS-R (clean multi-speaker), VCTK (accents), AISHELL-3 (Mandarin tones),
+  Common Voice (breadth).
+- **Custom data needed:** if the user's style set isn't covered (Hall's
+  teaching-cadence Thai-accented English isn't on the shelf), spec the recording
+  protocol — script list, prompt count, speaker count, hours target, mic spec.
+
+### Step 5: Training plan addendum
+
+Write `$PLAN_ROOT/{slug}/PROSODY/TRAIN-ADDENDUM.md` covering:
+
+- **Phase 1 (skip if base is already trained):** train base TTS per `/tts-design`.
+- **Phase 2:** train style heads — GST embedding table, style encoder, accent
+  embedding head. Freeze the base; train the heads only (much cheaper).
+- **Phase 3:** joint fine-tune — unfreeze the last few layers of the base for
+  the styles to actually shape acoustics. Small learning rate; risk of degrading
+  base quality if overdone.
+- **Phase 4:** train SSML tag parsers (if used) — these are usually rule-based,
+  not learned; just write the parser.
+- **Compute estimate:** typically 10-30% of base training cost for style heads.
+
+### Step 6: Perceptual eval plan
+
+Write `$PLAN_ROOT/{slug}/PROSODY/EVAL-PERCEPT.md`. Prosody quality doesn't reduce
+to MOS alone — you need style-specific metrics.
+
+Call `/voice-eval` with this metric set:
+
+- **MOS / MOSNet** on neutral baseline (must not degrade vs base).
+- **MOS-Style:** human listeners rate "does this match the requested style?" on a
+  5-point scale.
+- **Style classifier accuracy:** train a small classifier on style tags (or use
+  emotion2vec); measure if the output's predicted style matches the requested one.
+- **F0 distance** between output and reference style exemplar (for accent + cadence).
+- **Duration distance:** RMSE of phoneme durations vs reference (catches cadence
+  shifts).
+- **Code-switch accuracy:** for code-switched outputs, WER per language segment
+  (Whisper back-transcribe with language ID).
+- **Accent panel:** native speakers of the target accent rate naturalness on a
+  per-utterance basis.
+
+S9 eval-store `task_id`s: `prosody-{slug}-{metric}`.
+
+### Step 7: Hand-off
+
+Print the file tree. AskUserQuestion:
+- **Simplify:** "Prosody surface is designed. Next is either training (run
+  `/finetune --domain speech-tts` with the addendum) OR perceptual eval if you
+  already have a candidate model."
+- **RECOMMENDATION:** A.
+- **Options:**
+  - A) Run /finetune to train the style heads. Completeness: 10/10.
+  - B) Run /voice-eval against an existing candidate. Completeness: 9/10.
+  - C) Stop — I'll review the plan first. Completeness: 9/10.
+
+---
+
+## Outputs
+
+```
+$PLAN_ROOT/{slug}/PROSODY/
+├── CONTROL-SURFACE.md   # Composition of layers + end-to-end usage example
+├── SSML-EXTENSIONS.md   # Tag vocabulary, attributes, fallback behavior
+├── STYLE-DATA-PLAN.md   # Public datasets + custom-recording protocol
+├── TRAIN-ADDENDUM.md    # Phase-by-phase training plan for style heads
+└── EVAL-PERCEPT.md      # Style-aware eval metric set (calls /voice-eval)
+```
+
+Frontmatter on every doc: `target`, `version`, `derived_from: tts-design/{slug}`.
+
+---
+
+## Edge cases
+
+- **Multilingual code-switching** (e.g., Thai-accented English with mid-sentence
+  Thai phrases): XTTSv2 is the cleanest base. The control surface needs explicit
+  `<lang>` boundaries OR a language-detection preprocessor. Without it, the
+  synthesizer will mispronounce code-switched segments.
+- **Conflicting style requests** (e.g., "fast newsreader cadence" + "intimate
+  whispered tone" simultaneously): surface the conflict. Style mixing in latent
+  space is allowed but produces unpredictable acoustics — recommend the user
+  pick one dominant style.
+- **Accent + tonal-language interaction** (Thai → Mandarin accent): tonal language
+  accents are harder than non-tonal because tone-realization patterns differ.
+  Flag this; recommend a tone-aware g2p + native-speaker eval panel.
+- **Style data scarcity:** if user wants 8 styles but has data for 3, recommend
+  training the 3 + using natural-language prompts for the others (only on
+  prompt-capable backbones like F5-TTS or 2024+ models).
+- **SSML tag the synthesizer doesn't support:** parser must degrade gracefully
+  (drop tag, log warning) — never raise to the user.
+- **Hall's TSL case** (Thai-accented English, teaching cadence, fingerspelling →
+  TSL voice): full layer stack — reference-audio conditioning + GST for cadence
+  presets + SSML extensions for `<repeat mode="exaggerate">` + IPA for explicit
+  pronunciation of fingerspelled letters. Recommend StyleTTS2 base, custom
+  recording session for ~30 minutes of teaching-cadence Thai-accented English.
+- **Watermark interaction:** if `/voice-clone` produced the base voice with
+  AudioSeal, verify the prosody training doesn't degrade watermark recovery.
+  Cite the test in EVAL-PERCEPT.md.
+
+---
+
+## Dependencies
+
+- **S9 — Eval-store schema:** EVAL-PERCEPT.md writes `task_id`s of the form
+  `prosody-{slug}-{metric}`.
+- **S12 — Study artifact format:** outputs carry YAML frontmatter with
+  `derived_from`.
+- `/tts-design` — must be run first; this skill extends its outputs.
+- `/voice-clone` — if the base voice is cloned, ensure prosody training preserves
+  watermark recovery.
+- `/voice-eval` — eval harness called by EVAL-PERCEPT.md.
+- `/finetune --domain speech-tts` — downstream training for style heads.
+- Model checkpoints (downloaded by `/finetune`): StyleTTS2 style encoder weights,
+  GST reference implementations (NVIDIA Tacotron2-GST, ESPnet), emotion2vec for
+  style classifier eval.
+- Auxiliary tools: Montreal Forced Aligner (phoneme alignment), thaipy / pythainlp
+  (Thai g2p), epitran (multilingual IPA), pypinyin (Mandarin).
+
+---
+
+## Important Rules
+
+- **Never design prosody before base architecture is locked.** This skill requires
+  a `/tts-design` slug. If none exists, refuse and route the user there.
+- **Always cite a degraded-fallback behavior for each SSML tag.** Synthesizers
+  evolve; tags must never crash the pipeline.
+- **Style requests that contradict physically** (e.g., "whisper" + "shout") get a
+  surfaced warning, not a silent best-effort blend.
+- **For cloned voices: verify watermark robustness post-prosody-training.**
+  Prosody fine-tuning can subtly corrupt watermark signal.
+- **Eval-percept is mandatory.** Don't ship a prosody surface that hasn't been
+  panel-rated.
+- **The teaching-cadence use case (Hall's TSL fingerspelling work) is a first-class
+  pattern, not an edge case.** Treat it as the canonical example throughout.

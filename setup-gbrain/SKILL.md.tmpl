@@ -3,7 +3,7 @@ name: setup-gbrain
 preamble-tier: 2
 version: 1.0.0
 description: |
-  Set up gbrain for this coding agent: install the CLI, initialize a
+  [Intelligence & Memory] Set up gbrain for this coding agent: install the CLI, initialize a
   local PGLite or Supabase brain, register MCP, capture per-remote trust
   policy. One command from zero to "gbrain is running, and this agent
   can call it." Use when: "setup gbrain", "connect gbrain", "start

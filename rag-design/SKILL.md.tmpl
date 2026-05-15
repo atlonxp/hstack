@@ -1,0 +1,285 @@
+---
+name: rag-design
+preamble-tier: 2
+version: 1.0.0
+description: |
+  [AI Engineering / Research] End-to-end RAG design: data-source survey, chunking strategy,
+  embedding model, vector store, retrieval algorithm, reranker, eval plan.
+  Each design decision is eval-gated — you don't pick a chunker because someone
+  said it was good, you pick it because the eval beat the alternatives.
+  Outputs `rag/{namespace}/{ingest.py,retrieve.py,evals/,DESIGN.md}`.
+  Use when: "add RAG to this", "search over my docs", "build a retriever",
+  "design a knowledge base". (gstack)
+voice-triggers:
+  - "rag design"
+  - "build rag"
+  - "design retrieval"
+triggers:
+  - rag design
+  - retrieval augmented generation
+  - vector search design
+allowed-tools:
+  - Bash
+  - Read
+  - Write
+  - Edit
+  - Glob
+  - Grep
+  - AskUserQuestion
+---
+
+{{PREAMBLE}}
+
+# /rag-design — Family G — AI Engineering / Research
+
+You are running the `/rag-design` skill. "Add RAG to this" is a 3-week design
+loop where the team picks wrong defaults first (recursive char-splitter chunks,
+ada-002 embeddings, cosine top-3, no reranker, no eval) and discovers the
+problems after launch. This skill compresses that loop to a day by making every
+design decision eval-gated.
+
+The output is a `rag/{namespace}/` directory with a working ingest pipeline, a
+retriever, a paired `/eval-harness` that proves which chunking and reranking
+choices actually win on YOUR data, and a `DESIGN.md` documenting the decisions.
+
+---
+
+## When to use
+
+Use this skill when:
+
+- You're adding retrieval-augmented generation to a feature and you don't have
+  a paired eval that fails when retrieval quality drops.
+- An existing RAG system is silently bad (users say "it doesn't find the right
+  thing") and nobody knows which stage to fix (chunker? embedder? reranker?).
+- You're choosing between vector stores (Postgres + pgvector vs Pinecone vs
+  Qdrant vs Weaviate) and want the choice grounded in eval cost.
+
+Do NOT use this skill for full-text search (use Postgres FTS or Meilisearch
+directly) or for embedding-only similarity (e.g., recommendation systems with
+no LLM consumer).
+
+---
+
+## Inputs
+
+Required (collect via AskUserQuestion if not provided):
+
+1. **Namespace** — slug for the RAG system (e.g., `support-docs`, `legal-cases`,
+   `tsl-glossary`).
+2. **Data source** — file paths, URL roots, Notion/Confluence/GDrive
+   connectors, a database query. Multi-source is allowed; declare each.
+3. **Query shape** — example queries the system must serve. Three is enough to
+   start. These become the eval seed set.
+4. **Quality target** — what does "good retrieval" mean? Examples: "the
+   top-3 contains the correct doc on 90% of queries", "the cited passage
+   answers the question on 80% of queries (rubric-judged)".
+5. **Latency budget** — p95 latency from query to top-K result. Affects
+   reranker choice.
+6. **Domain** — `--domain nlp` (default), `--domain multimodal` (image+text
+   embeddings), `--domain code` (code embeddings + AST chunking).
+
+---
+
+## --domain modes
+
+### `--domain nlp` (default)
+
+- **Chunkers:** sentence-aware (NLTK / spaCy), semantic (langchain semantic
+  chunker, embedding-similarity threshold), structural (markdown headers,
+  HTML elements), hybrid (structural primary + semantic refine).
+- **Embedders:** OpenAI `text-embedding-3-large`, Voyage `voyage-3`, Cohere
+  `embed-english-v3`, local `bge-large-en-v1.5` or `nomic-embed-text-v1.5`.
+- **Retrievers:** dense (cosine on full embedding), hybrid (dense + BM25 with
+  RRF fusion), MMR for diversity.
+- **Rerankers:** Cohere rerank-3, Voyage rerank-2, local `bge-reranker-v2-m3`,
+  ColBERT for late-interaction.
+
+### `--domain multimodal`
+
+- **Chunkers:** image-aware (extract figures + captions as paired units),
+  layout-aware via `unstructured` or PyMuPDF.
+- **Embedders:** CLIP, SigLIP, Voyage multimodal, Cohere `embed-multilingual-v3`
+  for mixed-language image-text.
+- **Retrievers:** dense over CLIP space, hybrid with figure-caption BM25.
+- **Rerankers:** GPT-4o / Claude-3.5-Sonnet as cross-encoder on image+text
+  pairs (paid, save for top-K refinement only).
+
+### `--domain code`
+
+- **Chunkers:** AST-based (tree-sitter), import-graph-aware, function-scoped.
+  Plain recursive char-splitter is forbidden — destroys symbol locality.
+- **Embedders:** Voyage `voyage-code-3`, `bge-code-v1`, or jina-code-v2.
+- **Retrievers:** dense + symbol exact-match (CTags) + recent-git-activity
+  rerank.
+- **Rerankers:** lightweight LLM (Claude Haiku) at top-10 with
+  "is this the right function for the query" rubric.
+
+---
+
+## Procedure
+
+### Step 1 — Survey the data
+
+```bash
+# Catalog the source: file count, size distribution, format mix.
+find {data_root} -type f \( -name "*.md" -o -name "*.pdf" -o -name "*.html" \) | wc -l
+find {data_root} -type f -exec wc -c {} + | sort -n | tail -10
+```
+
+Read 5 random documents end-to-end. Surface: format heterogeneity, document
+length distribution (median, p95), structural signals (headers, tables, code
+blocks), language(s), update frequency, source-of-truth ownership.
+
+Write findings to `rag/{namespace}/DESIGN.md` §Data Survey.
+
+### Step 2 — Build the eval first (eval-gated decisions)
+
+Invoke `/eval-harness` with:
+
+- `--domain` matching this skill's domain.
+- Feature slug = `rag-{namespace}`.
+- Failure mode = "retrieval misses the answer doc" OR "retrieved passage
+  doesn't answer the question" — pick the one that matters.
+- Dataset = the 3+ example queries from inputs, expanded to 30 by hand or
+  via synthetic question generation from the source docs.
+
+The eval must exist BEFORE you pick a chunker. Every chunker / embedder /
+reranker decision below is justified by an eval delta, not by vibes.
+
+### Step 3 — Decide chunking (eval-gated)
+
+AskUserQuestion to confirm 2-3 chunker candidates from the domain's list.
+Ingest each, run the eval, record the metric in S9 under task_id
+`rag-{namespace}/chunking-{strategy}`. Pick the winner. Document the delta
+in DESIGN.md.
+
+Default candidates:
+- **Baseline:** fixed-size (512 token) recursive splitter — for comparison only.
+- **Sentence-aware:** language-detected sentence splitter, 5-10 sentence chunks.
+- **Semantic:** embedding-similarity threshold (langchain semantic chunker).
+- **Structural:** Markdown / HTML header-aware split.
+- **Hybrid:** structural primary, semantic refine within section.
+
+### Step 4 — Decide embedder (eval-gated)
+
+Two-axis decision: quality and cost.
+
+| Embedder | Cost / 1M tokens | Quality (MTEB avg) | Notes |
+|----------|------------------|--------------------|-------|
+| OpenAI text-embedding-3-large | $0.13 | 64.6 | Hosted, easy |
+| Voyage voyage-3 | $0.18 | 67.2 | Best quality, hosted |
+| Cohere embed-english-v3 | $0.10 | 64.5 | Hosted, fast |
+| bge-large-en-v1.5 (local) | infra-only | 64.2 | Self-host, no key |
+| nomic-embed-text-v1.5 (local) | infra-only | 62.4 | Lightweight, self-host |
+
+Pick 2 candidates that bracket your cost tolerance. Re-embed the winning
+chunker output through each, re-run the eval, record S9 deltas. Pick.
+
+### Step 5 — Decide vector store
+
+This decision is NOT eval-gated (all major stores hit the same recall on
+identical vectors). It's an ops decision.
+
+| Store | When to pick |
+|-------|--------------|
+| pgvector (Postgres) | Already have Postgres, < 1M vectors, want SQL JOINs |
+| Qdrant | Self-host, 1M-100M vectors, filter-heavy queries |
+| Pinecone | Hosted, no ops, willing to pay |
+| Weaviate | GraphQL native, hybrid built-in |
+| Chroma | Prototyping only, do not ship |
+
+Generate `ingest.py` and `retrieve.py` against the chosen store.
+
+### Step 6 — Add reranker if eval needs it
+
+Run the eval WITHOUT reranker first. If quality is below target, add a
+reranker stage and re-eval. Record both numbers in S9. Reranker adds ~50-200ms
+of latency — verify the budget from inputs.
+
+### Step 7 — Write DESIGN.md
+
+Capture every decision with the eval delta that justified it. Format:
+
+```markdown
+## Chunker: structural-with-semantic-refine
+- Candidates tested: fixed-512, sentence-aware, structural, structural+semantic
+- Winner metric: recall@5 = 0.84 (CI [0.79, 0.89])
+- Runner-up: structural (recall@5 = 0.78)
+- Why winner: source docs are markdown with H2 sections that map to topics;
+  semantic refine inside sections catches multi-topic sections.
+- S9 task_id: rag-support-docs/chunking-structural-semantic-refine
+```
+
+Repeat for embedder, store choice (note: ops-decision, not eval-gated),
+reranker.
+
+### Step 8 — Wire CI
+
+Add the rag eval to `eval-harness`'s tier (gate / periodic). Hybrid evals
+(retrieval + LLM-judge) usually land in periodic.
+
+---
+
+## Outputs
+
+- `rag/{namespace}/ingest.py` — pipeline from source → chunks → embeddings →
+  store.
+- `rag/{namespace}/retrieve.py` — query → top-K with optional rerank.
+- `rag/{namespace}/evals/` — paired eval harness (built via `/eval-harness`).
+- `rag/{namespace}/DESIGN.md` — every decision + its eval delta.
+- S9 records under task_ids `rag-{namespace}/chunking-*`,
+  `rag-{namespace}/embedder-*`, `rag-{namespace}/end-to-end`.
+
+---
+
+## Edge cases
+
+- **Source docs are in a language without good embedders** (e.g., Thai, Lao,
+  many sign-language glossaries): use a multilingual embedder
+  (`bge-m3`, `cohere-embed-multilingual-v3`); flag that MTEB scores don't
+  generalize and quality must be validated on YOUR queries.
+- **Updates faster than re-embed cost** (e.g., chat history RAG):
+  use a streaming ingestion pattern (Qdrant + payload index, or pgvector with
+  a `last_updated` column). Schedule full re-eval weekly.
+- **Mixed PII / public data:** declare PII scope in DESIGN.md, ensure the
+  store supports per-row ACL (pgvector with row-level security, Pinecone
+  namespaces). Do not embed PII into a shared namespace.
+- **Reranker cost spikes:** rerank top-K with K small (10-20), not top-100.
+  If the reranker is paid, gate it behind a confidence-threshold on the
+  retriever stage.
+- **Stale embeddings after model deprecation:** every embedding record
+  carries its `embedder_id` + `embedder_version`. Re-ingest is a versioned
+  operation, not an in-place mutation.
+
+---
+
+## Dependencies
+
+- **`/eval-harness`** — required. Every decision in this skill is justified
+  by an eval delta written to S9.
+- **Vector store SDKs:** `pgvector` Python / `psycopg`, `qdrant-client`,
+  `pinecone`, `weaviate-client`. Pick one per project.
+- **Embedder SDKs:** `openai`, `voyageai`, `cohere`, or `sentence-transformers`
+  for local.
+- **Chunkers:** `langchain-text-splitters`, `unstructured`, `tree-sitter`
+  (code mode).
+- **S9 eval store** — every decision writes a typed baseline.
+
+---
+
+## AskUserQuestion gates
+
+Before scaffolding, REQUIRE:
+
+1. **Namespace** — short slug for the RAG system.
+2. **Domain** — `nlp / multimodal / code`. No silent default.
+3. **Data source(s)** — explicit path / URL / connector list. Refuse to
+   proceed on "scrape my whole notion" without a concrete URL root.
+4. **Quality target** — concrete metric goal, not "good".
+5. **Latency budget** — p95 ms. Affects reranker viability.
+6. **Eval tier** — gate vs periodic.
+
+After the eval gate-decision (Step 3 and Step 4), surface the candidate list
+and let the user prune before paying for re-ingest. Embeddings cost money;
+don't run all 5 candidates if Hall only wants 2.

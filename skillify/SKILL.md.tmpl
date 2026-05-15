@@ -2,7 +2,7 @@
 name: skillify
 version: 1.0.0
 description: |
-  Codify the most recent successful /scrape flow into a permanent
+  [Intelligence & Memory] Codify the most recent successful /scrape flow into a permanent
   browser-skill on disk. Future /scrape calls with the same intent run
   the codified script in ~200ms instead of re-driving the page. Walks
   back through the conversation, synthesizes script.ts + script.test.ts

@@ -1,0 +1,360 @@
+---
+name: transpose
+preamble-tier: 3
+interactive: true
+version: 1.0.0
+description: |
+  [Product Transposition] Interactive bridge-planning skill. Reads a BLUEPRINT.md
+  (from /blueprint) and walks line-by-line through what STAYS, what ADAPTS, and
+  what gets REPLACED when transposing the mechanism from its source domain to
+  your target domain. Names the proprietary slots, surfaces target-domain edge cases
+  the source didn't have, and emits TRANSPOSITION.md — a bridge plan downstream
+  /clone-and-twist consumes. Refuses to produce a transposition with a trivial
+  domain shift (i.e., a literal clone). Use when asked to "transpose this study",
+  "plan the bridge", "ASL to TSL", or "inference to fine-tuning". (gstack)
+benefits-from: [blueprint, plan-eng-review, plan-ux-review]
+allowed-tools:
+  - Read
+  - Write
+  - Edit
+  - Grep
+  - Glob
+  - Bash
+  - AskUserQuestion
+triggers:
+  - transpose this
+  - plan the bridge
+  - bridge the domain
+  - transposition plan
+  - ASL to TSL
+  - inference to fine-tuning
+---
+
+{{PREAMBLE}}
+
+# /transpose — Family J — Product Transposition
+
+You have a BLUEPRINT.md describing **their** mechanism. Now you decide what to
+preserve, what to adapt, and what to replace when you build the same kind of
+thing for **your** domain. This skill is interactive — the user makes the
+decisions, this skill structures them.
+
+Pipeline location:
+
+```
+  /blueprint  →  [ /transpose ]  →  /clone-and-twist  →  /recipe
+                  (this skill)
+```
+
+## When to use
+
+- You ran `/blueprint` and have a `studies/<slug>/BLUEPRINT.md` ready.
+- You're about to start building the transposed version and don't want to
+  re-derive every "what changes for our domain?" decision while coding.
+- You need a durable bridge plan a teammate (or future-you) could read and
+  understand without re-asking every question.
+
+**Not for:**
+
+- Transpositions where the source and target domain are functionally identical
+  ("port a Postgres feature to MySQL" with no meaningful adaptation). That's a
+  literal clone — this skill refuses to produce one.
+- Reviewing the source domain itself — that's `/blueprint`.
+
+## Inputs
+
+| Flag | Required | Meaning |
+|---|---|---|
+| `<study-slug>` | yes | The study slug from `studies/<slug>/` |
+| `--domain-spec <file>` | no | YAML file declaring target domain invariants; falls back to interactive |
+| `--target <name>` | no | Short target-domain label (e.g., `TSL`, `fine-tuning`) — defaults to ask |
+| `--reuse <prior-slug>` | no | Cherry-pick decisions from a prior transposition |
+
+If `--domain-spec` is missing the skill goes fully interactive (recommended for
+first-time transpositions). With `--domain-spec`, AskUserQuestion gates still
+fire for any element where the spec is silent.
+
+---
+
+## Procedure
+
+### Step 0: Pre-flight
+
+```bash
+eval $(~/.claude/skills/gstack/bin/gstack-slug 2>/dev/null)
+STUDY="studies/<study-slug>"
+[ -f "$STUDY/BLUEPRINT.md" ] || { echo "BLUEPRINT.md missing — run /blueprint first"; exit 1; }
+```
+
+Read `BLUEPRINT.md` end-to-end. Pay particular attention to:
+
+- The **mechanism** section (this is what you're transposing).
+- The **mechanism properties to preserve** list (S13 candidates).
+- The **open questions** (these may need to be answered for the target domain).
+
+### Step 1: Pick the mode
+
+Use AskUserQuestion to pick the transposition posture:
+
+> Which posture for this transposition?
+>
+> **A) FAITHFUL** — preserve mechanism precisely; minimize REPLACEs. Use when
+>   you trust the source design and the value-add is the domain shift itself.
+> **B) ADAPTIVE** — preserve the mechanism's *shape* but expect many ADAPTs.
+>   Use when the target domain has invariants the source didn't.
+> **C) AGGRESSIVE** — preserve only the core insight; expect many REPLACEs.
+>   Use when the target domain forces a different mechanism even if the
+>   high-level intent is the same.
+>
+> If you don't know, pick **B** — the safest middle ground.
+
+Commit to the chosen posture for the remainder of the session. Like `/plan-ceo-review`,
+do not silently drift across postures.
+
+### Step 2: Target-domain spec
+
+If `--domain-spec` was passed, load it. Otherwise, AskUserQuestion to fill in:
+
+1. **Target domain name** (e.g., "TSL", "fine-tuning", "multi-tenant SaaS").
+2. **Invariants** — what is non-negotiably true in the target domain that the
+   source didn't have? (Examples: "TSL has tone markers ASL doesn't"; "fine-tuning
+   needs gradient accumulation that inference doesn't"; "our users speak Thai,
+   not English".)
+3. **Vocabulary mapping** — for any source-domain term in BLUEPRINT.md, what's
+   the target-domain term? (Build a glossary.)
+4. **Constraints** — hard limits (compute budget, latency, regulatory, language).
+5. **Anti-goals** — explicit "we will NOT do X even if the source does."
+
+Write the spec to `studies/<slug>/notes/target-domain-spec.yaml` so re-runs can
+load it as `--domain-spec`.
+
+### Step 3: Stays / Adapts / Replaces — element-by-element
+
+For each element in BLUEPRINT.md §Mechanism, §Data model, §Key algorithms, and
+§Edge cases, surface it via AskUserQuestion with three options:
+
+- **STAY** — preserve identically. The shape and the content carry over.
+- **ADAPT** — preserve the shape; new content for our domain. (E.g., "phoneme
+  inventory" stays as a concept, but the phonemes themselves change ASL → TSL.)
+- **REPLACE** — different mechanism. The source's solution doesn't fit; pick
+  a different approach. Requires a short reason.
+
+Capture each decision row into a table:
+
+| # | Element | Decision | Reason | Target-domain content |
+|---|---|---|---|---|
+| 1 | Phoneme inventory | ADAPT | TSL has different phonemes + tone | TSL inventory (link to /sign-linguistics) |
+| 2 | Spaced-repetition loop | STAY | core mechanism, works for any phoneme set | n/a |
+| 3 | English UI strings | REPLACE | target users speak Thai | Thai-only UI from day one |
+
+**Posture gates:**
+- In **FAITHFUL** mode, if REPLACEs exceed 25% of elements, AskUserQuestion to
+  confirm you didn't pick the wrong posture.
+- In **ADAPTIVE** mode, if STAYs exceed 80% or REPLACEs exceed 50%, same prompt.
+- In **AGGRESSIVE** mode, if STAYs exceed 50%, same prompt.
+
+### Step 4: Proprietary slots
+
+**This is the most important step.** A transposition without proprietary slots
+is a clone. Identify the exact insertion points where Hall's IP lives. For each
+slot, AskUserQuestion or accept declared content:
+
+- **Slot name** (e.g., `tsl-phoneme-encoder`, `training-strategy`, `personalization-layer`).
+- **Interface spec** — the inputs, the outputs, and the contract the surrounding
+  code expects. The surrounding (cloned + adapted) code never changes; the slot
+  fills can change freely.
+- **Where it plugs in** — file/module/function names from BLUEPRINT.md or planned
+  build.
+- **Why it's proprietary** — the IP claim or competitive-advantage statement.
+
+**Refusal gate:** if zero proprietary slots are identified by the end of Step 4,
+STOP. AskUserQuestion:
+
+> No proprietary slots identified. /transpose refuses to produce a TRANSPOSITION.md
+> that would amount to a literal clone — Family J is for transformative work, not
+> reproduction. Either:
+>
+> A) Name at least one proprietary slot now (your model, your data, your algorithm,
+>    your UX, your eval — name one).
+> B) Cancel this transposition.
+
+### Step 5: Domain-shift gate
+
+Verify the transposition has a **non-trivial domain shift**. AskUserQuestion to
+self-justify:
+
+> Describe the domain shift in one sentence. Examples:
+> - "ASL → TSL fingerspelling — different phoneme inventory + tone."
+> - "Inference → fine-tuning — different training loop + gradient accumulation."
+> - "Web → mobile — touch affordances + offline support + smaller screens."
+>
+> If you can't write a sentence that distinguishes source from target in more than
+> just naming, the shift is trivial — STOP and reconsider.
+
+If the user's sentence is "same thing but [renamed]", refuse and exit.
+
+### Step 6: New-domain edge cases
+
+The target domain introduces edge cases the source didn't have. Surface them:
+
+- For each invariant in §2, walk through "what new failure mode does this introduce?"
+- For each ADAPT or REPLACE, walk through "what could go wrong that didn't in the source?"
+- For each proprietary slot, walk through "what does the surrounding code need to
+  tolerate from an unknown slot implementation?"
+
+Record under §New-domain edge cases in TRANSPOSITION.md.
+
+### Step 7: Build-order recommendation
+
+Suggest a build order based on STAY/ADAPT/REPLACE decisions:
+
+1. **Core skeleton first** — STAYs scaffolded as concrete code with placeholder
+   I/O. These are the cheapest wins and unblock everything else.
+2. **Adapters next** — ADAPTs slotted into the skeleton. Each adapter is small
+   and testable in isolation.
+3. **Replacements last** — REPLACEs are usually larger surfaces and benefit from
+   stable surrounding scaffolding to plug into.
+4. **Proprietary slot stubs** are scaffolded interface-only at any time; Hall
+   fills them when ready.
+5. **Fidelity tests** are written **before** the matching code lands (TDD on
+   mechanism properties).
+
+### Step 8: Fidelity targets
+
+Promote BLUEPRINT.md §9 (candidate mechanism properties) into concrete, measurable
+fidelity targets. For each candidate:
+
+- Does it survive the transposition? (Some properties die — e.g., "English
+  pronunciation accuracy" doesn't transfer to TSL.)
+- What's the **target value** on the transposed system?
+- What's the **acceptable degradation** (if any)?
+- What's the **test harness** that will measure it (`/eval-harness` domain)?
+
+These become the S13 entries `/clone-and-twist` writes to `evals/fidelity/<slug>.jsonl`.
+
+### Step 9: Write TRANSPOSITION.md
+
+Required YAML frontmatter (S12):
+
+```yaml
+---
+target: <study target>
+mode: transposition
+version: 1
+derived_from: ["studies/<slug>/BLUEPRINT.md"]
+target_domain: <name from Step 2>
+posture: FAITHFUL | ADAPTIVE | AGGRESSIVE
+extracted_on: <ISO date>
+---
+```
+
+Body sections, in order:
+
+1. **Posture + rationale** — which posture, why.
+2. **Target-domain spec** — invariants, vocabulary, constraints, anti-goals.
+3. **Source→target mapping table** — the STAY/ADAPT/REPLACE table from Step 3.
+4. **Proprietary slots** — list with interface specs (from Step 4).
+5. **Domain-shift justification** — the sentence from Step 5.
+6. **New-domain edge cases** — from Step 6.
+7. **Build order** — from Step 7.
+8. **Fidelity targets** — measurable mechanism properties (from Step 8).
+9. **Open questions** — anything that needs resolving before / during build.
+
+### Step 10: Self-check
+
+Before exiting:
+
+- [ ] At least 1 proprietary slot in §4.
+- [ ] §5 domain-shift sentence is more than "same thing, renamed".
+- [ ] STAY/ADAPT/REPLACE counts fit the declared posture (or were re-confirmed
+      via the posture gate in Step 3).
+- [ ] §8 fidelity targets are measurable (have a metric + test harness), not
+      vague aspirations.
+- [ ] Frontmatter `derived_from` links to the source BLUEPRINT.md.
+
+### Step 11: Report
+
+```
+Transposition complete: studies/<slug>/TRANSPOSITION.md
+- Posture: <FAITHFUL|ADAPTIVE|AGGRESSIVE>
+- Target domain: <name>
+- Source→target rows: <N>  (STAY: <a>, ADAPT: <b>, REPLACE: <c>)
+- Proprietary slots: <N>
+- Fidelity targets: <N>
+- New-domain edge cases: <N>
+
+Next steps:
+  /clone-and-twist <slug>  — generate the build plan + mechanism-fidelity tests
+```
+
+---
+
+## Outputs
+
+Per S12:
+
+```
+studies/<slug>/
+├── BLUEPRINT.md                       # (input, not modified)
+├── TRANSPOSITION.md                   # this skill's headline output
+├── notes/target-domain-spec.yaml      # so re-runs can use --domain-spec
+└── questions.md                       # extended with transposition open questions
+```
+
+---
+
+## Edge cases
+
+- **Trivial domain shift.** Refuse (Step 5 gate). Family J is for transformative
+  work; if the shift is trivial, the user wants `git clone`, not this skill.
+- **Zero proprietary slots.** Refuse (Step 4 gate). A transposition without
+  proprietary slots is a derivative work, not a transposition.
+- **BLUEPRINT.md is too thin to transpose.** If the BLUEPRINT.md has fewer than
+  3 mechanism elements or no mechanism properties listed, route back to `/blueprint`
+  for a deeper study first.
+- **User toggles posture mid-session.** AskUserQuestion to confirm; if confirmed,
+  restart Step 3 — partial decisions made under the prior posture don't carry over.
+- **Existing TRANSPOSITION.md for the same slug.** Bump `version:`; archive the
+  old one under `studies/<slug>/archive/v<N>/`.
+- **IP boundary worry.** If during transposition the user surfaces a concern
+  that the build would cross into derivative-work territory (e.g., "we want
+  to keep the original UI flow exactly"), require an additional AskUserQuestion
+  ack and a short paragraph in §1 explaining the IP posture.
+- **Cross-domain mismatch.** If the user's stated target-domain invariants
+  contradict the source mechanism (e.g., "must run with no training data" for
+  a paper whose entire point is training), surface explicitly and AskUserQuestion
+  whether to switch to AGGRESSIVE posture or pick a different source.
+
+---
+
+## Dependencies
+
+- **`/blueprint`** — required upstream; reads `studies/<slug>/BLUEPRINT.md`.
+- **S12 (study artifact format)** — frontmatter `derived_from` chain enables
+  `/clone-and-twist` and `/recipe` to walk back to the source study.
+- **S13 (mechanism-fidelity contract)** — TRANSPOSITION.md §8 (fidelity targets)
+  is the input to S13 entries.
+- **`/plan-eng-review`** — interactive review pattern reused here.
+- **`/plan-ux-review`** — recommended (not required) when the transposition
+  changes user-facing workflow. Surface as a suggestion in Step 11.
+- **`lib/study-artifacts.ts`** — shared parser for S12 frontmatter (planned).
+
+---
+
+## Canonical examples
+
+- **fingerspelling.xyz → TSL** (FAITHFUL or ADAPTIVE).
+  - Target-domain invariants: tone markers, TSL handshape inventory, Thai script.
+  - Proprietary slots: `tsl-phoneme-encoder`, `tsl-pedagogy-ordering`, `tsl-eval-set`.
+  - Domain-shift sentence: "ASL fingerspelling → TSL fingerspelling — different
+    phoneme inventory plus tone markers ASL doesn't have."
+
+- **supertonic-v3** (paper inference → fine-tuning).
+  - Target-domain invariants: gradient accumulation, training-loop telemetry,
+    checkpoint cadence, dataset versioning.
+  - Proprietary slots: `training-strategy`, `regularization-schedule`, `eval-suite`.
+  - Domain-shift sentence: "Inference-only reference → end-to-end fine-tuning
+    pipeline — different memory profile, different failure modes, training-time
+    metrics the inference paper didn't measure."
+
+These two are the v1 validation targets per the v3 roadmap.

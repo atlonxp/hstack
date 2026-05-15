@@ -1,0 +1,370 @@
+---
+name: event-design
+preamble-tier: 3
+version: 1.0.0
+description: |
+  [API/DB] Design event/message schemas with explicit versioning and compatibility
+  policy for Kafka, NATS, EventBridge, SQS, RabbitMQ, or Pub/Sub. Generates Avro,
+  JSON Schema, or Protobuf. Audits existing topics for compat violations and
+  registry hygiene. Knows forward / backward / full compatibility rules and the
+  trade-offs per format. Use when: "design event schemas", "kafka schemas",
+  "avro vs protobuf vs json schema", "schema registry", or "are these events
+  backwards compatible". (gstack)
+allowed-tools:
+  - Read
+  - Write
+  - Edit
+  - Grep
+  - Glob
+  - AskUserQuestion
+  - Bash
+  - WebSearch
+triggers:
+  - design event schemas
+  - kafka schemas
+  - schema registry
+  - avro compatibility
+  - event versioning
+---
+
+{{PREAMBLE}}
+
+{{GBRAIN_CONTEXT_LOAD}}
+
+# /event-design — Family E2 — API/DB
+
+Event-driven systems break silently when schemas drift. A producer renames a field
+in a "minor" version; three consumers parse old data, two ignore the new field, one
+crashes; nothing is alerted on for hours. This skill exists to make schema evolution
+a deliberate act with explicit compatibility rules — not an emergent property.
+
+Two modes:
+
+- **Design mode** — new topic or new event type. Pick format (Avro / JSON Schema /
+  Protobuf), define the schema, declare the compatibility policy, register it.
+- **Audit mode** — existing topics. Check the registry (Confluent / Apicurio / AWS
+  Glue / Pulsar / Buf Schema Registry), score compat hygiene, find versions that
+  violate the declared policy, find topics without a policy at all.
+
+## When to use
+
+- Adding a new event type to Kafka / NATS / EventBridge / Pub/Sub / SQS.
+- Renaming / adding / removing a field in an existing event — the moment that risk lives.
+- Auditing an existing event-driven system whose schemas have drifted.
+- Migrating between formats (JSON → Avro, Avro → Protobuf, etc.).
+- Bringing schema-registry discipline to a system that doesn't have one yet.
+
+**Do not use for:**
+
+- API surface design (sync request/response) — that's `/api-design`.
+- DB schema design — that's `/db-design`.
+- Webhooks — webhooks are a subset of events but mostly fit `/api-design`'s envelope
+  rules. If the webhook surface is large and registry-managed, this skill applies.
+
+## Inputs
+
+The skill expects:
+
+1. **Broker / bus** type — Kafka, NATS, AWS EventBridge, AWS SQS/SNS, GCP Pub/Sub,
+   Azure Service Bus, RabbitMQ, Pulsar. Drives registry choice and partition / DLQ patterns.
+2. **Schema registry** if any — Confluent SR, Apicurio, AWS Glue Schema Registry,
+   Pulsar's built-in registry, Buf Schema Registry. Or "no registry yet".
+3. **Existing schemas** — files in `events/`, `schemas/`, `proto/`, `avro/`, or
+   registered topics queryable via the registry CLI.
+4. **Event intent** — for design mode, a natural-language brief of what changed in
+   the domain and who consumes it.
+
+## Format choice
+
+The big three:
+
+| Format       | Strengths                                              | When to pick                          |
+|--------------|--------------------------------------------------------|---------------------------------------|
+| Avro         | Most mature compat rules; compact binary; schema-on-write; native Kafka SR support | Kafka with Confluent SR; you want strict forward/backward rules and tooling. |
+| Protobuf     | Strong typing; great cross-language codegen; small wire size; explicit field numbers | gRPC-adjacent stacks; polyglot consumers; you already have proto for sync APIs. |
+| JSON Schema  | Human-readable; works without codegen; easy in browsers and dynamic languages | Webhooks; mixed-stack consumers; you want REST-y debuggability over wire size. |
+
+Lesser used but valid:
+- **CloudEvents** — envelope spec on top of JSON / Avro / Protobuf. Use the envelope
+  always; pick the payload format separately.
+- **MessagePack / CBOR** — fine for internal binary, but no compat rules baked in.
+
+AskUserQuestion if not obvious. Default decision tree:
+1. On Kafka with Confluent SR? → Avro.
+2. Already have Protobuf for gRPC? → Protobuf.
+3. Mixed stack, no registry, JS-heavy consumers? → JSON Schema + CloudEvents envelope.
+
+## Compatibility policies
+
+Every topic / subject must declare one. The policies (Confluent semantics; other
+registries map):
+
+- **NONE** — anything goes. Bad default. Only acceptable for ad-hoc dev topics.
+- **BACKWARD** — new schema can read data written with the previous schema.
+  Consumers upgrade first. **Most common default.**
+- **BACKWARD_TRANSITIVE** — same but vs all prior versions, not just the last.
+- **FORWARD** — old schema can read data written with the new schema. Producers
+  upgrade first.
+- **FORWARD_TRANSITIVE** — same vs all prior versions.
+- **FULL** — both backward and forward. Most restrictive; very limited changes
+  (add optional field with default; remove optional field with default).
+- **FULL_TRANSITIVE** — same across the full history.
+
+**Recommended default: BACKWARD or BACKWARD_TRANSITIVE.** Pick FULL only when
+producer and consumer ship independently in any order (true microservice mesh).
+
+What's allowed under each policy is format-specific:
+
+**Avro** (using BACKWARD):
+- Allowed: add a field with default; remove a field; broaden a union; remove from a union (with caveats).
+- Not allowed: rename a field (without alias); change a field's type narrowly;
+  remove a required (no-default) field.
+
+**Protobuf** (semantic, since wire-compat is mostly automatic):
+- Allowed: add a new field with a new number; rename a field (the number is the
+  identity); deprecate fields.
+- Not allowed: reuse a field number; change a field's type (most cases); change
+  a singular to repeated (or vice versa); remove an `enum` value being used.
+
+**JSON Schema**:
+- Allowed: add an optional property; widen a `type` (e.g. `integer` → `number`);
+  loosen `minimum` / `maximum`.
+- Not allowed: add a `required` property; narrow a type; tighten `minimum` / `maximum`;
+  remove a property other consumers expect.
+
+## Procedure
+
+### Step 0: Detect environment
+
+```bash
+# Find existing schemas
+SCHEMAS=$(find . -type f \( -name "*.avsc" -o -name "*.proto" -o -name "*-schema.json" -o -name "schema.json" \) -not -path "*/node_modules/*" -not -path "*/.git/*" -not -path "*/vendor/*" 2>/dev/null | head -20)
+# Find broker config
+BROKER_HINT=""
+grep -lE "kafka|bootstrap.servers|confluent" --include="*.yaml" --include="*.yml" --include="*.json" --include=".env*" -r . 2>/dev/null | head -3 && BROKER_HINT="kafka"
+grep -lE "nats://" --include="*.yaml" --include="*.yml" --include=".env*" -r . 2>/dev/null | head -3 && [ -z "$BROKER_HINT" ] && BROKER_HINT="nats"
+grep -lE "eventbridge|sns:|sqs:" --include="*.yaml" --include="*.yml" --include=".env*" -r . 2>/dev/null | head -3 && [ -z "$BROKER_HINT" ] && BROKER_HINT="aws"
+echo "Schemas: ${SCHEMAS:-none}"
+echo "Broker hint: ${BROKER_HINT:-unknown}"
+```
+
+State what you found. AskUserQuestion if broker / registry / format isn't obvious.
+
+### Step 1: AskUserQuestion — confirm setup
+
+One issue per call. Use the preamble's AskUserQuestion format. Ask:
+
+- **Mode** — design or audit?
+- **Broker** — Kafka, NATS, EventBridge, SQS, Pub/Sub, RabbitMQ, Pulsar, other?
+- **Registry** — Confluent SR, Apicurio, AWS Glue SR, Buf SR, Pulsar built-in, none?
+  If "none" in audit mode, surface that as the top finding.
+- **Format** — Avro, Protobuf, JSON Schema, or "let me pick"?
+- **Compat policy** — what does this team/topic require? Default `BACKWARD`.
+
+Do NOT proceed until the user responds.
+
+### Step 2: Topic / subject naming
+
+Names matter as much as schemas. Lock convention before generating anything.
+
+- **Topic name:** `{domain}.{aggregate}.{event}.{vN}` — e.g. `payments.orders.created.v1`.
+  Some teams prefer past-tense events without an explicit `.event.` (so
+  `payments.orders.created`); pick one and stay consistent.
+- **Subject (Confluent SR):** topic name plus suffix per strategy:
+  - `TopicNameStrategy` (default): `{topic}-value` and `{topic}-key`.
+  - `RecordNameStrategy`: full type name (`com.example.OrderCreated`). Allows multiple
+    types per topic.
+  - `TopicRecordNameStrategy`: combines both.
+- **Versioning:** include `vN` in the topic name for hard major bumps (e.g. when
+  `BACKWARD` would be violated, you'd rather start a new topic than break readers).
+
+### Step 3: Design mode — write the schema
+
+For **Avro**:
+
+```json
+// events/payments/order-created/v1.avsc
+{
+  "type": "record",
+  "namespace": "com.example.payments",
+  "name": "OrderCreated",
+  "doc": "Emitted once when an order transitions to status=paid.",
+  "fields": [
+    { "name": "order_id", "type": "string", "doc": "Opaque external ID (order_...)" },
+    { "name": "user_id", "type": "string" },
+    { "name": "amount_cents", "type": "long" },
+    { "name": "currency", "type": "string" },
+    { "name": "occurred_at", "type": { "type": "long", "logicalType": "timestamp-millis" } },
+    { "name": "metadata", "type": { "type": "map", "values": "string" }, "default": {} },
+    { "name": "schema_version", "type": "int", "default": 1 }
+  ]
+}
+```
+
+Every new field MUST have a `default` if you want `BACKWARD` compat.
+
+For **Protobuf**:
+
+```protobuf
+// events/payments/order_created.proto
+syntax = "proto3";
+package com.example.payments;
+import "google/protobuf/timestamp.proto";
+
+message OrderCreated {
+  string order_id = 1;
+  string user_id = 2;
+  int64 amount_cents = 3;
+  string currency = 4;
+  google.protobuf.Timestamp occurred_at = 5;
+  map<string, string> metadata = 6;
+  int32 schema_version = 7;
+  // Reserve removed numbers/names forever:
+  reserved 8, 9;
+  reserved "internal_flag";
+}
+```
+
+Reserve removed field numbers always. Field number reuse is the #1 wire-level corruption
+in proto.
+
+For **JSON Schema** (with a CloudEvents envelope):
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.example.com/payments/order-created/v1.json",
+  "title": "OrderCreated",
+  "type": "object",
+  "required": ["order_id", "user_id", "amount_cents", "currency", "occurred_at"],
+  "additionalProperties": false,
+  "properties": {
+    "order_id": { "type": "string", "pattern": "^order_[a-zA-Z0-9]+$" },
+    "user_id": { "type": "string" },
+    "amount_cents": { "type": "integer", "minimum": 0 },
+    "currency": { "type": "string", "pattern": "^[A-Z]{3}$" },
+    "occurred_at": { "type": "string", "format": "date-time" },
+    "metadata": { "type": "object", "additionalProperties": { "type": "string" } },
+    "schema_version": { "type": "integer", "minimum": 1 }
+  }
+}
+```
+
+`additionalProperties: false` is debated — strict makes BACKWARD harder. Default to
+`additionalProperties: false` only when you control all producers; otherwise omit and
+add new fields freely.
+
+### Step 4: Register + enforce
+
+Wire the schema into the registry and make registration the gate:
+
+- **Confluent Schema Registry:**
+  ```bash
+  # Register and check compat
+  jq -n --arg s "$(cat events/payments/order-created/v1.avsc)" '{ "schemaType": "AVRO", "schema": $s }' \
+    | curl -s -X POST -H "Content-Type: application/vnd.schemaregistry.v1+json" \
+        --data @- "$SCHEMA_REGISTRY_URL/compatibility/subjects/payments.orders.created.v1-value/versions/latest"
+  # If compat passes, register:
+  jq -n --arg s "$(cat events/payments/order-created/v1.avsc)" '{ "schemaType": "AVRO", "schema": $s }' \
+    | curl -s -X POST -H "Content-Type: application/vnd.schemaregistry.v1+json" \
+        --data @- "$SCHEMA_REGISTRY_URL/subjects/payments.orders.created.v1-value/versions"
+  ```
+- **Apicurio:** similar REST API, plus a Maven/Gradle plugin path for build-time
+  registration.
+- **AWS Glue Schema Registry:** `aws glue create-schema-version` /
+  `aws glue check-schema-version-validity` (compat-as-flag).
+- **Buf Schema Registry (Protobuf):** `buf push` after `buf breaking --against
+  'buf.build/owner/repo'`.
+
+In CI, the registration step MUST run `compatibility check` against the policy and
+fail the build on incompat. Generate the CI workflow.
+
+### Step 5: Audit mode — inspect existing topics
+
+For each topic:
+
+1. Fetch all versions from the registry.
+2. Confirm a compat policy is set (alert if `NONE`).
+3. For each consecutive pair (vN, vN+1), re-run the compat check under the declared
+   policy. Any failure: the registry let through a violation, or the policy was
+   loosened mid-flight.
+4. Find topics that have **no registered schema** — events flying with no contract.
+5. Find topics where **producer code emits more fields than the schema declares** —
+   grep the producer source for the topic name + struct/dict literals.
+6. Find topics with **no consumers** — candidates for retirement.
+
+Score on a 0-10 scale across: **policy coverage**, **registry hygiene**, **producer
+schema match**, **consumer schema match**, **naming consistency**.
+
+### Step 6: AskUserQuestion — gate per finding
+
+For every violation in audit mode (especially compat failures, unregistered topics,
+or schema/producer mismatch), AskUserQuestion individually. Options: fix now,
+plan a major version bump (new `vN` topic), retire the topic, or accept and document
+exception.
+
+### Step 7: Emit outputs
+
+- `events/{domain}/{event}/v{N}.{avsc,proto,json}` — the schema files.
+- `docs/events/registry.md` — for each topic: subject name, format, current version,
+  compat policy, owning team, sample payload, retention policy. The single source of
+  truth for "what events does this system have".
+- `docs/events/conventions.md` — naming + envelope + policy rules so future events
+  don't drift.
+- `docs/events/audit-{YYYY-MM-DD}.md` (audit mode) — findings, scores, remediation.
+
+## Outputs
+
+- Schema files in the repository, structured by domain + event name + version.
+- `docs/events/registry.md` — human-readable index.
+- CI workflow that registers + compat-checks on every PR.
+- Audit report with scored findings.
+
+## Edge cases
+
+- **Mixing formats in one topic** — `RecordNameStrategy` allows it but most teams
+  regret it. Default to one format + one main record per topic.
+- **CloudEvents envelope** — when the payload is Avro/Protobuf, the CloudEvents
+  attributes (`id`, `source`, `type`, `time`, `datacontenttype`) live in headers
+  (Kafka) or as a wrapping struct. Document which pattern your stack uses.
+- **Tombstones (Kafka compaction)** — for compacted topics, null-value messages mean
+  delete. Schema for `key` must be stable forever (compaction needs to dedup).
+- **Dead-letter queues** — every consumer needs a DLQ for poison messages
+  (deserialization failures). Document the DLQ schema (often: original payload bytes +
+  error metadata).
+- **Replay / time-travel consumers** — if any consumer rewinds to offset 0, BACKWARD
+  is not enough; you need BACKWARD_TRANSITIVE. Document the assumption.
+- **Schema-on-read (Avro)** — consumer's reader schema can differ from writer schema;
+  Avro resolves via field names + defaults. Test the resolution explicitly — don't
+  assume the compat check covers your specific reader/writer pair.
+- **JSON Schema in Kafka without a registry** — common pattern. Embed a `schema_version`
+  field in the payload and have consumers branch on it. This is worse than a registry
+  but better than nothing.
+- **EventBridge schemas** — AWS auto-discovers schemas from event traffic; the
+  discovery is best-effort and lags by hours. Treat discovered schemas as a hint, not
+  the source of truth.
+- **NATS JetStream** — no built-in registry. Either use Buf Schema Registry alongside,
+  or roll a lightweight `subject_metadata` KV store.
+- **Pulsar** — built-in schema registry with strict types per topic. Use it; don't
+  layer Confluent on top.
+- **Multi-tenant topics** — `tenant_id` as a partition key is normal; including the
+  tenant in the topic name (`{tenant}.payments.orders.created`) is rare and creates
+  topic explosion. Don't.
+
+## Dependencies
+
+- Registry CLI for the chosen registry (Confluent, Apicurio, AWS, Buf, etc.).
+- Format-specific tools: `avro-tools`, `protoc` + `buf`, `ajv-cli` (JSON Schema).
+- WebSearch for current best-practice lookups (e.g. "Confluent Schema Registry
+  compatibility modes 2026").
+
+No new gstack libs.
+
+## Stop gates
+
+- After Step 1 (broker + registry + format + policy) — locked once chosen.
+- After Step 6 (per audit finding) — every violation needs explicit user decision.
+
+The AskUserQuestion call is a tool_use, not prose — call the tool directly. Loading the
+schema via ToolSearch and writing the recommendation as chat prose is the failure mode
+these gates exist to prevent.

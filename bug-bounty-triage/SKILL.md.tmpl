@@ -1,0 +1,289 @@
+---
+name: bug-bounty-triage
+preamble-tier: 2
+version: 1.0.0
+description: |
+  [Red Team / RE] Bug-bounty report triage pipeline. Reads a triaged report (HackerOne /
+  Bugcrowd / direct), validates reproduction in an isolated sandbox, scores severity
+  using CVSS v4.0, dedups against intel/iocs.jsonl + prior reports, drafts the internal
+  fix ticket AND the reply-to-reporter. Two-sided posture: rigorous on impact, generous
+  on attribution and bounty pay. Refuses to test in production unless the report's program
+  explicitly allows it.
+  Use when: "bug bounty triage", "validate report", "cvss score", "h1 report", "bugcrowd",
+  "dedup vulnerability", "reporter reply", "fix ticket draft", "security report intake". (gstack)
+voice-triggers:
+  - "triage bug bounty"
+  - "validate this report"
+  - "cvss score"
+allowed-tools:
+  - Bash
+  - Read
+  - Grep
+  - Glob
+  - Write
+  - WebFetch
+  - AskUserQuestion
+triggers:
+  - bug bounty triage
+  - validate report
+  - cvss v4 score
+---
+
+{{PREAMBLE}}
+
+{{INTEL_LOGGING}}
+
+{{GBRAIN_CONTEXT_LOAD}}
+
+# /bug-bounty-triage — Report Intake → Reply Loop (Family F — Red Team / Reverse Engineering)
+
+You are a **triage engineer** who treats every report as if it might be real, scores impact rigorously (CVSS v4.0, not v3.1), and respects the reporter's time. You produce two artifacts: an **internal ticket** for the fix team, and a **reporter reply** that explains the disposition without being condescending.
+
+> **Two-sided posture.** Be hard on impact, easy on people. A report that turns out to be a dup or out-of-scope still came from someone who tried to help. Reply in language that respects the work. Pay generously when the program allows.
+
+## When to use
+
+- A new report dropped into HackerOne / Bugcrowd / Intigriti / direct email queue.
+- A prior report needs re-triage after platform / scope changes.
+- A pattern of similar reports needs dedup + root-cause across N submissions.
+
+Do NOT use this skill for:
+- Reports against systems Hall doesn't control or have a written bounty program for. Route to the right team.
+- Generating false reports. (Obvious.)
+
+## AUTHORIZATION GATE
+
+### Gate Step 1 — Program ownership
+
+Verify the report's target is part of a program Hall runs OR a program Hall is contracted to triage for. Required: `~/.gstack/projects/{project}/bounty-program.yaml` declaring:
+
+- `platform`: hackerone / bugcrowd / intigriti / direct.
+- `program_id`.
+- `scope[]`: which assets are eligible.
+- `out_of_scope[]`: explicit exclusions.
+- `prod_testing_allowed`: bool. Default `false`.
+- `payout_table`: severity → range.
+- `safe_harbor_text_path`: link to the program's safe-harbor clause.
+
+If file missing → refuse. Don't triage reports for unverified programs.
+
+### Gate Step 2 — Reproduction scope
+
+If the report alleges impact requiring production testing, check `prod_testing_allowed`. If false, the reproduction happens in staging or a sandbox copy — NEVER in prod. If the reporter's PoC inherently requires prod (e.g., subdomain takeover on a live DNS record), confirm with AskUserQuestion: "Report `{id}` requires prod testing. Program allows: `{bool}`. Proceed in prod, in sandbox, or refuse?" Default refuse.
+
+### Gate Step 3 — Reporter conduct
+
+Read the report. If it contains evidence the reporter exfiltrated data, accessed other users' accounts, or maintained access beyond proof-of-concept, surface this BEFORE testing. The triage may still proceed, but the disposition reply will include the conduct issue per program policy. Logged.
+
+Append `bounty.gate.passed` to `audit.log` (engagement-style logging extends to bounty work — `~/.gstack/projects/{project}/audit.log`) with report id, platform, program id, decision path.
+
+## Inputs
+
+- `--report <path-or-id>` (required) — path to a markdown / json export of the report, or `{platform}:{report_id}` to pull via API.
+- `--project <slug>` (required) — for `bounty-program.yaml` and `audit.log` lookup.
+- `--sandbox <staging|docker|kvm>` (default `docker`) — where reproduction runs.
+- `--reporter-handle <handle>` — for the reply draft.
+- Implicit: `intel/iocs.jsonl` (S15), `bounty/` archive of prior reports for dedup.
+
+## Procedure
+
+### Phase 1 — Intake parse
+
+Parse the report into structured fields:
+
+- Reporter handle, platform, program, report id.
+- Title.
+- Severity claim (reporter's).
+- Asset(s) affected.
+- Vulnerability class (XSS / SQLi / SSRF / IDOR / auth-bypass / RCE / info-disclosure / etc.).
+- Reproduction steps (numbered).
+- Expected vs actual behavior.
+- Impact narrative.
+- Attached PoCs (screenshots, videos, scripts, request/response pairs).
+- Reporter's suggested CVSS (if provided).
+
+If any field is critically missing (reproduction steps absent, asset unspecified), draft a clarification reply BEFORE triage and pause. Log `bounty.intake.clarification-requested`.
+
+### Phase 2 — Scope check
+
+Compare asset to `bounty-program.yaml.scope[]` and `out_of_scope[]`:
+
+- In scope → proceed.
+- Out of scope, but report has merit → still document, reply explaining out-of-scope status, suggest the right channel.
+- In scope but program excludes the vulnerability class (e.g., "self-XSS not eligible") → document, reply with the class exclusion.
+
+### Phase 3 — Dedup
+
+Three-layer dedup:
+
+1. **Exact-title match** against `bounty/` archive — surface the prior report and reporter.
+2. **Vulnerability fingerprint** — (vuln class, asset, parameter, payload pattern). Match against prior reports + `intel/iocs.jsonl` entries tagged `bounty-finding`.
+3. **Root-cause match** — if the underlying code path is already known-vulnerable (open ticket exists), this is a dup.
+
+For dedups, capture:
+- The original report id.
+- Original reporter's handle.
+- Status of original (open / fixed / wontfix).
+- This reporter's incremental contribution (new attack vector? wider impact? clearer PoC?).
+
+A "valuable dup" (where the new report adds attack vector, impact, or clarity) still gets paid per program policy — the skill drafts the reply explaining this. Don't reflexively close as dup without reading.
+
+### Phase 4 — Reproduction in sandbox
+
+Spin up the chosen sandbox per `--sandbox`:
+
+- `staging` — read connection details from `~/.gstack/projects/{project}/env/staging.env`.
+- `docker` — `docker compose -f bounty-sandbox.yaml up -d` (assumes the project ships a sandbox compose file).
+- `kvm` — a snapshotted VM for invasive tests.
+
+Run the reporter's steps verbatim. Capture:
+- Request/response pairs (mitmproxy or `curl --trace-ascii`).
+- Browser console + network log (via `/browse` if web).
+- Server-side logs (sandbox-scoped).
+- Any side-effects (DB writes, files created, mail sent).
+
+If reproduction **fails**:
+- Try minor variations (HTTP method, content-type, encoding). Document each.
+- Surface 3 hypotheses for why it failed (env mismatch, vuln already patched, reporter error). Don't close as "can't repro" without these.
+
+If reproduction **succeeds**:
+- Capture a clean, deterministic PoC into `bounty/{report-id}/poc/`.
+
+### Phase 5 — CVSS v4.0 scoring
+
+Use CVSS v4.0 (not v3.1). v4 changes that matter:
+
+- **Replaces Scope (S) with Subsequent System impact** (sub-scores).
+- **Adds Attack Requirements (AT)** — distinct from Attack Complexity.
+- **Adds Provider Urgency / Recovery / Value Density / Vulnerability Response Effort** in Supplemental metrics.
+- **CVSS-B (Base), CVSS-BT (Base+Threat), CVSS-BE (Base+Environmental), CVSS-BTE (full)** — report all four when threat + environmental data are available.
+
+For each metric, justify the choice with one sentence citing observed behavior in reproduction. Output:
+
+```
+CVSS-B   : <vector>   Score: X.X (severity)
+CVSS-BT  : <vector>   Score: X.X (severity)
+CVSS-BE  : <vector>   Score: X.X (severity)
+CVSS-BTE : <vector>   Score: X.X (severity)
+```
+
+Disagree with reporter's score? Show the metric-by-metric diff and why.
+
+### Phase 6 — Impact narrative
+
+Convert CVSS into business impact for the fix-team ticket:
+
+- What an attacker can do with this.
+- Pre-requisites (auth required? specific role? user interaction?).
+- Realistic exploitation cost (5min script kid / 1hr targeted / nation-state effort).
+- Worst-case data exposure.
+- Worst-case persistence / pivot.
+
+### Phase 7 — Fix ticket draft
+
+```
+Title: [{severity}] {short title} — {asset} ({vuln-class})
+
+CVSS-BT: {score} ({vector})
+
+## Summary
+2-3 sentences.
+
+## Reproduction
+1. ... (cleaned-up steps from sandbox)
+2. ...
+3. ...
+
+## Root cause hypothesis
+Brief; the fix team will own confirming.
+
+## Suggested fix direction
+- Option A: ...
+- Option B: ...
+
+## Tests to add (regression)
+- ...
+
+## Reporter
+@{handle} via {platform}, report #{report-id}.
+Disposition: confirmed / dup-of-#{id} / out-of-scope / clarification-requested.
+
+## Payout recommendation
+${low}-${high} per program table; final amount pending program manager.
+
+## Audit
+{audit.log entry sha}
+```
+
+Filed into the project's issue tracker via the appropriate CLI (`gh issue create` etc.) or written to `bounty/{report-id}/ticket.md` for manual filing.
+
+### Phase 8 — Reporter reply draft
+
+Tone rules:
+
+- Lead with what you did (validate / dedup / score).
+- Be specific. Avoid "thanks for the report" boilerplate.
+- If valid: state CVSS-BT score, expected payout band, expected fix timeline window.
+- If dup but valuable: explain *why* this submission added value, pay accordingly.
+- If dup without new value: explain which original it dups, link if the platform allows.
+- If out-of-scope: explain the scope boundary, suggest the right channel.
+- If can't-repro: share the variations you tried, ask for env details, don't close.
+- Never condescend. Never write "as you know..." or "any security researcher would understand..."
+
+Draft saved to `bounty/{report-id}/reply.md`. NOT sent automatically — operator reviews and sends via the platform.
+
+### Phase 9 — IoC + audit
+
+- Write to `intel/iocs.jsonl` (S15): the vuln fingerprint (vuln_class, asset, parameter, payload pattern) tagged `bounty-finding` so future reports dedup against it.
+- Append `bounty.complete` to `audit.log` with report id, disposition, CVSS-BT, dup-of, payout band.
+
+## Outputs
+
+```
+bounty/{report-id}/
+├── intake.md              # parsed report
+├── ticket.md              # internal fix ticket
+├── reply.md               # reporter reply draft
+├── cvss.md                # CVSS v4 metric-by-metric justification
+├── poc/                   # clean reproduction PoC
+├── sandbox-evidence/      # request/response, logs, screenshots
+└── dedup.md               # dedup analysis + valuable-dup rationale if applicable
+intel/iocs.jsonl            # appended (S15)
+~/.gstack/projects/{project}/audit.log   # appended (S11)
+```
+
+## Edge cases
+
+- **Critical vuln in prod, program forbids prod testing** — reproduce in sandbox to the maximum extent possible, then escalate to the program manager for an exception authorization before further prod testing. Document the boundary.
+- **Reporter exfiltrated real user data** — surface in Gate Step 3. Triage proceeds but the reply includes the program policy on out-of-bounds testing; payout may be reduced or void per program rules. Never accept attached exfiltrated data into `bounty/`; ask the reporter to redact and resubmit, or have legal handle.
+- **Researcher escalated to disclosure threat** — pause the technical triage, hand off to program-manager / legal track per `bounty-program.yaml.conflict_escalation`. Do not engage on disclosure timing in the technical reply.
+- **Sandbox doesn't match prod closely enough** — surface in `sandbox-evidence/notes.md`; CVSS-BE (environmental) will reflect uncertainty.
+- **Reporter's PoC includes their own creds** — never include in the ticket. Redact. Sandbox repro uses test creds.
+- **Dup but the original is closed wontfix** — re-evaluate. New report may justify reopening (changed impact, new attack vector). Don't reflexively re-close.
+- **Same reporter floods with low-quality reports** — triage each on its merits. Don't penalize the queue. But surface the pattern to the program manager.
+
+## Dependencies
+
+- **S8-style `bounty-program.yaml`** — per-project program declaration. Required.
+- **S11 audit.log** — hash-chained.
+- **S15 intel/iocs.jsonl** — bounty finding fingerprints for dedup.
+- **External tools** — platform CLIs (`h1` for HackerOne, `bugcrowd-cli`, `intigriti-cli`), `gh issue create` for ticket filing, `curl` / `mitmproxy` / `/browse` for repro, `docker compose` / KVM for sandbox.
+- **Cross-skill** — `/cso` (defensive context), `/postmortem` (if the bug shipped to prod and caused incident), `/intel` (dedup context), `/detect-engineering` (Family K — file a detection candidate for the class).
+
+## AskUserQuestion gates
+
+1. **Report identifier** if `--report` not passed.
+2. **Project slug** if `--project` not passed.
+3. **Prod-testing decision** if PoC requires prod and program doesn't allow.
+4. **Sandbox choice** if multiple available.
+5. **Severity disagreement** — if your CVSS-BT differs from reporter's by >= 2.0, confirm before the reply draft. Don't silently downgrade.
+6. **Out-of-bounds conduct disposition** — if reporter exfiltrated, confirm payout adjustment per program policy with the program manager before drafting reply.
+7. **Send reply automatically?** — default NO. Reply is drafted, never sent without operator approval.
+
+## Voice / posture (in the reply)
+
+Respectful. Specific. Concrete. The reply is the most-read artifact of triage — the reporter often shares it. Make it good.
+
+Voice / posture (in chat with operator):
+
+Direct on impact, generous on attribution. Push back on hype ("RCE!" that's actually self-XSS) and on dismissiveness ("just an info leak" that's actually an exploitable IDOR). The CVSS table is the source of truth.

@@ -1,0 +1,283 @@
+---
+name: aso
+preamble-tier: 3
+version: 1.0.0
+description: |
+  [Mobile] App Store Optimization. Reads the current App Store / Play Store listing,
+  analyzes the top-10 competitor listings in the same category, and proposes updates to
+  title, subtitle, keywords, promo text, and screenshots. Generates updated screenshot
+  variants via /app-store-screenshots. Writes a monthly proposal under mobile/aso/ with
+  a clean diff against the current live listing. Use when: "ASO", "app store
+  optimization", "improve our store listing", "keyword research", "competitor store
+  listings", or "refresh screenshots". (gstack)
+allowed-tools:
+  - Read
+  - Write
+  - Edit
+  - Grep
+  - Glob
+  - AskUserQuestion
+  - Bash
+  - WebSearch
+  - WebFetch
+triggers:
+  - aso review
+  - app store optimization
+  - keyword research
+  - refresh store listing
+  - competitor app store
+---
+
+{{PREAMBLE}}
+
+{{BASE_BRANCH_DETECT}}
+
+# /aso — Family E1 — Mobile
+
+App Store Optimization in one pass: scrape the current listing, scrape the top-10
+competitors, identify the keyword + positioning gap, propose concrete edits, and generate
+updated screenshot variants. Output is a markdown proposal with a copy-pasteable diff that
+the team can apply through App Store Connect / Play Console.
+
+The goal is **a real monthly cadence** — competitors update their listings weekly,
+yours probably hasn't moved in 6 months. This skill fixes that.
+
+## When to use
+
+- Monthly ASO review (cadence). Defaults assume this is the entry point.
+- A new feature shipped and the listing copy is now stale.
+- Conversion rate from listing visits is below the category benchmark.
+- A competitor launched something that's eating your install share.
+
+**Do not use for:**
+
+- Generating screenshots from scratch with no listing context — that's
+  `/app-store-screenshots` directly.
+- Mobile feature scaffolding — that's `/mobile-build`.
+- Release pipeline — that's `/mobile-release`.
+
+## Stack auto-detection
+
+Detect the platforms the app ships on, plus the package identifiers.
+
+```bash
+# iOS bundle ID — Info.plist or ExportOptions
+find . -name "Info.plist" -not -path "*/node_modules/*" -not -path "*/Pods/*" 2>/dev/null | head -3
+grep -r "PRODUCT_BUNDLE_IDENTIFIER" --include="*.pbxproj" 2>/dev/null | head -1
+
+# Android package ID — build.gradle(.kts)
+grep -rE "applicationId\s*[=:]\s*\"" --include="build.gradle*" 2>/dev/null | head -1
+
+# App Store ID + Play Store URL — check for an existing store-listing fixture
+find . -type f \( -name "store-listing.yaml" -o -name "store-listing.json" -o -name "fastlane/metadata/*" \) 2>/dev/null | head -5
+```
+
+If detection doesn't find an App Store ID / Play Store URL, AskUserQuestion to collect:
+
+- App Store URL (e.g., `https://apps.apple.com/us/app/example/id1234567890`).
+- Play Store URL (e.g., `https://play.google.com/store/apps/details?id=com.example.app`).
+- Primary category + locale (default: `en-US`).
+
+## Inputs
+
+The skill accepts one or more of:
+
+1. **Current listing** — pulled live from the App Store + Play Store via `WebFetch` on
+   the public store URLs. (No App Store Connect API — that needs paid credentials.)
+2. **Competitor URLs** — either supplied by the user or discovered by browsing the same
+   category top-free / top-grossing charts via WebFetch.
+3. **Recent feature notes** — pulled from `CHANGELOG.md` and the last 90 days of
+   `git log` so the new copy reflects what shipped.
+4. **Existing screenshots** — under `mobile/aso/screenshots/current/` or in
+   `fastlane/metadata/{ios,android}/{locale}/screenshots/`.
+
+## Procedure
+
+### Step 0: Detect + confirm
+
+Run the detection block. State what was found in one paragraph: "iOS bundle
+`com.example.app` at App Store ID `1234567890`, Android package `com.example.app` at
+Play Store URL `...`. Last listing update inferred from store page: 8 months ago."
+
+AskUserQuestion to confirm or correct, plus collect missing IDs.
+
+### Step 1: AskUserQuestion — scope
+
+Pick the scope. One issue per call.
+
+- **Locale** — `en-US` only, `en-US` + top-5 install markets, all locales?
+- **Surface** — full proposal (title + subtitle + keywords + screenshots + promo text)
+  or one surface only?
+- **Cadence** — one-shot or recurring monthly?
+
+Lock these. The downstream steps respect the scope.
+
+### Step 2: Scrape current listing
+
+Use WebFetch on the App Store URL with locale prefix (e.g.,
+`https://apps.apple.com/us/app/.../id...`). Extract: title, subtitle, promo text (iOS),
+keyword line (only visible via App Store Connect — note as "unknown" if not provided),
+description, category, rating, review count, "What's New" section, screenshot URLs.
+
+Same for Play Store: title, short description, long description, category, rating,
+review count, "What's New," screenshot URLs, feature graphic.
+
+Write the raw scrape to `mobile/aso/raw/{YYYY-MM-DD}/current-{platform}.json` so the
+comparison step has a stable input.
+
+### Step 3: Identify competitors
+
+If the user supplied URLs, use them. Otherwise:
+
+1. WebFetch the App Store category top charts for the app's primary category.
+2. WebFetch the Play Store category top charts.
+3. Take the intersection of "appears in both top-25" + "user-flagged competitor" if any.
+4. Trim to top-10 unique apps. State the list and AskUserQuestion to confirm.
+
+Scrape each competitor's listing the same way as Step 2. Write to
+`mobile/aso/raw/{YYYY-MM-DD}/competitor-{n}-{platform}.json`.
+
+### Step 4: Keyword + positioning analysis
+
+For each competitor, extract:
+
+- **Title structure** — `{Brand} - {Tagline}` vs `{Tagline} - {Brand}` vs `{Keyword},
+  {Brand}, {Keyword}`. Note which keywords appear in the title.
+- **Subtitle / short-description theme** — what job-to-be-done are they selling on?
+- **Screenshot order** — first 3 screenshots drive ~85% of conversions; what story do
+  they tell?
+- **Promo text / "What's New"** — what's the freshness signal?
+- **Ratings + reviews** — recent review themes (top complaints, top praise).
+
+Aggregate keyword frequency across all competitor titles + subtitles + descriptions.
+Identify:
+
+- **High-frequency keywords your listing is missing** — likely table stakes.
+- **Differentiator keywords nobody uses** — opportunity if they match your real value.
+- **Anti-patterns** — keywords competitors use that you should avoid (low intent,
+  category-mismatched).
+
+### Step 5: Generate proposal
+
+Write `mobile/aso/{YYYY-MM}/proposal.md`:
+
+```markdown
+# ASO Proposal — {YYYY-MM}
+Scope: {locale(s), surfaces}
+
+## Current vs Proposed
+
+### iOS
+
+| Field            | Current                          | Proposed                              | Why                                |
+|------------------|----------------------------------|---------------------------------------|------------------------------------|
+| Title (30 ch)    | {current}                        | {proposed}                            | Adds high-intent keyword "X"       |
+| Subtitle (30 ch) | {current}                        | {proposed}                            | Differentiator: nobody owns "Y"    |
+| Promo text       | {current}                        | {proposed}                            | Fresh — references shipped feature |
+| Keywords (100 ch)| {current}                        | {proposed}                            | Drops 3 zero-volume, adds 4 ranked |
+
+### Android (Play Store)
+
+| Field                  | Current   | Proposed   | Why    |
+|------------------------|-----------|------------|--------|
+| Title (30 ch)          | ...       | ...        | ...    |
+| Short description (80) | ...       | ...        | ...    |
+| Full description       | ...       | ...        | ...    |
+
+## Screenshot story (current vs proposed)
+
+| Slot | Current message     | Proposed message      | Rationale                  |
+|------|---------------------|-----------------------|----------------------------|
+| 1    | Hero / brand        | Hero with new feature | Reflects shipped feature X |
+| 2    | Feature A           | Outcome-led headline  | Competitor average pattern |
+| 3    | Feature B           | Social proof / metric | Differentiator             |
+
+## Competitor scan
+
+Top 10 competitors analyzed: {list}. Common patterns observed: {3 bullets}.
+Gaps you can own: {2 bullets}.
+
+## Action checklist
+
+- [ ] App Store Connect — update title, subtitle, promo text, keywords.
+- [ ] Play Console — update title, short + full description.
+- [ ] Regenerate screenshots via `/app-store-screenshots` (see Step 6 output).
+- [ ] Upload new screenshots to both stores.
+- [ ] Schedule next review for {YYYY-MM + 1 month}.
+```
+
+### Step 6: Regenerate screenshots
+
+If "screenshots" is in scope, invoke `/app-store-screenshots` with the new screenshot
+story (Step 5 table). Read `~/.claude/skills/hstack/app-store-screenshots/SKILL.md` and
+hand it the proposed messages + the per-slot copy. Output goes to
+`mobile/aso/{YYYY-MM}/screenshots/{ios,android}/{locale}/{slot}.png`.
+
+If `/app-store-screenshots` is not installed, write the screenshot brief to
+`mobile/aso/{YYYY-MM}/screenshot-brief.md` and mark the action item as pending.
+
+### Step 7: Diff + commit
+
+```bash
+# Generate a side-by-side diff for the proposal
+git add mobile/aso/{YYYY-MM}/
+git commit -m "aso: {YYYY-MM} proposal — {one-line summary of biggest change}"
+```
+
+Do NOT push to the stores from this skill. ASO uploads happen through App Store Connect
++ Play Console UIs (or via `/mobile-release` if integrated with `fastlane deliver` /
+`fastlane supply`). This skill produces the proposal; humans approve and apply.
+
+## Outputs
+
+- `mobile/aso/{YYYY-MM}/proposal.md` — the per-platform diff table + rationale.
+- `mobile/aso/{YYYY-MM}/screenshots/{ios,android}/{locale}/{slot}.png` — regenerated
+  screenshot variants (when in scope).
+- `mobile/aso/raw/{YYYY-MM-DD}/{current,competitor-N}-{platform}.json` — raw scrapes for
+  reproducibility.
+- `mobile/aso/INDEX.md` — running index of past proposals, with the
+  "applied / pending / rejected" state of each.
+
+## Edge cases
+
+- **Localized listings** — non-English locales need a native-speaker review pass before
+  apply. The skill drafts the copy and marks it `needs-native-review`.
+- **App Store keyword field is invisible publicly** — without App Store Connect API
+  access, the skill can only infer from title + subtitle. State this limitation in the
+  proposal.
+- **Play Store doesn't have a keyword field** — keywords live in the full description.
+  The skill weaves target keywords into natural prose, not stuffing.
+- **Apple's metadata review** — clinical / financial / medical apps have stricter copy
+  rules. Flag if the app's category triggers them; do not promise outcomes without
+  evidence.
+- **Trademarked terms** — competitor brand names cannot appear in your title / subtitle.
+  The skill filters these out and warns.
+- **Screenshot device class** — iPhone 6.7", iPad 12.9", Android phone, Android tablet
+  each need their own set. Default to phone-only unless tablet support is in scope.
+- **Rating gate** — if the app is below 4.0 stars, prioritize fixing the top review
+  complaints over keyword optimization. The proposal surfaces this as a P0.
+
+## Dependencies
+
+- **WebFetch** for store page scraping.
+- **WebSearch** for category-trends + competitor discovery + 2026 ASO best-practice
+  lookups.
+- **`/app-store-screenshots`** for screenshot generation.
+- **`/scrape`** as a fallback when WebFetch is rate-limited (handles cookies + JS
+  rendering).
+- **`/competitor-profiling`** for deeper competitor dossiers when the listing scrape
+  isn't enough.
+
+No new gstack libs.
+
+## Stop gates
+
+- After Step 1 (scope) — locale + surface choices lock the rest of the pipeline.
+- After Step 3 (competitor list) — confirm the competitor set before scraping all 10.
+- Before Step 7 (commit) — show the diff to the user and confirm before committing.
+
+The AskUserQuestion call is a tool_use, not prose — call the tool directly. Loading the
+schema via ToolSearch and writing the recommendation as chat prose is the failure mode
+these gates exist to prevent.
+
+{{LEARNINGS_LOG}}

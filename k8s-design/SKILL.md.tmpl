@@ -1,0 +1,389 @@
+---
+name: k8s-design
+preamble-tier: 2
+version: 1.0.0
+description: |
+  [Cloud-Native] Generate production-grade Kubernetes manifests, Helm charts, or
+  Kustomize overlays for a workload. Knows resource requests/limits, HPA/VPA, PDB,
+  NetworkPolicy, ServiceAccount least-privilege, readiness vs liveness probes,
+  topology spread, init containers, and sidecars — and refuses to ship the
+  default-hostile config that first-time manifests usually have.
+  Use when: "design k8s manifests", "generate helm chart", "kustomize overlay",
+  "production k8s config", "harden this deployment". (gstack)
+allowed-tools:
+  - Read
+  - Write
+  - Edit
+  - Glob
+  - Grep
+  - Bash
+  - AskUserQuestion
+triggers:
+  - design k8s manifests
+  - generate helm chart
+  - kustomize overlay
+  - production kubernetes
+  - harden deployment
+---
+
+{{PREAMBLE}}
+
+{{GBRAIN_CONTEXT_LOAD}}
+
+# /k8s-design — Family E3 — Cloud-Native
+
+Generate Kubernetes manifests that are production-ready on day one, not on
+day 30 after an outage taught the team about PDBs.
+
+First-pass manifests from tutorials, scaffolds, and LLMs are usually 80% right
+and 20% production-hostile: no resource limits (one bad pod evicts neighbors),
+missing PDB (a node drain wipes the service), liveness probe wired to a deep
+health check (cascading restarts under load), no NetworkPolicy (a compromised
+sidecar talks to the database), default ServiceAccount (token mounted with
+cluster-admin in worst case).
+
+This skill writes the boring, correct manifests so you don't ship the unsafe
+default.
+
+## When to use
+
+- New service that needs Kubernetes manifests (Helm, Kustomize, or raw).
+- Existing workload whose manifests skip resource limits, probes, PDBs, or NetworkPolicy.
+- Migrating from `kubectl run` / `helm create` boilerplate to something hardened.
+- Reviewing someone else's manifests before they hit prod.
+
+NOT for: cluster bootstrap (use a cluster provisioner), CRD/operator authoring
+(use kubebuilder/operator-sdk), or GitOps wiring (use Argo CD / Flux directly).
+
+## Inputs (gather via AskUserQuestion if not in CLAUDE.md)
+
+1. **Workload shape**
+   - Stateless web/API, stateful (DB-backed), worker/queue consumer, cron/batch,
+     daemonset (node agent), or operator-controlled CRD?
+2. **Packaging style**
+   - Raw manifests, Helm chart, or Kustomize overlays?
+   - If unsure: Helm for distributed/reusable, Kustomize for one-team-multi-env,
+     raw for "I'll wire GitOps myself."
+3. **Cluster context**
+   - Cloud (EKS / GKE / AKS / on-prem) — affects storage class, LB type, IRSA/Workload Identity.
+   - Single-cluster or multi-region? Affects topology spread.
+4. **Traffic profile**
+   - Steady RPS estimate, p95 latency target, peak/trough ratio. Drives HPA targets.
+5. **Dependencies**
+   - DB? Cache? External API? Drives NetworkPolicy egress rules.
+6. **Compliance constraints**
+   - PCI / HIPAA / SOC2? Drives audit-log requirements and forces non-root + read-only-fs.
+
+Persist answers to `CLAUDE.md` under `## K8s Configuration` so re-runs don't
+re-ask.
+
+## Procedure
+
+### Step 1: Detect existing manifests and packaging
+
+```bash
+find . -path ./node_modules -prune -o \( -name 'Chart.yaml' -o -name 'kustomization.yaml' -o -name '*.yaml' \) -print 2>/dev/null \
+  | xargs grep -l "kind: Deployment\|kind: StatefulSet\|kind: DaemonSet\|kind: CronJob" 2>/dev/null
+```
+
+If existing manifests are present, switch to **audit mode** (Step 7) before
+generating new ones.
+
+### Step 2: AskUserQuestion the gaps
+
+Use the Inputs list above. Default-pick recommendations are fine, but always
+SURFACE the choice — silent defaults hide tradeoffs.
+
+### Step 3: Generate the core workload manifest
+
+For a stateless web service, the baseline (Deployment) must include:
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: <name>
+  labels:
+    app.kubernetes.io/name: <name>
+    app.kubernetes.io/component: api
+    app.kubernetes.io/part-of: <system>
+spec:
+  replicas: 3   # minimum for PDB minAvailable: 2 to be meaningful
+  revisionHistoryLimit: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: <name>
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: <name>
+    spec:
+      serviceAccountName: <name>
+      automountServiceAccountToken: false   # flip true only if the app calls the API server
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: <name>
+      containers:
+        - name: app
+          image: <image>:<tag>   # NEVER :latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 1000m
+              memory: 512Mi
+          readinessProbe:
+            httpGet: { path: /ready, port: http }
+            periodSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            httpGet: { path: /live, port: http }
+            periodSeconds: 30
+            failureThreshold: 6   # tolerant — don't restart on transient slowness
+            initialDelaySeconds: 30
+          startupProbe:
+            httpGet: { path: /live, port: http }
+            periodSeconds: 5
+            failureThreshold: 30   # cold start budget
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+```
+
+**Probe semantics — do not get this wrong:**
+
+- **Readiness** = "should I receive traffic right now?" Wire to a SHALLOW
+  endpoint (`/ready`) that returns 200 if the app process is up. Use for
+  graceful drain (set false during SIGTERM).
+- **Liveness** = "is the process hopelessly stuck?" Almost never wire to deep
+  health (downstream DB, cache, etc.) — that turns a DB blip into a pod-restart
+  storm. Liveness should detect deadlocks ONLY.
+- **Startup** = "am I done booting?" Use for slow-starting apps (JVM, large
+  models). Lets liveness be strict without false positives during boot.
+
+### Step 4: Add the supporting manifests (ALL of these, none optional)
+
+For each workload, generate:
+
+1. **Service** — `ClusterIP` by default. `LoadBalancer` only if edge-exposed.
+2. **ServiceAccount** — dedicated, never reuse `default`. Annotate for
+   IRSA (EKS) / Workload Identity (GKE) / AAD Pod Identity (AKS) if the
+   workload needs cloud-API access.
+3. **PodDisruptionBudget** — `minAvailable` = replicas - 1 (or 50%, whichever
+   is higher). PDBs let voluntary disruption (node drain, cluster autoscaler)
+   happen safely.
+4. **HorizontalPodAutoscaler** — CPU OR custom metric (RPS, queue depth). NEVER
+   use HPA with `behavior.scaleDown` left at default (300s stabilization, 100%
+   step) without thinking — flappy workloads need slower scale-down.
+5. **NetworkPolicy** — default-deny ingress + egress on the namespace, plus an
+   allow policy per actual flow. See Step 5.
+6. **ConfigMap / Secret** — never bake secrets in images; mount as files, not
+   env vars, when the app can read files (env vars leak via `ps`, crash dumps,
+   error pages).
+
+For stateful workloads, also generate:
+
+7. **StatefulSet** with `volumeClaimTemplates`, `podManagementPolicy: OrderedReady`
+   (or `Parallel` if order doesn't matter).
+8. **Headless Service** for peer discovery.
+9. **StorageClass** reference — name the class, don't hardcode provisioner.
+
+For workers/queue consumers:
+
+10. **HPA on queue depth** via KEDA or custom metric, NOT CPU. CPU-based HPA
+    on queue workers lags reality by 1-2 scrape intervals.
+
+### Step 5: NetworkPolicy — the actual hard part
+
+Default-deny is mandatory. The trap is making it default-deny too aggressively
+and breaking probe traffic / DNS. Template:
+
+```yaml
+# Default-deny baseline (apply once per namespace)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: default-deny, namespace: <ns> }
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+# Allow DNS for everyone
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: allow-dns, namespace: <ns> }
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: kube-system } }
+          podSelector: { matchLabels: { k8s-app: kube-dns } }
+      ports: [{ protocol: UDP, port: 53 }, { protocol: TCP, port: 53 }]
+```
+
+Then per-workload allow rules — ingress from the LB / ingress controller,
+egress to specific upstream services. If you can't enumerate the egress targets,
+your service is talking to too many things.
+
+**NetworkPolicy caveats:**
+
+- Won't enforce unless your CNI supports it (Calico, Cilium, Azure CNI w/ policy
+  add-on, GKE Dataplane V2). Flannel default does NOT. CHECK before claiming
+  protection.
+- Probe traffic comes from the node, not from a pod — but kubelet uses the host
+  network namespace, so it bypasses NetworkPolicy. No allow rule needed for
+  probes.
+
+### Step 6: HPA / VPA tuning
+
+- **HPA target utilization**: 60-70% CPU, NOT 80%. 80% leaves no headroom for
+  scale-up latency.
+- **VPA** in `Auto` mode is dangerous on stateful workloads (in-place resize is
+  still alpha as of v1.30) — use `Off` (recommendations only) and roll
+  manually, OR `Initial` (set on pod create only). NEVER run HPA on CPU AND VPA
+  on CPU on the same workload — they fight.
+- **scaleDown stabilizationWindow**: 5min for web APIs, 15min for ML inference,
+  60min for cost-sensitive batch.
+
+### Step 7: Audit mode — scoring existing manifests
+
+For each Deployment/StatefulSet/DaemonSet found, score:
+
+| Check | Severity | Pass criteria |
+|---|---|---|
+| resource requests set | HIGH | both cpu and memory |
+| resource limits set | HIGH | memory required; cpu optional but recommended |
+| image not :latest | HIGH | tagged with sha or version |
+| readinessProbe present | HIGH | yes |
+| livenessProbe present | MEDIUM | yes, and not pointing to deep dep |
+| runAsNonRoot | HIGH | true |
+| readOnlyRootFilesystem | MEDIUM | true (with emptyDir for /tmp) |
+| capabilities drop ALL | MEDIUM | yes |
+| automountServiceAccountToken | MEDIUM | false unless app calls API server |
+| dedicated ServiceAccount | MEDIUM | not `default` |
+| PDB exists | HIGH | yes if replicas >= 2 |
+| HPA exists | LOW | yes if traffic is variable |
+| topologySpreadConstraints | MEDIUM | yes for replicas >= 3 |
+| NetworkPolicy covers pod | HIGH | yes (ingress + egress) |
+
+Output a table with PASS/FAIL/N/A per workload, plus a remediation patch per
+failed row.
+
+### Step 8: Write outputs
+
+Path layout:
+
+```
+deploy/{workload}/
+├── README.md             # what this is, how to deploy, who paged when it breaks
+├── kustomize/            # if Kustomize
+│   ├── base/
+│   │   ├── deployment.yaml
+│   │   ├── service.yaml
+│   │   ├── serviceaccount.yaml
+│   │   ├── pdb.yaml
+│   │   ├── hpa.yaml
+│   │   ├── networkpolicy.yaml
+│   │   └── kustomization.yaml
+│   └── overlays/{dev,staging,prod}/
+└── helm/{workload}/      # if Helm
+    ├── Chart.yaml
+    ├── values.yaml       # safe defaults
+    ├── values.prod.yaml  # prod overrides (more replicas, stricter limits)
+    └── templates/
+```
+
+### Step 9: Validate
+
+```bash
+# Lint
+kubectl --dry-run=server apply -f deploy/{workload}/kustomize/overlays/dev/ 2>&1 | head -50
+helm lint deploy/{workload}/helm/{workload} 2>&1 | head -30
+# Policy (if installed)
+kubesec scan deploy/{workload}/kustomize/base/deployment.yaml 2>/dev/null
+conftest test deploy/{workload}/ 2>/dev/null
+```
+
+Report what passed and what didn't. If `kubectl --dry-run=server` isn't
+available (no cluster access), say so — don't fake the result.
+
+## Outputs
+
+- `deploy/{workload}/` — the generated manifests, ready to apply or template.
+- `deploy/{workload}/README.md` — one paragraph per resource explaining WHY it
+  exists, plus rollback steps.
+- `deploy/{workload}/AUDIT.md` (audit mode only) — the scoring table + patches.
+
+## Edge cases
+
+- **Single-replica workloads.** Don't generate a PDB with `minAvailable: 1` —
+  it blocks ALL voluntary disruption. Either skip PDB or use
+  `maxUnavailable: 1` (which is no-op for one replica but doesn't block drains).
+- **Very small clusters (1-2 nodes).** `topologySpreadConstraints` with
+  `whenUnsatisfiable: DoNotSchedule` will block pod creation. Use
+  `ScheduleAnyway` until you have 3+ nodes per zone.
+- **CNI without NetworkPolicy enforcement.** Document this loudly in the README
+  ("Generated NetworkPolicies are advisory — Flannel does not enforce them.").
+  Recommend a switch to Calico / Cilium.
+- **Existing cluster with default-allow.** Rolling out default-deny on a live
+  namespace will break things. Generate the allow-rules FIRST, deploy them,
+  THEN deploy the default-deny.
+- **Cron / batch jobs.** Different rules — no readiness probe, no HPA, but DO
+  set `activeDeadlineSeconds`, `backoffLimit`, and `ttlSecondsAfterFinished`.
+- **DaemonSets.** Probe semantics differ — readiness usually irrelevant
+  (no Service backing). Don't auto-add HPA (doesn't apply).
+- **Service mesh present.** If Istio/Linkerd is already running, the mesh sidecar
+  changes probe configuration (probes must go through sidecar for mTLS). Defer
+  to `/service-mesh` for mesh-aware manifests.
+
+## Dependencies
+
+- **S1 (Hall-mode preamble)** — provided by `{{PREAMBLE}}`.
+- **S5 (cloud creds)** — optional. If `kubectl` has a cluster context, Step 9
+  validates against a live server. Without it, only static lint runs.
+- `helm` / `kustomize` CLI — optional; only needed for Step 9 validation.
+- `kubesec` / `conftest` — optional policy linting.
+
+## What this skill will NOT do
+
+- Provision the cluster.
+- Install CNI / ingress controller / cert-manager.
+- Configure GitOps (Argo CD / Flux).
+- Author CRDs or operators.
+- Generate mesh-specific config — use `/service-mesh` for that.
+
+## Important rules
+
+- **Default-deny is mandatory.** NetworkPolicy must always be generated.
+- **No `:latest` tags, ever.** Tagged image or digest only.
+- **No `automountServiceAccountToken: true`** unless explicitly justified.
+- **Liveness probes are not health checks.** Wire them shallow.
+- **AskUserQuestion before generating** — the cluster, mesh, and compliance
+  context drives half the output.

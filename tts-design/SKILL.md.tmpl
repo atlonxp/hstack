@@ -1,0 +1,286 @@
+---
+name: tts-design
+preamble-tier: 2
+version: 1.0.0
+description: |
+  [Speech & Voice AI] TTS architecture + training plan. Given target spec (languages,
+  voice count, latency budget, expression requirements, license posture, deployment
+  constraints), recommends the right backbone (VITS, Tacotron2, StyleTTS2, XTTSv2,
+  Bark, Tortoise, F5-TTS, Coqui) with rationale. Outputs an /autoplan-full-compatible
+  build plan with data-prep, training, eval, and deployment phases.
+  Use when: "design a TTS system", "which TTS model should I use", "TTS architecture",
+  "voice synthesis stack", "speech synthesis plan". (gstack)
+voice-triggers:
+  - "design a tts"
+  - "tts architecture"
+  - "which tts model"
+  - "speech synthesis plan"
+triggers:
+  - tts design
+  - tts architecture
+  - speech synthesis architecture
+  - voice synthesis stack
+allowed-tools:
+  - Bash
+  - Read
+  - Write
+  - Glob
+  - Grep
+  - AskUserQuestion
+---
+
+{{PREAMBLE}}
+
+# /tts-design — Family L — Speech & Voice AI
+
+You are running the `/tts-design` skill. This is a **TTS architecture + training-plan
+designer**. Input: a target spec (interactive or `--spec`). Output: a complete build
+plan — ARCHITECTURE, DATA-PLAN, TRAIN-PLAN, EVAL-PLAN — that downstream skills
+(`/autoplan-full`, `/finetune --domain speech-tts`, `/voice-eval`) consume.
+
+You are NOT a TTS-builder. You design the system, recommend the backbone, and hand
+off a build-ready plan. Do not start training. Do not download models. Do not write
+code beyond the four planning docs.
+
+The TTS landscape moves fast. When you cite a state-of-the-art model, cite the
+specific version (e.g., "StyleTTS2 March 2024 checkpoint", not "StyleTTS2"). If
+the user wants the absolute latest, suggest running `/discover --domain tts`
+first to refresh the knowledge base.
+
+---
+
+## When to use
+
+- Greenfield TTS project — no model picked yet.
+- Existing TTS underperforms and the team is debating whether to switch backbones.
+- Multilingual scope expanding (e.g., adding Thai + Lao to an English-only stack).
+- Expression / prosody requirements emerged late and the current model can't carry them.
+- Latency budget shrunk (e.g., real-time conversational) and the current model is too slow.
+
+Do NOT use for:
+- Eval-only work → use `/voice-eval`.
+- Cloning a specific person's voice → use `/voice-clone`.
+- Adding expression to an already-picked architecture → use `/prosody-control`.
+
+---
+
+## Inputs
+
+| Input | Required? | Format |
+|---|---|---|
+| Target languages | yes | List of BCP-47 tags (e.g., `en-US`, `th-TH`, `code-switch:en+th`) |
+| Voice count | yes | Integer or "many" (e.g., 1 / 5 / "many — XTTS-style zero-shot") |
+| Latency budget | yes | ms per sentence (e.g., 250ms streaming, 2000ms batch, "offline only") |
+| Quality tier | yes | "production" / "research demo" / "internal tool" |
+| Expression scope | yes | "neutral only" / "emotion-tagged" / "free-form prosody" |
+| Deployment constraint | yes | "cloud GPU" / "edge (single CPU)" / "edge (mobile NPU)" / "browser WASM" |
+| License posture | yes | "permissive only (MIT/Apache)" / "research OK (CC-BY-NC)" / "commercial w/ attribution" |
+| Training data availability | optional | Hours of paired audio+transcript per language + speaker |
+| Existing baseline | optional | If migrating, name of current model + observed limitation |
+
+Spec mode: `--spec tts-spec.yaml` reads a YAML with these keys.
+Interactive mode: AskUserQuestion through each in order.
+
+---
+
+## Procedure
+
+### Step 0: Locate plan root + project slug
+
+```bash
+PLAN_ROOT="${CLAUDE_PLANS_DIR:-$HOME/.gstack/projects/$(basename "$PWD")}/tts"
+mkdir -p "$PLAN_ROOT"
+echo "PLAN_ROOT: $PLAN_ROOT"
+```
+
+Ask the user for a project slug (e.g., `tsl-teaching-en`, `customer-support-th`).
+Final outputs land at `$PLAN_ROOT/{slug}/`.
+
+### Step 1: Confirm intent + scope
+
+AskUserQuestion (preamble format):
+- **Re-ground:** current project + branch.
+- **Simplify:** "TTS architecture choice is the call that locks in 80% of your quality
+  ceiling and 100% of your latency floor. Before we pick a backbone, let's make sure
+  this skill is the right move."
+- **RECOMMENDATION:** A because most teams pick the wrong model in week 1 and rebuild
+  in month 6.
+- **Options:**
+  - A) Design a new TTS architecture from scratch. Completeness: 10/10.
+  - B) I already picked a model — I just want a training plan. Completeness: 7/10
+    (switch to `/finetune --domain speech-tts` after; this skill is overkill).
+  - C) I'm evaluating two architectures head-to-head. Completeness: 9/10 (this skill
+    will produce two parallel plans for `/voice-eval` to compare).
+
+### Step 2: Gather the spec (interactive or `--spec`)
+
+For each input row in the table above, AskUserQuestion with:
+- **Simplify:** plain-language gloss of why the field matters.
+- **RECOMMENDATION:** sensible default with rationale.
+- **Options:** 2-4 concrete choices each, with a Completeness score.
+
+For `latency budget` specifically, gloss it as: "real-time conversational means
+the listener can interrupt — under ~300ms per chunk. Batch offline can take
+seconds and still feel fine."
+
+For `expression scope` gloss: "neutral means one tone, like a navigation prompt.
+Emotion-tagged means you can request 'happy' or 'serious'. Free-form means you
+want fine-grained prosody control (per-word emphasis, pauses, accent shifts) —
+that locks you into a much smaller model set."
+
+### Step 3: Architecture recommendation
+
+Apply the decision matrix below, then write `$PLAN_ROOT/{slug}/ARCHITECTURE.md`.
+
+**Decision matrix (illustrative — re-verify against current SOTA):**
+
+| If user needs... | Recommended backbone | Rationale | License |
+|---|---|---|---|
+| English only, 1-3 voices, max quality, GPU OK | **StyleTTS2** | Diffusion-style, top MOS in 2024 evals, learned style tokens | MIT |
+| Multilingual zero-shot, "many" voices | **XTTSv2** | 17+ languages, voice cloning from 6s samples, commercial license w/ Coqui terms | CPML (commercial w/ caveats) |
+| Real-time streaming, single voice | **VITS** (or **Glow-TTS** for CPU) | End-to-end, fast inference, well-understood | MIT |
+| Expressive / emotional, English-first | **Bark** (small) or **StyleTTS2** | Bark natively does laughter/sighs; StyleTTS2 does cleaner emotion | Bark: MIT; StyleTTS2: MIT |
+| Edge / mobile / WASM | **Piper** (VITS-derived) or **Glow-TTS** | Small footprint (50-100MB), CPU-only inference | MIT |
+| Long-form narration, quality > speed | **Tortoise-TTS** | Best zero-shot quality, very slow | Apache 2.0 |
+| Research-grade English flow-matching | **F5-TTS** | 2024 flow-matching SOTA, fast convergence | CC-BY-NC (research only) |
+| Code-switching / accented English | **XTTSv2** or fine-tuned **StyleTTS2** | XTTS handles code-switch natively; StyleTTS2 needs custom prosody data |
+| End-to-end pipeline w/ training tools | **Coqui TTS framework** wrapping VITS / XTTS | Best DX, active community, multi-backbone | MPL 2.0 |
+
+For each recommendation include in ARCHITECTURE.md:
+- The picked backbone + version pin (commit SHA or release tag).
+- The framework choice: PyTorch (default for VITS / StyleTTS2 / XTTS), JAX (rare in
+  TTS — name if user wants JAX), vLLM / SGLang (NOT applicable — these are LLM
+  serving stacks, not TTS).
+- Inference runtime: ONNX Runtime for edge; TorchServe / Triton for cloud; raw
+  PyTorch for research.
+- Hardware envelope: training (A100 80GB / 4xRTX 4090 / 8xH100), inference (1xT4 /
+  1xL4 / CPU-only / WASM).
+- What it CAN'T do — be explicit so the user doesn't get burned later.
+
+### Step 4: Data plan
+
+Write `$PLAN_ROOT/{slug}/DATA-PLAN.md` covering:
+
+- **Source datasets per language:** LibriTTS / VCTK / LJSpeech for English; CSS10
+  for low-resource; CommonVoice for breadth; LibriVox for long-form; Hall's own
+  recordings if `--own-data <path>` provided.
+- **Hours target:** 50h+ per voice for full fine-tune, 5-10h for adaptation, 6s
+  for zero-shot reference.
+- **Annotation pipeline:** transcript alignment (Montreal Forced Aligner / WhisperX),
+  phoneme conversion (g2p_en / Thai g2p / IPA), prosody tags if expression scope > neutral.
+- **Cleaning:** SNR threshold (typically > 20dB), silence trimming, loudness
+  normalization (-23 LUFS), sample-rate target (22050 or 24000 Hz).
+- **Augmentation:** noise injection, speed perturbation, pitch shift — only if
+  robustness is a deployment goal.
+- **Licensing audit:** every dataset gets a license column. Block any "research only"
+  dataset if user said "commercial deployment" in spec.
+
+### Step 5: Training plan
+
+Write `$PLAN_ROOT/{slug}/TRAIN-PLAN.md` covering:
+
+- **Phases:** pre-train (skip if using checkpoint), fine-tune, expression head
+  training (if applicable), inference distillation (if latency-constrained).
+- **Hyperparameters:** batch size, learning rate schedule, optimizer, total steps,
+  validation cadence. Cite the backbone's reference config as starting point.
+- **Compute estimate:** GPU-hours + dollars (rough — based on current cloud pricing
+  the user should re-verify).
+- **Checkpoint strategy:** save every N steps, keep top-K by val loss.
+- **Monitoring:** training loss, validation MOSNet predicted MOS (cheap proxy),
+  speaker similarity (if multi-speaker).
+- **Stop criteria:** val MOSNet plateaus for K evals, OR target MOS hit on holdout.
+
+### Step 6: Eval plan
+
+Write `$PLAN_ROOT/{slug}/EVAL-PLAN.md` that calls into `/voice-eval` with the
+specific metric set this architecture needs:
+
+- **MOS** (human) for production tier; MOSNet (predicted) for CI loops.
+- **Speaker similarity** via ECAPA-TDNN embeddings (required if multi-speaker).
+- **WER via Whisper back-transcribe** for intelligibility.
+- **Prosody distance** (F0 + duration RMSE vs reference) if expression scope > neutral.
+- **Real-time factor** (RTF) for streaming use cases.
+- **Emotion-classifier accuracy** if expression scope == "emotion-tagged".
+
+Eval cadence: nightly during training, full human-MOS panel before each release.
+
+### Step 7: Hand-off
+
+Print the four file paths. AskUserQuestion:
+- **Simplify:** "The plan is on disk. Next step is usually `/autoplan-full` to
+  expand into a full build pipeline, OR `/finetune --domain speech-tts` if you
+  already have the data and just want to start training."
+- **RECOMMENDATION:** A — run `/autoplan-full` so CEO + design + eng reviews catch
+  scope problems before training starts.
+- **Options:**
+  - A) Run /autoplan-full on the architecture doc. Completeness: 10/10.
+  - B) Go straight to /finetune (data is already ready). Completeness: 8/10.
+  - C) Stop here — I'll review the docs first. Completeness: 9/10.
+
+---
+
+## Outputs
+
+```
+$PLAN_ROOT/{slug}/
+├── ARCHITECTURE.md   # Backbone choice + rationale + hardware envelope + can't-do list
+├── DATA-PLAN.md      # Datasets, hours target, pipeline, licensing audit
+├── TRAIN-PLAN.md     # Phases, hyperparameters, compute, monitoring, stop criteria
+└── EVAL-PLAN.md      # Metric set, cadence, gate thresholds (calls /voice-eval)
+```
+
+Every file has a YAML frontmatter with `target`, `version`, `derived_from` so
+S12 (Family J artifact format) and S9 (eval-store) can consume them.
+
+---
+
+## Edge cases
+
+- **Multilingual code-switching** (e.g., Thai-accented English with Thai phrases mid-sentence):
+  XTTSv2 handles it natively; fine-tuned StyleTTS2 requires per-utterance language tags
+  and a code-switched dataset. Flag this to the user; do not silently assume.
+- **License conflict:** user said "commercial deployment" but the recommended backbone
+  is research-only (F5-TTS, some Coqui checkpoints). Refuse to write ARCHITECTURE.md
+  with that pairing — explicitly say "license posture and quality tier conflict; pick
+  the next-best license-compatible model OR change the deployment intent."
+- **Latency budget physically impossible:** user wants 100ms streaming on CPU-only
+  with diffusion-style StyleTTS2. Surface the conflict. Recommend Piper or a
+  distilled VITS instead.
+- **"Just clone my voice" mid-skill:** stop and route to `/voice-clone` — that skill
+  has consent + watermark guardrails this skill does not.
+- **Existing baseline outperforms recommendation:** ask the user to confirm via
+  `/benchmark-models` or `/voice-eval` before scrapping. Architecture switches are
+  weeks of work.
+- **Hall's TSL → fingerspelling case:** Thai-accented English with teaching-cadence
+  prosody. Recommend fine-tuned StyleTTS2 + `/prosody-control` for the cadence
+  surface. Cite this case in the plan.
+
+---
+
+## Dependencies
+
+- **S9 — Eval-store schema:** EVAL-PLAN.md writes baseline `task_id`s that
+  `/voice-eval` will populate (`task_id` = `tts-{slug}-{metric}`).
+- **S12 — Study artifact format:** every output doc carries YAML frontmatter with
+  `target`, `mode`, `version`, `derived_from`.
+- `/discover --domain tts` — refresh state-of-the-art before recommending.
+- `/voice-eval` — eval harness that consumes EVAL-PLAN.md.
+- `/finetune --domain speech-tts` (Family G) — downstream training executor.
+- `/autoplan-full` — expands architecture into a full build pipeline.
+- Model checkpoints (downloaded by `/finetune`, NOT by this skill):
+  Coqui XTTSv2, StyleTTS2 (LJSpeech / LibriTTS), VITS variants, Bark, Tortoise,
+  Piper, F5-TTS.
+
+---
+
+## Important Rules
+
+- **Never start training.** This skill ends at plan-on-disk. Training belongs in
+  `/finetune` or `/autoplan-full`.
+- **Never download a model.** Checkpoints come from downstream skills.
+- **Refuse license conflicts.** If the spec says commercial and the backbone is
+  research-only, do not write the doc — surface the conflict and ask for a decision.
+- **Cite specific versions.** "XTTSv2" alone is not enough; pin a release tag.
+- **Plan must reference S9 task_ids.** `/voice-eval` will fail otherwise.
+- **Flag the "physics-impossible" specs early.** 100ms streaming + diffusion + CPU
+  is not happening; surface it before writing 4 docs the user can't ship.

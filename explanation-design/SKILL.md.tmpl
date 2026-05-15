@@ -1,0 +1,358 @@
+---
+name: explanation-design
+preamble-tier: 3
+version: 1.0.0
+description: |
+  [Cognitive Computing / HMC] Designs explanation surfaces for AI features with the goal
+  of trust calibration, not tutorial. Picks the right format (inline / on-demand /
+  progressive) per user task, and scopes the five trust dimensions: confidence,
+  alternatives, provenance, controllability, recourse. References Doshi-Velez & Kim,
+  Miller, Lipton, Wachter on counterfactual recourse. Surfaces tradeoffs between
+  faithfulness, intelligibility, and attention budget rather than enforcing a fixed
+  explanation style.
+  Use when asked to "design the explanation", "explain this AI feature", "trust
+  surfaces", "why did the model say that", "should we add an explanation", or
+  "calibrate trust". (gstack)
+allowed-tools:
+  - Read
+  - Edit
+  - Write
+  - Grep
+  - Glob
+  - Bash
+  - AskUserQuestion
+---
+
+{{PREAMBLE}}
+
+{{BASE_BRANCH_DETECT}}
+
+# /explanation-design: Trust-Calibrated Explanation Surfaces — Family H — Cognitive Computing / Human-Machine Collaboration
+
+You are designing the explanation surface for an AI feature — not writing a
+tutorial. The user wants *enough* trust to act, not a paper about how the
+model works. Your job is to pick the explanation format that calibrates trust
+(neither over-trusting nor under-trusting the system) for the user's task, and
+to scope five trust dimensions per surface.
+
+## When to use
+
+Run `/explanation-design` when:
+- An AI feature has no explanation surface and you're deciding whether to add
+  one.
+- An AI feature has a 6-paragraph explanation and users ignore it.
+- Trust is the bottleneck (users are right not to trust, OR users are
+  over-trusting and getting burned).
+- A `/collaboration-pattern` decision named "trust surfaces to design here."
+- An `/agent-ux-review` rated "surfaced uncertainty" low and needs a concrete
+  fix.
+
+Use AFTER `/collaboration-pattern` (pattern determines explanation need).
+Pairs with `/agent-ux-review` (the principle this implements is "surfaced
+uncertainty + repair").
+
+## Inputs
+
+| Input | Required | Notes |
+|-------|----------|-------|
+| AI feature description | yes | What does the model decide / generate? |
+| User task | yes | What is the user trying to do with the output? |
+| Failure cost | yes | Reversible / costly / irreversible |
+| Persona | yes | Novice / journeyman / expert |
+| Current explanation (if any) | no | What's there today |
+| Channel | yes | Where does the explanation live? (inline panel, modal, side, log) |
+
+## Theoretical grounding
+
+Five primary sources, cited inline.
+
+1. **Doshi-Velez & Kim, *Towards A Rigorous Science of Interpretable Machine
+   Learning* (2017)** — distinguishes intrinsic vs. post-hoc interpretability,
+   and defines explanation evaluation along three axes: application-grounded
+   (does it help the user complete the task?), human-grounded (does it match
+   human reasoning?), functionally-grounded (does it preserve a proxy of
+   model behavior?). We use *application-grounded* as the default: an
+   explanation is good if it helps the user act correctly.
+
+2. **Miller, *Explanation in Artificial Intelligence: Insights from the Social
+   Sciences* (2019)** — the canonical synthesis. Three key claims we apply:
+   - Explanations are **contrastive** ("why P rather than Q?"), not
+     exhaustive.
+   - Explanations are **selected** — humans don't want the full causal chain,
+     they want a few salient factors.
+   - Explanations are **social** — they happen in a conversation, not a
+     one-shot dump.
+
+3. **Lipton, *The Mythos of Model Interpretability* (ICML 2016)** —
+   distinguishes transparency (the model is mechanistically understandable)
+   from post-hoc interpretability (explanations layered on top). Most product
+   explanations are post-hoc and that is fine, but the design must not lie
+   about which one it is.
+
+4. **Wachter, Mittelstadt & Russell, *Counterfactual Explanations without
+   Opening the Black Box* (Harvard JOLT 2018)** — the recourse argument.
+   When a decision is consequential for a user, the explanation must include
+   what they could have changed to get a different outcome ("if your income
+   were $5,000 higher, the loan would have been approved"). Counterfactual
+   explanations are GDPR-aligned, actionable, and don't require model
+   transparency.
+
+5. **Bansal et al., *Beyond Accuracy: The Role of Mental Models in Human-AI
+   Team Performance* (AAAI 2019)** — explanation calibrates the mental model;
+   miscalibrated confidence reduces team performance below the
+   no-explanation baseline.
+
+Tradeoffs surfaced (cited):
+- **Faithfulness vs. intelligibility.** A faithful explanation may be
+  unreadable; a readable one may misrepresent the model. (Lipton 2016).
+- **Confidence number vs. verbal hedge.** Number is precise but uncalibrated;
+  hedge is honest but unactionable. (Doshi-Velez & Kim 2017).
+- **Inline vs. on-demand.** Inline is always there but consumes attention;
+  on-demand respects attention but is often missed. (Miller 2019).
+- **Recourse adds agency but may reveal the cost function.** (Wachter 2018).
+- **Over-explaining destroys trust as fast as under-explaining.** (Bansal
+  2019).
+
+## The five trust dimensions
+
+Every AI explanation surface should scope these five. Each can be present,
+absent, or progressively disclosed. The skill `AskUserQuestion`s per
+dimension.
+
+1. **Confidence** — How sure is the model? Options: numeric (87%), categorical
+   (high / medium / low), verbal hedge ("the model is fairly confident",
+   "this is a guess"), or implicit (rendered only when confident, withheld
+   otherwise). Tradeoff: precision vs. honesty. Mis-calibrated confidence is
+   worse than no confidence (Bansal 2019).
+
+2. **Alternatives** — What other outputs did the model consider? Options:
+   contrastive ("why P rather than Q?"), top-N list, or none. Miller 2019:
+   the user wants the contrastive answer, not the top 50.
+
+3. **Provenance** — What did the model use to produce this output? Options:
+   source citations, retrieval chunks, training-data class, none. Required
+   when the user must verify (legal, medical, factual claims).
+
+4. **Controllability** — What can the user change to influence the next
+   output? Options: parameter sliders, refine-prompt, exclude-source, none.
+   Pairs directly with `/agent-ux-review` repair principle.
+
+5. **Recourse** — If the output is a decision, what counterfactual change
+   would produce a different decision? Options: explicit counterfactual
+   ("if X were higher, the answer would be Y"), policy summary, appeal
+   path, none. Wachter 2018: legally significant decisions REQUIRE this.
+
+## The three formats
+
+Pick one per surface, or stage them progressively.
+
+| Format | Strength | Cost | When to use |
+|--------|----------|------|-------------|
+| **Inline** | Always visible, no clicks | Eats attention budget | Decision is consequential and frequent (e.g., autocomplete suggestion confidence) |
+| **On-demand** | Zero baseline cost | Often missed | Decision is consequential but rare; expert users |
+| **Progressive** | Short by default, expandable | More UI complexity | Mixed-persona surface; novice gets summary, expert expands |
+
+## Procedure
+
+### Step 0: Task and persona capture
+
+Capture the AI feature, user task, failure cost, persona, current explanation
+(if any), and channel. `AskUserQuestion` for any missing input. One at a time.
+
+### Step 1: Application-grounded goal
+
+Following Doshi-Velez & Kim 2017, write the **explanation success criterion**
+in one sentence: "After seeing this explanation, the user can {decide / verify
+/ refine / appeal} {what} in {time budget}."
+
+If the criterion is "the user understands the model," that's a research
+goal, not a product goal — flag it and `AskUserQuestion` for a re-frame.
+
+### Step 2: Trust-direction diagnosis
+
+Diagnose whether trust is the bottleneck and in which direction:
+- **Under-trust** — users ignore correct outputs. Explanation should
+  surface confidence + provenance to earn trust.
+- **Over-trust** — users accept incorrect outputs uncritically.
+  Explanation should surface uncertainty + recourse to dampen blind
+  acceptance.
+- **Mis-trust** — users trust the wrong cases. Explanation should be
+  contrastive ("why P rather than Q?") so users learn when to trust.
+- **Calibrated** — trust matches accuracy. Explanation may be optional;
+  audit need only.
+
+Cite Bansal 2019 — explanation goal differs per direction.
+
+### Step 3: Trust dimensions per surface
+
+For each of the five dimensions — confidence, alternatives, provenance,
+controllability, recourse — propose a treatment:
+- **Present, fixed.**
+- **Present, progressively disclosed.**
+- **Absent.**
+
+For each dimension, surface the tradeoff and cite the source. `AskUserQuestion`
+per dimension. One at a time. NUMBER+LETTER.
+
+### Step 4: Format selection
+
+Pick inline / on-demand / progressive based on:
+- Attention budget on the surface (per `/cognitive-load-audit` if run).
+- Frequency of the decision.
+- Persona mix.
+
+`AskUserQuestion` with 2-3 options. Cite Miller 2019 (explanations are social,
+not one-shot) when arguing for on-demand or progressive.
+
+### Step 5: Component scaffold
+
+Generate a concrete component scaffold for the chosen format and dimensions.
+Example for an inline format with confidence + provenance + controllability:
+
+```
+[AI output text]
+  ┌─────────────────────────────────────────────────────────┐
+  │ Confidence: high  ·  3 sources  ·  Refine ↻             │
+  │                                                          │
+  │ [expand: contrastive — why this rather than alternative?]│
+  └─────────────────────────────────────────────────────────┘
+```
+
+Specify:
+- Which dimensions are visible by default.
+- What expanding reveals.
+- What clicking each control does.
+- Copy patterns for the verbal hedge (if any).
+- States: confident / uncertain / no-data / recoverable error.
+
+For recourse-required decisions, generate the counterfactual surface
+separately (Wachter 2018):
+
+```
+Why this decision: [contrastive summary, max 2 lines]
+To change the outcome: [counterfactual, max 2 actions]
+Appeal: [link or escalation path]
+```
+
+### Step 6: Anti-patterns check
+
+Run the proposed surface against known anti-patterns:
+- **Faithfulness lie** — explanation claims to be a causal trace but is
+  post-hoc. Lipton 2016: don't lie about which it is.
+- **Calibration drift** — confidence number is shown without measured
+  calibration. Bansal 2019: a 90% number that means 60% is worse than no
+  number.
+- **Over-explanation** — every dimension always visible. Miller 2019:
+  explanations are selected, not exhaustive.
+- **Tutorial creep** — explanation drifts into teaching the user how the
+  model works. Doshi-Velez & Kim 2017: application-grounded, not
+  research-grounded.
+
+Flag any anti-pattern present and `AskUserQuestion` for a re-frame.
+
+### Step 7: Output
+
+Write `ux/explanations/{feature}.md` with:
+- Application-grounded goal.
+- Trust-direction diagnosis.
+- Per-dimension treatment with citations.
+- Format choice with rationale.
+- Component scaffold (with state coverage).
+- Anti-patterns audited.
+- Optional recourse surface (if consequential decision).
+
+Also produce component scaffolds as code or pseudo-code in the same file,
+ready for an engineer to implement.
+
+### Step 8: Completion summary
+
+```
++================================================================+
+|       EXPLANATION-DESIGN — COMPLETION SUMMARY                  |
++================================================================+
+| Feature              | <name>                                  |
+| User task            | <one-line>                              |
+| Trust direction      | under / over / mis / calibrated         |
+| Format chosen        | inline / on-demand / progressive        |
++----------------------------------------------------------------+
+| Confidence           | present / progressive / absent          |
+| Alternatives         | present / progressive / absent          |
+| Provenance           | present / progressive / absent          |
+| Controllability      | present / progressive / absent          |
+| Recourse             | present / progressive / absent / N/A    |
++----------------------------------------------------------------+
+| Anti-patterns        | __ flagged, __ resolved                 |
+| Scaffolds produced   | __                                      |
++================================================================+
+```
+
+## Outputs
+
+- `ux/explanations/{feature}.md` with the design.
+- Component scaffolds (code or pseudo-code).
+- Plan-file edits if a plan exists.
+
+## Edge cases
+
+- **Don't add an explanation just to add one.** If trust is calibrated and
+  the cost is reversible, "no explanation" is often the right answer.
+  Surface this option explicitly in Step 2.
+- **Confidence numbers without calibration are worse than nothing.** Bansal
+  2019. If the model's confidence is uncalibrated, use categorical (high /
+  med / low) or verbal hedges instead.
+- **Recourse is mandatory for legally consequential decisions.** Wachter
+  2018. In the US/EU regulatory frame (FCRA, GDPR Article 22), users have
+  the right to know why a decision was made AND what they could change.
+- **Explanations are contrastive.** Miller 2019. Users don't want the full
+  causal chain; they want "why P rather than Q?". Default to contrastive
+  framing.
+- **Inline is the most expensive format.** It always costs attention.
+  Default to on-demand for low-stakes, progressive for mixed-persona,
+  inline only for high-stakes high-frequency.
+- **Over-explanation destroys trust.** Bansal 2019. A six-paragraph
+  explanation under a one-line answer reads as defensive. Compress.
+- **Don't make the explanation a stylebook.** This skill is a picker. The
+  user picks, you scaffold.
+
+## Dependencies
+
+- `/collaboration-pattern` — direct upstream. The pattern names which trust
+  surfaces this skill should design.
+- `/agent-ux-review` — direct upstream. "Surfaced uncertainty" principle is
+  what this skill implements.
+- `/discover-personas` — for the persona input.
+- `/cognitive-load-audit` — pairs with this; explanation choices have
+  attention-budget implications.
+- `/mental-model-trace` — pairs with this; explanation is one of the closure
+  mechanisms for divergence.
+
+## AskUserQuestion gates
+
+- **Step 0**: capture each missing input, one at a time.
+- **Step 1**: confirm or re-frame the success criterion if research-y.
+- **Step 2**: confirm trust-direction diagnosis.
+- **Step 3**: per-dimension treatment, one dimension at a time.
+- **Step 4**: format choice (inline / on-demand / progressive).
+- **Step 6**: per anti-pattern, if flagged.
+- All AskUserQuestion calls use NUMBER+LETTER labels.
+
+## Review Log
+
+After Step 8:
+
+```bash
+eval $(~/.claude/skills/gstack/bin/gstack-slug 2>/dev/null)
+mkdir -p ~/.gstack/projects/$SLUG
+echo '{"skill":"explanation-design","timestamp":"TIMESTAMP","feature":"FEATURE","trust_direction":"DIR","format":"FORMAT","dimensions_present":N,"anti_patterns_flagged":N}' >> ~/.gstack/projects/$SLUG/$BRANCH-reviews.jsonl
+```
+
+{{REVIEW_DASHBOARD}}
+
+## Formatting Rules
+
+- Always begin with the application-grounded success criterion.
+- One dimension at a time. Never batch.
+- Cite source per treatment (Doshi-Velez, Miller, Lipton, Wachter, Bansal).
+- Tradeoff named explicitly per dimension.
+- Component scaffolds are concrete, not abstract.
+- Anti-pattern check is mandatory before output.

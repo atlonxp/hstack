@@ -1,0 +1,406 @@
+---
+name: postmortem
+preamble-tier: 2
+version: 1.0.0
+description: |
+  [CISO Compliance + IR] Blameless postmortem facilitator. Walks Hall through
+  timeline reconstruction (paste/import from chat), 5-whys, contributing factors
+  (people, process, tech), impact quantification, action items with owners,
+  and detection-gap analysis. Produces a publishable postmortem internally
+  and externally. Maps to SOC 2 CC7.4-7.5, ISO 27001 A.5.27, HIPAA §164.308(a)(6)(ii),
+  PCI-DSS Req 12.10.6.
+  Use when: "postmortem", "post-mortem", "incident review", "5-whys",
+  "blameless review", "what happened", "RCA writeup". (gstack)
+allowed-tools:
+  - Bash
+  - Read
+  - Grep
+  - Glob
+  - Write
+  - Edit
+  - AskUserQuestion
+triggers:
+  - postmortem
+  - post-mortem
+  - incident review
+  - 5 whys
+  - root cause analysis writeup
+  - blameless review
+---
+
+{{PREAMBLE}}
+
+{{INTEL_LOGGING}}
+
+{{GBRAIN_CONTEXT_LOAD}}
+
+# /postmortem — Blameless Postmortem Facilitator (Family C)
+
+You are the **postmortem facilitator**. The incident is over. The system is stable. The job now is to extract the lesson without assigning blame, then write something publishable that the team — or a prospect's auditor — can read.
+
+The template is intimidating only because nobody walks the operator through it. This skill walks Hall through it.
+
+## When to use
+
+- After every SEV-1 / SEV-2 incident (required by SOC 2 CC7.4, ISO A.5.27, PCI Req 12.10.6, HIPAA §164.308(a)(6)(ii)).
+- After SEV-3 if there's a recurring pattern or surprising root cause.
+- After a near-miss that didn't trigger an incident but easily could have.
+- For external customers when a breach notification is required (separate audience-tuned version).
+
+## Arguments
+
+- `/postmortem` — interactive. Asks for the incident slug.
+- `/postmortem <incidents/2026-05-16-checkout-500s>` — postmortem for a specific incident directory.
+- `/postmortem --external` — generates the customer-facing version too (sanitized, exec-summary).
+- `/postmortem --regulatory` — adds regulatory-notification language for GDPR Art. 33-34 / HIPAA / PCI submissions.
+- `/postmortem --near-miss` — postmortem for a near-miss (no SEV declared, but should have been).
+
+## Inputs
+
+1. **Incident slug** — the directory under `incidents/{slug}/`. AskUserQuestion if not provided; default to most recent.
+2. **Timeline source** — the `timeline.md` from `/incident-response --live` is ideal. If absent, paste from Slack / Discord / war-room transcript.
+3. **Impact data** — customer count affected, requests dropped, revenue impact, data scope. Pull from logs in `incidents/{slug}/logs/` if present.
+4. **Detection lag** — when did the issue start vs when was it detected? Time-to-detect (TTD) is the most actionable single metric.
+5. **Audience** — internal-only, customer-facing, regulator. AskUserQuestion if `--external` or `--regulatory` not specified.
+
+## Procedure
+
+### Phase 0 — Load incident
+
+```bash
+# AskUserQuestion if not supplied
+ls incidents/ 2>/dev/null
+```
+
+Read everything in the incident directory:
+- `declaration.md` — symptom, severity, IC, times
+- `timeline.md` — every action with timestamp
+- `comms/` — what customers saw
+- `compliance.md` — clocks that started
+- `logs/` — system evidence
+- `handoff.md` — IC's parting notes
+
+If the incident dir doesn't exist or is empty, AskUserQuestion to reconstruct from memory + chat exports. Note in the postmortem: "Timeline reconstructed from chat history; some timestamps approximate."
+
+### Phase 1 — Timeline reconstruction
+
+Build a clean timeline. Three lanes:
+
+```
+T (UTC)      | System Event                          | Human Action                   | Customer Visibility
+─────────────┼───────────────────────────────────────┼────────────────────────────────┼─────────────────────
+14:08:23     | Deploy v3.142.7 begins (stripe-js bump)| Hall: routine deploy           | none
+14:09:01     | Deploy completes, healthchecks green   |                                | none
+14:14:32     | Checkout 500 rate climbs 0% → 31%      | Sentry alert fires (Slack)     | Customers see error
+14:18:11     |                                        | Hall: notices alert            | error rate steady 31%
+14:23:11     |                                        | Hall declares SEV-2            | First status page post
+14:24:18     |                                        | Hall: identifies deploy        |
+14:25:55     | Deploy v3.142.6 restored               | Hall: rollback complete        |
+14:31:00     | Checkout 500 rate back to baseline     |                                | Status page yellow→green
+14:40:00     |                                        | Hall: 10-min wait verified     | Status: monitoring
+14:55:00     |                                        | Hall: incident resolved        | Status: all systems normal
+```
+
+**Critical times to extract:**
+- **Time of fault (TOF)** — when did the system actually break? (14:09:01 in example)
+- **Time of impact (TOI)** — when did customers first see it? (14:14:32 in example)
+- **Time to detect (TTD)** — TOI to when someone noticed (alert / report). (14:14:32 → 14:18:11 = 3m 39s)
+- **Time to acknowledge (TTA)** — first action taken. (14:18:11 → 14:23:11 = 5m)
+- **Time to mitigate (TTM)** — first action that began to fix it. (14:23:11 → 14:25:55 = 2m 44s)
+- **Time to resolve (TTR)** — symptom fully gone. (TOI 14:14:32 → 14:31:00 = 16m 28s)
+- **Time to all-clear (TTAC)** — verified stable. (TOI → 14:55:00 = 40m 28s)
+
+Most teams get TTM right and TTD wrong. The hidden cost is detection lag.
+
+### Phase 2 — Impact quantification
+
+Use real numbers. Estimates are explicit estimates, not handwaving.
+
+```
+IMPACT
+══════
+Duration of customer impact:  16 min 28 sec (TOI → TTR)
+Customers affected:           ~840 (31% of EU traffic during window)
+Failed checkouts:             127 (from Stripe API logs)
+Revenue at risk:              ~$4,200 (avg checkout × failed count)
+Revenue actually lost:        ~$1,100 (retried checkouts succeeded post-rollback)
+Refunds processed:            12 (customer service queue)
+Data integrity impact:        none (read-only failure path, no partial writes)
+Compliance scope:             none (no PII exfiltration, no PHI involved)
+SLA impact:                   Yes — 99.95% monthly SLA breached for 1 enterprise customer
+SLA credit owed:              $X (per contract section Y.Z)
+```
+
+For breach-class incidents, quantify the data scope precisely:
+- Records exposed (count)
+- Data classes affected (PII / PHI / CHD / credentials / business confidential)
+- Tenants affected (count + names if internal-only doc)
+- External exposure window (from first compromise to containment)
+- Confirmed exfiltration vs theoretical exposure
+
+### Phase 3 — Root cause analysis (5-whys, walked carefully)
+
+5-whys is misused when it terminates at "human error." Walk it past the human:
+
+```
+Symptom: Checkout 500s for 31% of EU traffic.
+
+Why 1: Stripe.js v3.142.7 returned a payload shape our handler didn't expect.
+       → Why: API change in minor version.
+
+Why 2: We deployed v3.142.7 without integration testing against Stripe sandbox.
+       → Why: CI runs unit tests only; integration tests are manual + skipped under deadline.
+
+Why 3: Integration tests are manual because Stripe sandbox setup is a 40-min yak shave.
+       → Why: No fixture / Pact contract between our handler and Stripe.
+
+Why 4: We've never had Stripe break us in 2 years.
+       → Why: Survivor bias. Minor-version bumps in vendor SDKs are rare; when they hit, they hit hard.
+
+Why 5: Our deploy pipeline trusts version bumps for "passive" deps without a smoke test.
+       → Why: No deploy-time smoke test exists for any vendor SDK; the assumption is unit tests catch it.
+
+ROOT CAUSE (the layer we can act on): Deploy pipeline has no smoke test for vendor SDK
+behavior. Unit tests caught syntax, not contract drift. Stripe minor bump was the
+trigger; the absence of a smoke test was the enabler.
+```
+
+The root cause must be **actionable at a layer Hall controls**. "Stripe shouldn't change their API in a minor bump" is true but irrelevant — Hall can't fix Stripe's versioning policy.
+
+### Phase 4 — Contributing factors (people, process, tech)
+
+Separate the trigger from the contributing factors. Most postmortems blame the trigger; the lessons live in the contributing factors.
+
+```
+CONTRIBUTING FACTORS
+════════════════════
+PEOPLE
+- Hall is solo on-call. Detection lag of 3m 39s is the single-engineer ceiling.
+- No second pair of eyes on the deploy at 14:08; under-staffed for SEV-2 response.
+
+PROCESS
+- No integration test gate before deploy.
+- Deploy did not require explicit approval for vendor SDK bumps.
+- Customer comms cadence on SEV-2 is undefined; 5-min lag to first status post.
+
+TECHNOLOGY
+- Stripe.js bumped from 3.142.6 → 3.142.7 with payload shape change.
+- Our handler hard-coded payload structure; no schema validation at the boundary.
+- Healthcheck endpoint did not exercise checkout path.
+
+ENVIRONMENT
+- EU traffic peak coincides with deploy window (UTC mornings).
+- No canary deploy region; rollout is global.
+```
+
+Note: BLAMELESS means "the trigger was a person doing reasonable work in a system that allowed the failure." Names go in the timeline. They do NOT go in contributing factors. Replace names with roles: "the operator," "the IC," "the on-call engineer."
+
+### Phase 5 — Detection gap analysis
+
+Why did the alert fire 5m 31s AFTER customers were affected?
+
+```
+DETECTION GAP
+═════════════
+What alert should have fired immediately?
+  Stripe checkout 5xx rate > 1% for 30s → page on-call.
+
+What alert actually fired?
+  Sentry "elevated error rate" at threshold (50 errors / 5 min window).
+
+Why the gap?
+  Sentry threshold was tuned for total app error rate, not per-route. By the time
+  total errors crossed threshold, checkout had been broken for 5+ minutes.
+
+Fix: Per-route SLO alert. Stripe-checkout-5xx > 1% over 30s → SEV-2 page.
+     Owner: Hall. Target: 2026-05-23.
+```
+
+For security incidents, the detection-gap is usually the most important section. "How long was the attacker inside before we noticed?"
+
+### Phase 6 — Action items
+
+Generate concrete, owned, dated action items. Two categories:
+
+**Prevent recurrence** (would have stopped THIS incident):
+```
+ID  Action                                              Owner  Target Date  Status   Type
+──  ──────                                              ─────  ───────────  ──────   ────
+1   Add Stripe contract test to CI (Pact)               Hall   2026-05-23   OPEN     Prevent
+2   Add per-route SLO alert for /api/checkout 5xx       Hall   2026-05-20   OPEN     Detect
+3   Add deploy-time smoke test exercising checkout      Hall   2026-05-30   OPEN     Detect
+4   Update runbook: rollback FIRST for any vendor SDK   Hall   2026-05-18   OPEN     Respond
+```
+
+**Prevent class** (would have stopped a SIMILAR incident, not just this one):
+```
+ID  Action                                              Owner  Target Date  Status   Type
+──  ──────                                              ─────  ───────────  ──────   ────
+5   Schema-validate all third-party API boundaries      Hall   2026-06-15   OPEN     Prevent
+6   Canary deploy region (single AZ first)              Hall   2026-Q3      OPEN     Mitigate
+7   /threat-model-evolve includes vendor-API failures   Hall   2026-05-30   OPEN     Detect
+```
+
+**Rules for action items:**
+- Owner is a named person (Hall in founder mode, never "team").
+- Target date is specific (week or sprint, not "soon").
+- "Status" tracks: OPEN, IN PROGRESS, DONE, DEFERRED (with reason), ACCEPTED RISK.
+- Anti-pattern to AVOID: "More careful next time." That is not an action item. "Add automated check X" is.
+
+### Phase 7 — Lessons captured
+
+One-sentence lessons that go into `~/.gstack/projects/{slug}/learnings.jsonl`:
+
+```
+LESSONS
+═══════
+- Minor-version vendor SDK bumps can introduce contract drift. Treat them as breaking
+  until proven otherwise.
+- Total-app error-rate alerts miss per-route regressions. Tune alerts to the
+  failure path the customer experiences, not the aggregate signal.
+- Solo-on-call detection ceiling is the time between alert sound and Hall opening laptop.
+  Mean was 3m 39s here. Drill it lower or buy escalation.
+```
+
+These compound across incidents. After 10 postmortems, the lessons file becomes a Hall-specific war-time playbook.
+
+### Phase 8 — Audience-tuned outputs
+
+#### Internal version (`postmortem.md`)
+
+Full content of Phases 1–7. Lives at `incidents/{slug}/postmortem.md`. Goes to:
+- Engineering team channel
+- `docs/postmortems/` archive
+- SOC 2 / ISO 27001 evidence folder
+
+#### External version (`postmortem-external.md` if `--external`)
+
+Stripped of:
+- Internal system names (replace with generic terms)
+- Specific vendor names if NDA-bound
+- Personal names (already blameless)
+- Internal architecture details that would help an attacker
+
+Kept:
+- Honest timeline (UTC times, rounded to nearest minute)
+- Honest impact statement
+- Honest root cause at the layer customers care about
+- Concrete prevention actions
+
+Lives at `incidents/{slug}/postmortem-external.md`. Send to:
+- Status page postmortem section
+- Affected customers (with CS team review first)
+- Public blog if Hall opts in
+
+Use AskUserQuestion before any external publication:
+```
+External postmortem ready. Before publishing, who has reviewed it?
+A) Posted to customers without external review (founder approves)
+B) Routed through CS / legal first
+C) Hold — needs more redaction
+```
+
+#### Regulatory version (`postmortem-regulatory.md` if `--regulatory`)
+
+For GDPR Art. 33 supervisory-authority notification, HIPAA §164.408 reports to HHS,
+PCI card-brand notifications, state breach-notice filings:
+
+- Use exact regulatory language ("personal data breach," "unauthorized acquisition,"
+  "compromise of cardholder data") — these have legal meaning.
+- Include statutory clock dates: "Awareness at {TS1}; notification at {TS2}; elapsed {hours}."
+- Cite the specific article/section being notified under.
+- Include data subject count + categories per regulator's schema.
+- Sign + date. Founder-CISO is the signing officer in solo-founder mode.
+
+Engage qualified outside counsel BEFORE this version is filed. This skill drafts; counsel approves.
+
+### Phase 9 — Save + close
+
+```bash
+# Internal version always
+cat > incidents/{slug}/postmortem.md << EOF
+...
+EOF
+
+# External + regulatory only if flags set
+```
+
+Append to `~/.gstack/projects/{slug}/postmortems.jsonl`:
+
+```json
+{
+  "ts": "2026-05-23T10:00:00Z",
+  "incident_slug": "2026-05-16-checkout-500s",
+  "severity": "SEV-2",
+  "duration_min": 16,
+  "ttd_sec": 219,
+  "ttm_sec": 164,
+  "ttr_min": 16,
+  "root_cause_layer": "deploy-pipeline",
+  "action_items_open": 7,
+  "external_published": false,
+  "regulatory_filed": false,
+  "lessons_count": 3
+}
+```
+
+Cross-link the postmortem from:
+- `TODOS.md` (action items as TODOs with owner + target date)
+- `~/.gstack/projects/{slug}/learnings.jsonl` (lessons for future investigations)
+- `docs/threat-model.md` if root cause exposed a new attack surface (`/threat-model-evolve` will pick this up)
+
+## Outputs
+
+- `incidents/{slug}/postmortem.md` — internal version (always)
+- `incidents/{slug}/postmortem-external.md` — external version (if `--external`)
+- `incidents/{slug}/postmortem-regulatory.md` — regulatory version (if `--regulatory`)
+- `~/.gstack/projects/{slug}/postmortems.jsonl` — typed summary
+- TODOS.md entries for each open action item
+- learnings.jsonl entries for each lesson
+
+## Edge cases
+
+- **No timeline exists.** Skill enters reconstruction mode. Pulls from Slack history (via paste), git log, deploy logs, alert history. Notes timestamps as "approximate" in the doc.
+- **Multiple root causes.** Common. List them all; rank by leverage. The most actionable one drives the action items.
+- **No single "root cause"** because the system is genuinely complex (e.g., five small interactions cascaded). Write a "system narrative" instead of forcing a single Why-5 chain. Cite Cook's "How Complex Systems Fail" if helpful.
+- **Blameless violated — someone wants to assign blame.** This skill refuses. The output is the doc. If the founder later wants a performance conversation with a contractor, that is a separate doc and a separate decision.
+- **Action items get punted indefinitely.** Add a `last_reviewed` field to each. The next `/compliance-audit` will surface action items > 90 days stale as a CC7.4 / A.5.27 finding.
+- **Near-miss postmortem.** Use `--near-miss`. Severity is "would-have-been SEV-N." Impact section captures "what would have happened if it had triggered."
+- **Recurring root cause.** If this incident's root cause matches a prior postmortem (search learnings.jsonl), explicitly call out the recurrence in Phase 7. Two SEV-1s from the same root cause means an action item from the first postmortem was punted and shouldn't have been.
+
+## Dependencies
+
+- **S1 — Hall-mode preamble** (founder-CISO framing)
+- **S4 — Decision Record store** (decisions from action items go to `docs/decisions/`)
+- **S7 — `/intel` schema v2** (typed postmortem events)
+- **S11 — Authorization log** (cross-link to actions taken during the incident)
+- **`/incident-response`** — upstream skill; this is its required hand-off destination
+- **`/compliance-audit`** — consumes postmortems as evidence for CC7.4, A.5.27, §164.308(a)(6)(ii), Req 12.10.6
+- **`/threat-model-evolve`** — re-runs if postmortem exposed a new trust boundary or attack surface
+
+{{LEARNINGS_LOG}}
+
+{{GBRAIN_SAVE_RESULTS}}
+
+## Important rules
+
+- **Blameless means systems, not people.** The trigger was a reasonable action in a system that allowed the failure.
+- **Root cause must be actionable at a layer Hall controls.** "The vendor should be better" is not a root cause.
+- **No "we'll be more careful" action items.** Replace with automated checks.
+- **Owners are named people, target dates are specific.** "Team / soon" is the smell.
+- **Detection gap is usually the biggest lesson.** TTD > TTM > TTR in importance for prevention.
+- **External postmortems get reviewed before publication.** Even when Hall is solo, sleep on it first.
+- **Regulatory postmortems get reviewed by qualified counsel before filing.** This skill drafts; counsel approves.
+- **Lessons compound.** Recurring root causes mean an earlier action item was punted.
+
+## Disclaimer
+
+**This skill is not a substitute for qualified legal counsel, regulatory advisors,
+or trained incident reviewers.** /postmortem produces a structured writeup for
+internal review, customer communication, and compliance evidence — it does NOT
+replace outside counsel for regulatory notifications (GDPR, HIPAA, PCI, state
+breach laws), nor a qualified forensics firm for confirmed breaches. The
+"--regulatory" mode drafts language; do not file without counsel approval.
+For high-severity incidents or any incident involving regulated data, engage
+qualified outside counsel BEFORE external publication. Always include this
+disclaimer at the end of every report output.

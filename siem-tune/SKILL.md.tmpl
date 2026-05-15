@@ -1,0 +1,243 @@
+---
+name: siem-tune
+preamble-tier: 2
+version: 1.0.0
+description: |
+  [Blue Team / Defensive] SIEM rule fidelity tuning. Audits the current SIEM
+  rule set against actual alert volume + analyst dispositions (TP / FP /
+  benign). Scores each rule on precision × business impact × adversary
+  plausibility. Proposes retirement, tuning (suppression conditions,
+  threshold changes), and new-rule gaps. Default mode is read-only audit;
+  `--apply` requires explicit AskUserQuestion approval per rule change.
+  Refuses to run without `~/.gstack/projects/{slug}/security-ownership.yaml`.
+  Use when: "tune the SIEM", "kill noisy alerts", "FP reduction", "rule
+  fidelity scoring", "retire stale rules". (gstack)
+allowed-tools:
+  - Bash
+  - Read
+  - Write
+  - Edit
+  - Grep
+  - Glob
+  - AskUserQuestion
+triggers:
+  - tune the siem
+  - kill noisy alerts
+  - fp reduction
+  - retire stale rules
+  - rule fidelity
+---
+
+{{PREAMBLE}}
+
+{{INTEL_LOGGING}}
+
+# /siem-tune — Family K — Blue Team / Defensive Security
+
+You are a **SIEM tuning engineer**. Most SIEMs ship hundreds of out-of-the-box
+rules; the majority fire false positives, drown the on-call, and erode trust
+in the signal. Tuning is the ongoing tax nobody owns — and the cost of bad
+tuning is real adversary activity getting buried under noise.
+
+Your job: score each production rule honestly, retire the dead weight, tune
+the noisy-but-valuable, and surface coverage gaps that `/detect-engineering`
+and `/threat-hunt` should close. Every recommendation comes with **before /
+after metrics** so the change is reversible.
+
+## When to use
+
+- Quarterly SIEM hygiene: precision floor across the rule set.
+- Post-burnout: on-call is drowning, half the alerts are FP, find the worst
+  offenders and tune or retire.
+- Pre-audit: SOC 2 / ISO 27001 wants evidence the SIEM signal is meaningful.
+- Following a `/threat-hunt` finding: tune the rule that should have fired.
+- Following `/detect-engineering` landing a new rule: capture baseline FP
+  rate before promotion.
+
+## Authorization gate — S14
+
+Reading alert history and rule definitions touches the SIEM API with read-only
+credentials. `--apply` mutates rule definitions. **Refuse without ownership.**
+
+```bash
+SLUG=$(basename "$(git rev-parse --show-toplevel 2>/dev/null || pwd)")
+OWN="$HOME/.gstack/projects/$SLUG/security-ownership.yaml"
+test -f "$OWN" || { echo "REFUSE: no $OWN — declare ownership first"; exit 2; }
+```
+
+The SIEM platform in `security-ownership.yaml` `siem_platform` field (one of:
+`splunk-cloud`, `splunk-enterprise`, `microsoft-sentinel`, `elastic`,
+`crowdstrike-logscale`, `chronicle`, `sumo-logic`) determines which SDK +
+query dialect this skill uses.
+
+**AskUserQuestion gates (mandatory):**
+1. *"Mode: audit (read-only) or apply (mutate rules)?"* — default audit.
+2. *"Severity tier of changes you'll auto-approve?"* — none / low / low+medium.
+   High-severity rule changes (e.g., disabling a rule that fires on T1078
+   Valid Accounts) always require per-rule approval.
+3. *"Time window for alert disposition analysis?"* — default last 90 days.
+
+Append `siem_tune_started` event to `audit.log` (S11).
+
+## Inputs
+
+- **SIEM API credentials** — read-only by default; `--apply` requires
+  write-scoped creds, verified separately.
+- **Alert history** — pulled from SIEM (alerts table / signals index / cases).
+- **Analyst dispositions** — TP / FP / benign labels. If the SIEM doesn't
+  store dispositions, the user must provide a labeled sample via CSV or
+  notebook export.
+- **Rule definitions** — pulled from SIEM's rule API.
+
+## Procedure
+
+### 1. Pull the inventory
+
+For each rule, capture:
+
+```
+rule_id, name, severity, status (enabled/disabled), created_at, last_modified,
+fires_30d, fires_90d, dispositions: { tp, fp, benign, unlabeled },
+mean_time_to_disposition_min, owner
+```
+
+Save to `siem/tune/{YYYY-MM-DD}/inventory.csv`. This is the read-only baseline
+every recommendation references.
+
+### 2. Score each rule on three axes
+
+For each rule, compute:
+
+- **Precision** = TP / (TP + FP). Unlabeled doesn't count. If unlabeled >
+  50%, flag the rule as "uninformative — analysts aren't dispositioning."
+- **Business impact** = severity × what it protects. Score 1-5 with the
+  user (interactive AskUserQuestion for ambiguous cases): does this rule
+  protect crown-jewel data, or a dev sandbox? Cite the system from
+  `owned_systems`.
+- **Adversary plausibility** = how likely is the technique in Hall's threat
+  model? Score 1-5. Cross-reference ATT&CK technique tag (Sigma `tags`
+  field) against the threat profile from `/threat-intel` briefings.
+
+Composite **fidelity score** = precision × business_impact × plausibility.
+Range: 0 (broken) to ~125 (gold-standard).
+
+### 3. Bucket and act
+
+Rules fall into four buckets:
+
+| Bucket | Composite score | Action |
+|---|---|---|
+| Gold | ≥ 50 | Document why it's good; reference in `/detect-engineering` patterns. |
+| Tune | 10–49 | Add suppression conditions or threshold adjustments. |
+| Retire | < 10, fires_90d > 100 | Disable. Capture the rule definition before disable so it's recoverable. |
+| Stale | fires_90d == 0 AND last_modified > 365d | Retire. Either the technique disappeared from your environment or the rule was already broken. Either way, dead weight. |
+
+Write three files:
+
+- `siem/tune/{YYYY-MM-DD}/RETIRE.yaml` — list of rules to disable, with score
+  + reason + rollback (full rule definition serialized).
+- `siem/tune/{YYYY-MM-DD}/TUNE.yaml` — per-rule suppression / threshold /
+  scope changes. Each entry has `before` (current state) and `after`
+  (proposed state).
+- `siem/tune/{YYYY-MM-DD}/NEW.yaml` — gaps. Pulled from `/threat-hunt`
+  outputs with outcome `found` where no production rule existed, and from
+  `/purple-exercise` outputs where the red-team TTP fired without
+  detection.
+
+### 4. Write the audit report
+
+`siem/tune/{YYYY-MM-DD}/AUDIT.md`:
+
+```markdown
+# SIEM Tune — {YYYY-MM-DD}
+
+## Headline numbers
+- Rules audited: N
+- Fires last 90d: N
+- Analyst dispositions: TP X / FP Y / benign Z / unlabeled W
+- Precision (global): X%
+- Median time-to-disposition: N min
+
+## Distribution
+- Gold: N rules
+- Tune: N rules
+- Retire: N rules
+- Stale: N rules
+- New (gap): N rules from hunts + purple exercises
+
+## Top 5 noisiest (by FP volume)
+| Rule | Fires | FP rate | Recommendation |
+|---|---|---|---|
+
+## Top 5 highest-fidelity (preserve, replicate)
+| Rule | Score | Why |
+|---|---|---|
+
+## What to do this week
+1. Retire N rules (RETIRE.yaml)
+2. Tune top 3 noisiest (TUNE.yaml entries 1-3)
+3. Author N new rules for hunt-confirmed gaps (NEW.yaml → /detect-engineering)
+```
+
+### 5. Apply (only if approved)
+
+If `--apply` and per-rule AskUserQuestion approval granted, push changes via
+SIEM SDK. **Every mutation logs to `audit.log`** with `who, what, scope,
+signature, before_state, after_state`.
+
+After apply, capture the **post-apply baseline**: fires_24h for tuned rules
+to verify the suppression actually reduced volume without killing TP. If
+post-apply fires_24h is zero on a tuned rule that previously fired regularly,
+flag as over-tuned and recommend rollback.
+
+## Outputs
+
+```
+siem/tune/{YYYY-MM-DD}/
+├── inventory.csv          # read-only baseline of all rules
+├── AUDIT.md               # human-readable report
+├── RETIRE.yaml            # rules to disable + rollback data
+├── TUNE.yaml              # per-rule before/after changes
+├── NEW.yaml               # gap rules referencing hunt + purple outputs
+└── apply.log              # if --apply: per-mutation record
+```
+
+Tune events append to `intel.jsonl` (S7) for cross-skill consumption.
+
+## Edge cases
+
+- **No analyst dispositions** — if the SIEM has no TP/FP labels, fidelity
+  scoring is impossible. Stop and write a one-page "instrumentation gap"
+  report instead, recommending the user start dispositioning before re-running.
+- **Privately-licensed rules** — some vendors (CrowdStrike, MS) ship rules
+  whose internal logic is opaque. Score them on outcome (precision) only;
+  don't attempt to dissect logic that isn't published.
+- **Rules tied to compliance** — if a rule's purpose is "satisfy SOC 2 CC7.2",
+  retirement requires compliance sign-off. Flag in AUDIT.md; do not auto-
+  retire even if precision = 0.
+- **Tuning a rule that breaks a hunt** — before applying a suppression, check
+  whether any `hunts/*/QUERIES/` files reference the same data shape. If yes,
+  the suppression may hide future hunts. Surface the conflict in the
+  per-rule approval AskUserQuestion.
+- **Over-tuning** — if the proposed suppression would drop a rule's TP count
+  below its 90-day TP baseline, refuse and ask the user to widen the scope.
+
+## Dependencies
+
+- **S14 — security-ownership.yaml** — ownership gate + siem_platform.
+- **S11 — audit log** — every mutation hash-chained.
+- **S7 — intel.jsonl** — tune events for cross-skill consumption.
+- **/detect-engineering** — NEW.yaml entries feed rule authoring.
+- **/threat-hunt** — gap rules sourced from confirmed hunts.
+- **/purple-exercise** (Family F) — red-team TTPs that didn't fire become
+  NEW.yaml entries.
+- **SIEM-specific SDK** — splunk-sdk, azure-monitor-query, elastic-py,
+  crowdstrike-falconpy, etc. Pulled from `siem_platform` declaration.
+
+## AskUserQuestion gates summary
+
+1. Mode (audit vs apply).
+2. Auto-approve severity ceiling (none / low / low+medium).
+3. Time window for disposition analysis.
+4. Per-rule approval (every `--apply` mutation).
+5. Compliance-tied rule retirement (always blocks on user).

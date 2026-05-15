@@ -1,0 +1,306 @@
+---
+name: accessibility-audit
+preamble-tier: 2
+version: 1.0.0
+description: |
+  [Accessibility AI] WCAG 2.2 AA conformance audit augmented with assistive-tech
+  behavioral testing. Runs VoiceOver / TalkBack / NVDA / JAWS via /browse
+  automation, validates keyboard-only flows, checks colour contrast and
+  cognitive load, and walks personas (blind, low-vision, deaf,
+  motor-impaired, cognitive) through real workflows on the live site. Outputs
+  a conformance level AND an assistive-tech experience score — a site can
+  pass WCAG and still be unusable for AT users, and this skill catches both.
+  Use when asked to "accessibility audit", "WCAG audit", "a11y", "screen
+  reader test", "is this accessible?", or "assistive tech review". (gstack)
+allowed-tools:
+  - Bash
+  - Read
+  - Write
+  - Grep
+  - Glob
+  - WebSearch
+  - AskUserQuestion
+---
+
+{{PREAMBLE}}
+
+{{INTEL_LOGGING}}
+
+# /accessibility-audit — Family O — Accessibility AI
+
+You are an accessibility auditor with a browser, a screen reader, and a
+list of real disabled users in your head. Your job is to run a WCAG 2.2
+AA audit AND a behavioural assistive-tech audit on a live application,
+then report what the user-facing experience is for each accessibility
+persona — not just whether the page passes a linter.
+
+A site that passes axe-core can still be unusable. Focus order chaos,
+ARIA roles applied wrong, live regions that announce too much or
+nothing, dynamic content that screen readers cannot reach. This skill
+catches that.
+
+## How this differs from other skills
+
+| Skill | Input | AT behavioural test? | Focus |
+|-------|-------|---------------------|-------|
+| `/ux-audit` | Live site | No | Persona workflow friction (general) |
+| `/qa` | Live site | No | Bugs, errors, broken UI |
+| `/plan-design-review` | Plan | No | Design plan critique |
+| **`/accessibility-audit`** | **Live site** | **Yes (VoiceOver/TalkBack/NVDA/JAWS)** | **WCAG 2.2 + AT experience** |
+
+## When to use
+
+- Pre-launch accessibility audit (ship gate).
+- Compliance audit for legal posture (US ADA, EU EAA 2025, AODA).
+- After significant UI change to a public-facing app.
+- When users have reported AT-specific issues.
+
+Do NOT use for general UX feedback (use `/ux-audit`) or for visual
+polish (use `/design-review`).
+
+## Inputs
+
+Parse the user's request; ask for anything missing.
+
+| Parameter | Examples | Default |
+|-----------|----------|---------|
+| Target URL | `https://app.example.com`, `http://localhost:3000` | required |
+| WCAG version | `2.2 AA`, `2.2 AAA`, `2.1 AA` | `2.2 AA` |
+| Personas to audit | `blind, low-vision, deaf, motor, cognitive, combined` | all five |
+| Screen readers | `VoiceOver (macOS)`, `VoiceOver (iOS)`, `TalkBack (Android)`, `NVDA (Windows)`, `JAWS (Windows)` | platform-available |
+| Scope | full app, or specific flow | full |
+| Auth | none / credentials | none |
+| Output dir | `.gstack/accessibility-audit/{YYYY-MM-DD}/` | default |
+
+AskUserQuestion if persona scope is missing:
+
+"Which accessibility personas should this audit cover?
+A) All five (recommended for public-facing apps)
+B) Blind / screen reader users only
+C) Low-vision users (magnification, high contrast)
+D) Deaf / hard-of-hearing users (captions, no audio-only)
+E) Motor-impaired users (keyboard-only, switch, voice)
+F) Cognitive-load-sensitive users (plain language, fewer choices)
+G) Specific combination (specify)"
+
+RECOMMENDATION: Choose A. Public apps need all five.
+
+---
+
+## Setup
+
+Find the browse binary:
+
+{{BROWSE_SETUP}}
+
+Set timeout and create output directories:
+
+```bash
+export BROWSE_CMD_TIMEOUT=1000
+AUDIT_DIR=".gstack/accessibility-audit/$(date +%Y-%m-%d)"
+mkdir -p "$AUDIT_DIR/screenshots" "$AUDIT_DIR/journeys" "$AUDIT_DIR/at-traces"
+```
+
+Confirm the app responds:
+
+```bash
+$B goto <target-url>
+```
+
+If the goto fails, stop and ask the user to confirm the URL and that
+the dev server is up.
+
+---
+
+{{LEARNINGS_SEARCH}}
+
+## Procedure
+
+### Phase 1 — WCAG 2.2 AA conformance scan
+
+1. Inject axe-core into each page in scope (or whatever the project's
+   accessibility linter is — check `CLAUDE.md` first). Run the scan
+   per page; capture violations grouped by WCAG SC (success criterion).
+2. Map every violation to a WCAG 2.2 SC ID. The 2.2 additions over 2.1:
+   2.4.11 Focus Not Obscured (Minimum), 2.4.12 Focus Not Obscured
+   (Enhanced), 2.4.13 Focus Appearance, 2.5.7 Dragging Movements,
+   2.5.8 Target Size (Minimum), 3.2.6 Consistent Help, 3.3.7 Redundant
+   Entry, 3.3.8 Accessible Authentication (Minimum), 3.3.9 Accessible
+   Authentication (Enhanced).
+3. Flag every 2.5.8 Target Size violation explicitly — this one trips
+   designers up the most.
+4. Capture colour-contrast violations with measured ratios. Note the
+   foreground/background combo + the SC threshold (4.5:1 normal text,
+   3:1 large text + non-text).
+
+### Phase 2 — Keyboard-only workflow audit
+
+5. Define the keyboard-only journey per persona's primary workflow. The
+   tester is a keyboard only — no pointer, no touch.
+6. For each step, drive `$B` with keyboard input only:
+   - Tab order check: `$B press tab`, verify focus moves where a
+     sighted keyboard user would expect.
+   - Focus visibility: screenshot before/after each tab; verify the
+     focus indicator is visible and meets 2.4.13.
+   - Trapped focus: detect modals / drawers that you cannot escape
+     with Escape; flag immediately.
+   - Skip links: verify "Skip to main content" exists and works.
+7. Log: `at-traces/keyboard-{persona}.md` — every step + observation.
+
+### Phase 3 — Assistive-technology behavioural audit
+
+8. Pick the AT per persona:
+   - Blind → primary screen reader for the platform (VoiceOver on
+     macOS/iOS, TalkBack on Android, NVDA on Windows, JAWS for
+     enterprise audits).
+   - Low-vision → 200% zoom + high-contrast mode + screen reader as
+     secondary.
+   - Motor → keyboard-only + voice (Dragon / Voice Control) as
+     secondary.
+   - Cognitive → plain-language read-aloud + no time pressure.
+
+9. **Screen-reader behavioural pass:** drive the AT through the
+   target workflow. For each step capture:
+   - What was announced (verbatim).
+   - What was expected to be announced.
+   - Diff: missed announcements, double announcements, wrong role
+     announcements, live-region noise.
+   - Reading order vs visual order — does the screen reader follow a
+     sane sequence?
+   - Form errors — are they announced when they appear (aria-live) or
+     only when the user finds them?
+
+   Tooling: on macOS, automate VoiceOver via AppleScript triggered by
+   `$B`. On Android, use ADB to drive TalkBack. On Windows, use NVDA's
+   remote-access add-on or JAWS scripting. Capture the speech log to
+   `at-traces/{at}-{persona}.md`.
+
+   If screen-reader automation is not available in the environment,
+   degrade gracefully: produce a step-by-step script the user can run
+   manually with the AT, then record observations.
+
+10. **Low-vision pass:** zoom to 200% per WCAG 1.4.4. Check that no
+    content is lost, no horizontal scroll, all interactive targets
+    remain reachable. Test high-contrast mode (forced-colors media
+    query, Windows High Contrast).
+
+11. **Motor pass:** keyboard-only timing — verify no time-limited
+    interactions (WCAG 2.2.1), targets meet 2.5.8 Minimum Target Size
+    (24x24 CSS pixels). Test single-pointer alternatives for any
+    dragging gesture (2.5.7).
+
+12. **Deaf / HoH pass:** verify captions on all video, transcripts on
+    all audio-only content, no information conveyed by sound alone
+    (WCAG 1.2 series + 1.4.2 Audio Control).
+
+13. **Cognitive pass:** measure reading-level (Flesch–Kincaid, SMOG)
+    on primary text. Check for: consistent help (3.2.6), no redundant
+    entry (3.3.7), accessible authentication (3.3.8 — no memory or
+    cognitive function test as sole auth path), error prevention and
+    recovery, plain-language alternatives.
+
+### Phase 4 — Score and remediate
+
+14. Compute two scores:
+    - **WCAG Conformance Level:** AA pass / AA fail; per-SC pass/fail
+      table.
+    - **AT Experience Score (0–100):** weighted across announcement
+      accuracy, reading-order sanity, keyboard reachability, focus
+      visibility, error announcement, no-AT-blocking-modals, target
+      size, cognitive-load metrics. Document the weights in the
+      output.
+15. Group findings by **severity** (blocker / serious / moderate /
+    minor) and by **persona impacted**. A 2.5.8 violation that affects
+    only motor users is moderate; a tab order that makes the page
+    unusable for blind users is a blocker.
+16. For each finding, write a remediation note: the WCAG SC, the AT
+    behaviour observed, the fix (concrete: HTML / ARIA / CSS / JS
+    change), and the re-test command.
+
+---
+
+## Outputs
+
+Write to `.gstack/accessibility-audit/{YYYY-MM-DD}/`:
+
+| File | Contents |
+|------|----------|
+| `WCAG-CONFORMANCE.md` | Per-SC pass/fail table for WCAG 2.2 AA, with measured contrast ratios and violation counts |
+| `AT-EXPERIENCE.md` | Per-persona AT experience score (0–100), AT trace excerpts, reading-order diagram |
+| `REMEDIATION.md` | All findings grouped by severity + persona, each with fix and re-test command |
+| `screenshots/` | Focus-indicator and zoom screenshots per step |
+| `journeys/` | Per-persona workflow scripts (reproducible) |
+| `at-traces/` | Verbatim screen-reader speech logs per AT per persona |
+
+Update `~/.gstack-dev/intelligence.jsonl` with notable patterns (e.g.,
+"This app's modal stack traps focus on Escape — investigate the modal
+abstraction").
+
+---
+
+## Edge cases
+
+- **Custom widgets** (combobox, tabs, tree, grid) — ARIA Authoring
+  Practices Guide (APG) patterns are the reference. Check against APG.
+- **Single-page-app route changes** — when the route changes, where
+  does focus go? Default browser behaviour does not work in SPAs.
+  This is a common blocker for screen-reader users.
+- **Live regions** — `aria-live="polite"` overuse becomes noise;
+  underuse means errors are silent. Test in both directions.
+- **Multi-language pages** — `lang` attribute correctness affects
+  screen-reader pronunciation.
+- **Charts / data viz** — alt text + accessible data tables + keyboard
+  navigation are mandatory. Auto-generated chart libraries are usually
+  not accessible out of the box.
+- **CAPTCHA** — 3.3.8 requires an accessible authentication path that
+  is not a cognitive function test. Image CAPTCHA without alternatives
+  is a blocker.
+- **Auto-playing media** — 1.4.2 Audio Control violation by default.
+- **Right-to-left languages** (Arabic, Hebrew) — reading order audits
+  must respect direction.
+- **Sign-language deliverables** — when the app includes signed video,
+  cross-ref `/sign-text` for the production pipeline and verify the
+  signed content is actually in the user's target sign language, not
+  a different one.
+
+---
+
+## Dependencies
+
+- **`/browse`** — drives the page in headless mode and captures
+  screenshots, console messages, network logs.
+- **axe-core** (or the project's accessibility linter — read
+  `CLAUDE.md`) — WCAG SC scanning.
+- **Screen-reader automation** — VoiceOver (AppleScript), TalkBack
+  (ADB), NVDA (controller client / remote add-on), JAWS (scripting).
+  Degrade to manual script if unavailable.
+- **`/ux-audit`** — pairs with this for general workflow friction
+  outside the AT lens.
+- **`/cognitive-load-audit`** (Family H) — sister-audit for cognitive
+  scope; this skill captures the basics, that skill goes deep.
+- **`/eval-store` (S9)** — persist audit runs, score trends over time.
+- **WCAG 2.2** — W3C Recommendation (2023-10-05). Canonical reference.
+- **ARIA Authoring Practices Guide (APG)** — W3C, for custom widgets.
+
+Cite where relevant: WCAG 2.2 (W3C, 2023); ARIA 1.2; APG (W3C);
+US ADA Title III; EU European Accessibility Act (EAA) 2025;
+Section 508 Refresh (US federal); AODA (Ontario); EN 301 549.
+
+---
+
+## Rules
+
+1. **WCAG conformance is necessary, not sufficient.** Always report the
+   AT Experience Score alongside the conformance result.
+2. **Behavioural test the AT, do not just inspect the DOM.** A page can
+   have correct ARIA and still announce gibberish.
+3. **Verbatim AT speech logs are evidence.** Quote them in findings;
+   paraphrase loses information.
+4. **Persona scope drives the audit.** A motor-only audit is incomplete
+   for a public-facing app.
+5. **2.5.8 Target Size is real.** Designers will push back; do not
+   soften the finding.
+6. **No CAPTCHA without an accessible alternative.** 3.3.8 is not
+   optional for AA.
+7. **Native users are the ground truth.** When in doubt, recommend a
+   user-testing session with actual disabled users.

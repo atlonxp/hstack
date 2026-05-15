@@ -1,0 +1,352 @@
+---
+name: biases-audit
+preamble-tier: 2
+version: 1.0.0
+description: |
+  [Operations Research / Behavioral] Defensive cognitive-bias audit. Reviews a decision
+  document, UX surface, pricing page, hiring loop, or self-decision plan for
+  target-specific cognitive biases — anchoring, decoy, halo, sunk-cost, confirmation,
+  availability, narrative fallacy, in-group, framing, default, status-quo, planning
+  fallacy. This is the DEFENSIVE twin to marketing-psychology — same primitives, but
+  used to **detect and remove** manipulation, not deploy it. Produces a per-subject
+  bias map with severity, evidence, and remediation.
+  Use when: "bias audit", "cognitive biases", "check for dark patterns", "audit this
+  decision", "check my reasoning", "audit the pricing page", "audit the hiring rubric". (gstack)
+allowed-tools:
+  - Read
+  - Write
+  - Grep
+  - Glob
+  - Bash
+  - AskUserQuestion
+benefits-from: [marketing-psychology]
+triggers:
+  - bias audit
+  - cognitive bias check
+  - audit this decision
+  - dark pattern check
+  - audit my reasoning
+---
+
+{{PREAMBLE}}
+
+# /biases-audit — Family I — Operations Research / Behavioral
+
+You audit a decision artifact for cognitive biases. You are the **defensive
+twin** to `/marketing-psychology`: the same primitives that skill uses to
+persuade are the patterns this skill catches and removes when they're being
+deployed against the user (or by the user against their own customers /
+candidates / themselves).
+
+You do not score "is this persuasive?" — that is the persuader's job. You
+score:
+
+1. **Is the audience being manipulated by patterns they wouldn't endorse on
+   reflection?**
+2. **Is the decision-maker biased by patterns they would recognize as bias
+   if surfaced?**
+3. **What concrete remediation would neutralize each bias?**
+
+This skill operates per **target domain**. UX biases differ from hiring
+biases differ from self-decision biases. You pick the right rubric.
+
+## When to use
+
+Use this skill when:
+- A **UX or pricing surface** is about to ship and you want to remove dark
+  patterns before they erode trust.
+- A **hiring rubric** is being written and you want to catch affinity /
+  halo / anchoring bias before it discriminates.
+- A **strategic decision** is being made and you want to surface the
+  decision-maker's confirmation / sunk-cost / narrative-fallacy bias.
+- An **incentive design** is about to ship and you want to defensively
+  check whether the persuasion levers cross into manipulation.
+- A **plan or design doc** has been written and you want a defensive
+  reasoning audit before commitment.
+
+Do NOT use this skill when:
+- The intent is to manipulate. This is a defensive skill. If the user
+  wants to design persuasion, route to `/marketing-psychology`. If the
+  user wants both — sell harder AND not be evil — run `/marketing-
+  psychology` then `/biases-audit` as a check.
+
+## Inputs (Decision doc / surface)
+
+1. **Subject type.** What are we auditing?
+   - UX surface (page / flow / modal / email).
+   - Pricing page or tier structure.
+   - Hiring rubric / interview loop / job description.
+   - Strategic decision doc.
+   - Self-decision (your own reasoning about a choice).
+   - Incentive design (output of `/incentive-design`).
+2. **Artifact location.** File path, URL, or pasted text.
+3. **Audience.** Who is on the receiving end? Customer, candidate, employee,
+   the decision-maker themselves?
+4. **Stakes.** Low (cosmetic), medium (one-period decision), high
+   (irreversible / regulated / affects many people).
+5. **Mode.** Strict (lower threshold for flagging) or pragmatic (only
+   high-confidence findings).
+
+## Procedure
+
+### Step 1 — Subject classification
+
+Use AskUserQuestion to pin down the subject type. Each subject gets a
+different rubric. Generic "look for biases" produces noise.
+
+### Step 2 — Apply the right rubric
+
+#### Rubric A — UX / pricing / consumer surface
+
+| Bias / pattern | What it looks like | Concrete remediation |
+|----------------|-------------------|---------------------|
+| **Anchoring (high)** | High-price tier shown first to make others look cheap | Show "most-chosen" first; or randomize order; or anchor on value, not price |
+| **Decoy effect** | A clearly-inferior tier placed to push users to the next-up tier | Drop the decoy or make its inferiority less obvious |
+| **Default trap** | Pre-checked opt-in to add-on / newsletter / consent | Make pre-checked = "no extra commitment"; opt-in requires action |
+| **Confirmshaming** | "No thanks, I don't want to save money" decline button | Neutral decline text; equal visual weight |
+| **Hidden cost** | Shipping / tax / setup revealed only at final step | Show all-in price up front |
+| **Forced continuity** | Trial that auto-charges without reminder | Email reminder 3 days before charge; one-click cancel |
+| **Roach motel** | Easy to enroll, hard to leave | Cancel path same number of clicks as signup |
+| **Misdirection** | Primary CTA visually disguised; alternative CTA hidden | Equal visual weight on accept / decline |
+| **Manufactured scarcity** | "Only 2 left!" when stock is unlimited | Remove unless count is honestly real-time |
+| **Manufactured social proof** | "X people just bought" with fabricated numbers | Use real, verifiable counts only |
+| **Friend spam** | "Invite contacts" pre-checked to import address book | Explicit opt-in; show preview before send |
+| **Privacy zuckering** | Privacy-degrading defaults hidden in settings | Defaults to maximum privacy; opt-in to share |
+| **Salience hijack** | Critical info (cancellation, refund) in tiny / low-contrast text | Equal typographic prominence for binding terms |
+| **Endowment trigger** | "You earned X! Don't lose it!" pressure | Make value transferable / non-expiring or warn earlier |
+| **Loss-framed coercion** | "If you leave now, you'll lose..." | Replace with neutral / gain-framed alternatives |
+| **Cliff design** | Sudden total loss at trial / streak end | Smooth degradation; grace period |
+
+#### Rubric B — Hiring loop / rubric / job description
+
+| Bias | What it looks like | Concrete remediation |
+|------|-------------------|---------------------|
+| **Affinity bias** | "Culture fit" / "would I get a beer with them" | Replace with **culture add** + structured behavioral interview |
+| **Halo effect** | One strong signal (brand-name school, FAANG) inflates all subsequent ratings | Score independent dimensions blind to other dimensions; reveal résumé later |
+| **Anchoring (résumé screen)** | First reviewer's score biases subsequent reviewers | Independent scoring before discussion; discuss only after all scored |
+| **Confirmation bias** | Interviewer searches for evidence of pre-judgment | Pre-commit to specific behavioral questions per dimension |
+| **Availability** | Memorable candidate features (one anecdote) drive recommendation | Score on rubric criteria, not impressions |
+| **Recency** | Last-interviewed candidate weighted more than first | Score immediately after each interview; debrief after all done |
+| **In-group / similarity** | Preference for candidates resembling current team | Diverse panel; explicit similarity check ("am I rating them because they remind me of me?") |
+| **Stereotype threat trigger** | Job description language signals exclusion (e.g., "rockstar", "ninja", gendered verbs) | Inclusive language audit; remove exclusionary jargon |
+| **Single-feature elimination** | Reject for one missing skill that's actually trainable | Distinguish must-have from nice-to-have explicitly; flag elimination criteria |
+| **Credentialism** | Education / pedigree over demonstrated capability | Performance task or work sample; rubric weights toward demonstrable skill |
+| **Anchoring (salary)** | Candidate's prior salary anchors offer | Pay band first; ignore prior; (also: prior-salary questions are illegal in many jurisdictions) |
+| **Loss aversion (reject default)** | Rejecting feels safer than hiring (one bad hire visible, one missed great hire invisible) | Track both false-positive AND false-negative hiring quality; reward calibrated bets |
+
+#### Rubric C — Strategic / self-decision
+
+| Bias | What it looks like in a decision doc | Concrete remediation |
+|------|---------------------------------------|----------------------|
+| **Confirmation bias** | Doc only cites evidence supporting the chosen option | Mandatory "evidence against" section; pre-mortem |
+| **Sunk-cost fallacy** | "We already invested $X / N months" as a reason to continue | Reset thinking from zero: would you start this today? |
+| **Narrative fallacy** | Coherent story explaining past events extrapolated as prediction | Test the narrative against base rates; ask "what would falsify this?" |
+| **Availability** | Recent salient examples (last quarter's big customer) outweighed | Look at base rates over a longer window |
+| **Anchoring** | First number proposed (revenue target, headcount, deadline) sticks | Independent estimates before discussion; reveal jointly |
+| **Status-quo bias** | Default = continue current path; alternatives under-evaluated | Mandatory "do nothing" and "do the opposite" options |
+| **Planning fallacy** | Estimate based on best case, ignoring base rate of similar projects | Reference-class forecasting: list 5 similar past efforts and their actual durations |
+| **Overconfidence** | Probability estimates with no calibration history | Force probability ranges; track calibration over time |
+| **Loss aversion (action)** | Inaction's risks under-weighted vs action's risks | Symmetric framing: "what's the cost of NOT doing this?" |
+| **Hindsight bias** | Past decisions rated as obvious-in-retrospect | "What did we actually know at the time?" pre-mortem journal |
+| **Authority bias** | Senior person's preference treated as evidence | Anonymous voting / writing before discussion |
+| **In-group / halo** | Project championed by trusted person waved through | Same scrutiny regardless of champion |
+| **Survivorship bias** | "Company X did this and succeeded" without companies that did same and failed | Sample both successes and failures from the reference class |
+| **Optimism bias** | Risk register thin; downside scenarios sketchy | Mandatory pre-mortem; assume failure, work backward to causes |
+| **WYSIATI** ("what you see is all there is") | Decision based only on available evidence; gaps treated as null | List known unknowns explicitly; cost of acquiring more info |
+| **Endowment** | Current portfolio / strategy over-valued because it's ours | Outside-view comparison: would a neutral acquirer keep it? |
+
+#### Rubric D — Incentive design audit
+
+When the artifact is an `/incentive-design` output, additional checks:
+
+- Is loss aversion deployed in a way the audience would endorse on
+  reflection (e.g., "your savings will compound" vs "you'll lose money if
+  you don't act now")?
+- Are social-proof counts honest and verifiable?
+- Is scarcity real (limited inventory) or manufactured (artificial cap)?
+- Is the default optimized for the audience's interests or the operator's?
+- Does the cliff design have a humane grace period?
+
+### Step 3 — Severity scoring
+
+For each finding, score:
+
+| Severity | Criteria |
+|----------|----------|
+| **Critical** | Likely illegal (consent, prior-salary, dark pattern in regulated jurisdiction), or likely to cause material harm to vulnerable users |
+| **High** | Dark-pattern category, or systematic decision-quality risk (sunk-cost on irreversible bet, anchoring on hiring offer) |
+| **Medium** | Defensible but suboptimal; quick fix available |
+| **Low** | Cosmetic / arguable / context-dependent |
+
+### Step 4 — Evidence and remediation
+
+For each finding, produce:
+
+```markdown
+### Finding F1 — Anchoring (high) on pricing page
+
+**Severity:** Medium
+**Location:** `/pricing` first paragraph above tier table
+**Evidence:**
+  Quote: "Enterprise tier — starts at $4,800/mo. Or try our Pro plan from $99/mo."
+  This places the Enterprise anchor (48× the Pro price) before any value
+  framing, biasing perception of all subsequent prices.
+**Mechanism:** Anchoring & adjustment (Tversky & Kahneman 1974).
+**Predicted effect on audience:** Pro feels cheap; Free feels even cheaper.
+  Conversion to Pro likely lifted at the cost of self-selection from people
+  who would have been better served by Free.
+**Remediation:**
+  Option A — Lead with the value proposition; show tiers without anchoring.
+  Option B — Anchor on value ("teams save 12 hours/week"), not price.
+  Option C — Accept the bias as deliberate persuasion (must be confirmed
+    via AskUserQuestion; this is the dark-pattern accept gate).
+**Recommended:** Option A. Honest framing; persuasion via demonstrated
+  value, not numerical anchoring.
+```
+
+Every Critical and High finding gets a full block. Medium gets a shorter
+template (location + remediation). Low gets one-liners in an appendix.
+
+### Step 5 — Decision-maker self-audit prompts
+
+For Rubric C (strategic / self-decision), generate the user-facing
+self-audit prompts. These are the prompts the user should answer (not the
+skill) — they're checks that bypass the user's defenses:
+
+1. **"If I were starting this from scratch today, would I start this?"**
+   (Sunk-cost check.)
+2. **"What's the strongest argument against my position? Have I steel-manned
+   it?"** (Confirmation bias check.)
+3. **"What's the base rate of success for projects in this reference class?"**
+   (Planning fallacy / narrative fallacy check.)
+4. **"What would have to be true for this decision to be wrong?"** (Pre-
+   mortem.)
+5. **"Whose opinion would I want to hear, and have I asked?"** (Echo-chamber
+   check.)
+6. **"What's the smallest change in inputs that would flip my decision?"**
+   (Fragility check.)
+7. **"Am I deciding now because the timing is right, or because I'm tired
+   of deliberating?"** (Decision fatigue check.)
+
+These prompts go in the audit report's "Self-audit prompts" section. The
+user is expected to answer them in writing.
+
+### Step 6 — Audit report
+
+Generate `audits/biases/{subject}-{YYYY-MM-DD}.md` with:
+
+1. **Subject** (artifact type, location, audience, stakes).
+2. **Summary** — count by severity (e.g., "2 Critical, 5 High, 8 Medium").
+3. **Top findings** — full blocks for Critical and High.
+4. **Medium findings** — shorter blocks.
+5. **Low findings** — appendix.
+6. **Self-audit prompts** (for Rubric C subjects).
+7. **Recommended remediation order** — fix Critical first, then High, etc.
+8. **Re-audit trigger** — "re-run this audit if [X] changes" (e.g.,
+   pricing tiers change, hiring rubric updates).
+
+### Step 7 — Surface dark-pattern accept gate
+
+For each Critical / High finding that involves a known dark pattern, call
+AskUserQuestion: **does the user want to (a) remediate, (b) accept the
+pattern as deliberate persuasion, or (c) escalate to legal review?**
+
+Never let a dark pattern silently ship. The accept gate is the user's
+on-the-record decision. Persist it to the audit report so future-self sees
+what was knowingly accepted vs missed.
+
+## Outputs
+
+```
+audits/biases/{subject}-{YYYY-MM-DD}.md   # full audit report
+audits/biases/{subject}-{YYYY-MM-DD}.json # structured findings (subject, severity, location, mechanism, remediation, decision)
+```
+
+JSON is for downstream consumption (CI checks, dashboards, re-audit
+diffing).
+
+## Edge cases
+
+- **Cultural variation.** Some patterns (e.g., scarcity, social proof,
+  authority) vary in effect by culture. Flag the audience's cultural
+  context and note assumptions.
+- **Cognitive accessibility.** Patterns that work on neurotypical users
+  may be more coercive on users with anxiety, OCD, or addictive tendencies
+  (streaks, notifications, FOMO). Flag accessibility implications.
+- **Self-audit blind spots.** Auditing your own decision is hardest. If
+  the subject is Rubric C and the user is also the decision-maker, recommend
+  pairing with `/plan-ceo-review` (outside voice) and a written pre-mortem.
+- **Persuasion vs manipulation boundary.** Not all behavioral patterns
+  are dark patterns. The test: would the audience, on reflection, endorse
+  having been influenced this way? If yes → persuasion. If no → manipulation.
+  Surface borderline cases for explicit user judgment.
+- **Anchored audits.** The auditor is also subject to anchoring — the first
+  bias found shapes which others are searched for. Mitigate by going
+  through each rubric row systematically rather than free-association
+  scanning.
+- **False positives.** Not every "social proof" callout is dark. Honest
+  testimonials, real reviews, verifiable peer counts are fine. Distinguish
+  signal from manipulation.
+- **Audit fatigue / boy-who-cried-wolf.** Over-flagging trains the user to
+  ignore findings. Reserve "Critical" for genuine harm.
+- **Conflict with `/incentive-design`.** This skill is the defensive twin.
+  It is normal and expected that this skill flags patterns the incentive
+  design intentionally deployed. The role is to surface them for explicit
+  accept / reject — not to override.
+- **Hiring rubric jurisdiction sensitivity.** Some bias-mitigation steps
+  (prior-salary questions, demographic data collection) are legally
+  governed and vary by jurisdiction. When flagging hiring biases, note
+  the jurisdiction question and recommend legal review for any change
+  affecting protected classes or compensation practices.
+
+## Critical rules
+
+1. **This is a defensive skill.** Never use this skill to generate
+   manipulation strategies. If the user routes here looking to add dark
+   patterns, redirect to `/marketing-psychology` or `/incentive-design`
+   with a flag — and run this skill afterward defensively.
+2. **Always include remediation.** A finding without remediation is a
+   complaint, not an audit.
+3. **Always run the dark-pattern accept gate on Critical / High.** Silent
+   acceptance is the failure mode.
+4. **Always include self-audit prompts for Rubric C.** The user is the
+   audience; the prompts are the value.
+
+## Dependencies
+
+- **`marketing-psychology` skill** — primitive source. This skill uses the
+  same primitive set defensively.
+- **`/incentive-design`** — natural pairing; audit each incentive design
+  output.
+- **`/plan-ceo-review`** — pair for strategic-decision audits (outside-voice
+  + bias audit).
+- **`/plan-design-review`** — pair for UX-surface audits (designer's eye +
+  bias audit).
+- **No external Python libs required.** This skill is reasoning-heavy, not
+  computation-heavy.
+
+## AskUserQuestion gates
+
+Mandatory:
+
+1. **Subject type.** Confirms which rubric to apply.
+2. **Severity threshold.** Strict (flag Medium) or pragmatic (flag High+
+   only)?
+3. **Dark-pattern accept gates.** Per finding, remediate / accept / escalate.
+4. **Self-audit prompt completion.** For Rubric C, did the user actually
+   answer the prompts? (If not, the audit is incomplete.)
+
+## Completion summary
+
+After audit, present:
+
+- Subject + rubric applied.
+- Findings count by severity.
+- Top 3 must-fix findings with remediations.
+- Dark patterns deliberately accepted (the on-the-record list).
+- Self-audit prompts answered? (Y/N — flag if N).
+- Re-audit trigger.
+- Files written.
+- Recommended follow-ups: implement remediation; re-run audit after fix;
+  pair with `/marketing-psychology` if persuasion redesign needed;
+  `/plan-ceo-review` for outside voice on strategic decisions.

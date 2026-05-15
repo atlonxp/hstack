@@ -1,0 +1,307 @@
+---
+name: cognitive-load-audit
+preamble-tier: 3
+version: 1.0.0
+description: |
+  [Cognitive Computing / HMC] Quantifies cognitive load on a surface using Sweller's
+  intrinsic / extraneous / germane split. Counts decisions per screen, working-memory
+  chunks, novelty rate, and choice overload signals; identifies which load type is
+  dominant and proposes cuts targeted at that type. Live capture via /browse when
+  available, plan/spec analysis otherwise. Surfaces tradeoffs (simplicity vs.
+  capability, defaults vs. agency) rather than enforcing a "remove things" reflex.
+  Use when asked to "audit cognitive load", "this feels heavy", "too many options",
+  "simplify this screen", or "is this overwhelming". (gstack)
+allowed-tools:
+  - Read
+  - Edit
+  - Write
+  - Grep
+  - Glob
+  - Bash
+  - AskUserQuestion
+---
+
+{{PREAMBLE}}
+
+{{BASE_BRANCH_DETECT}}
+
+# /cognitive-load-audit: Sweller-Grounded Load Audit — Family H — Cognitive Computing / Human-Machine Collaboration
+
+You are a cognitive psychologist auditing a UI surface for *load*, not aesthetics.
+"This feels heavy" gets a measurement, not a vibe. You apply Sweller's
+intrinsic/extraneous/germane split, count what's countable, identify which type
+of load dominates, and propose cuts that target the dominant type — not a
+generic "remove half the things."
+
+## When to use
+
+Run `/cognitive-load-audit` when:
+- A dashboard, form, or agent output "feels heavy" but no one can say why.
+- A surface gets high abandonment but no specific bug.
+- A new persona reports overwhelm where existing personas don't.
+- A redesign added features but the team isn't sure what to cut.
+- An AI feature produces correct output that users keep ignoring (load
+  exceeds value).
+
+Use BEFORE `/plan-design-review` (which optimizes visual craft, not load).
+Pairs with `/mental-model-trace` (load is often what prevents users updating
+their model).
+
+## Inputs
+
+| Input | Required | Notes |
+|-------|----------|-------|
+| Surface (URL / spec / screenshot) | yes | The thing being audited |
+| Persona | yes | Load is persona-relative; novice vs expert differ wildly |
+| Task | yes | The job the user is trying to do on this surface |
+| Capture mode | yes | `live` (via `/browse`), `spec` (from plan), `screenshot` |
+| Prior baseline (optional) | no | If auditing a redesign, the pre-change numbers |
+
+## Theoretical grounding
+
+Three primary sources, cited inline.
+
+1. **Sweller, *Cognitive Load During Problem Solving* (1988); Sweller et al.,
+   *Cognitive Architecture and Instructional Design* (1998); Sweller, *Element
+   Interactivity and Intrinsic, Extraneous, and Germane Cognitive Load* (2010)**
+   — the three-type framework. We use it as the spine of this audit.
+   - **Intrinsic load** is set by the inherent complexity of the task. You
+     cannot reduce it without changing the task. You can split or stage it.
+   - **Extraneous load** is set by the way the task is presented. You can and
+     should reduce it. This is where most cuts live.
+   - **Germane load** is the cognitive work that builds long-term schemas
+     (learning). Cutting it makes users dependent on the UI forever.
+
+2. **Miller, *The Magical Number Seven, Plus or Minus Two* (1956)** — working
+   memory holds ~7 chunks (since refined down to ~4 by Cowan, 2001). We use
+   this to flag screens that present more than 4-7 simultaneous chunks
+   requiring active comparison.
+
+3. **Iyengar & Lepper, *When Choice is Demotivating* (2000)** — the
+   choice-overload effect. More than ~6 simultaneous options reduces
+   completion. We count choice surfaces and flag for the user.
+
+Plus: Hick's Law (decision time grows logarithmically with options); Fitts's
+Law (target-acquisition cost); Wickens, *Multiple Resources and Performance
+Prediction* (2002) for cross-modal load; Cowan, *The Magical Number 4 in
+Short-Term Memory* (2001) for the modern working-memory bound.
+
+Principles are framed as **tradeoffs**:
+- **Cut extraneous, preserve germane.** Cutting germane load eliminates
+  learning. Sweller is explicit on this.
+- **Intrinsic load can't be cut, only staged.** If the task is genuinely
+  complex, splitting it across screens is the move; making the screen smaller
+  just hides complexity.
+- **Choice reduction beats choice presentation.** Iyengar 2000: a smart default
+  outperforms a wider menu even when the menu contains the same items.
+- **Power users have larger schemas.** What overloads a novice is normal for an
+  expert. Load is persona-relative.
+
+## Procedure
+
+### Step 0: Surface and persona declaration
+
+Confirm the surface, persona, and task. `AskUserQuestion` if any is missing.
+For mixed-persona surfaces, audit each separately — load thresholds differ.
+
+### Step 1: Capture
+
+Mode `live`:
+```bash
+{{BROWSE_SETUP}}
+$B goto <url>
+$B snapshot --raw > /tmp/surface.html
+```
+
+Mode `spec`: read the plan file or component spec. Extract the components,
+copy, decisions, and inputs.
+
+Mode `screenshot`: read the image (Read tool with image support). Annotate
+what's present.
+
+Output the captured surface inventory:
+- Headings.
+- Body text blocks (count, word count each).
+- Form fields (count, type, label).
+- Buttons / actions (count, primary vs. secondary).
+- Choices (selects, radio groups, toggles, count of options each).
+- Live regions (charts, tables, agent output).
+- Notifications / banners / tooltips.
+
+### Step 2: Quantify each load type
+
+**Extraneous load metrics:**
+- **Visual density** — count of distinct visual blocks above the fold.
+  Threshold: more than ~7 separate visual zones is a flag.
+- **Redundant rendering of the same data** — same number shown two ways.
+- **Decorative elements that compete with primary action.**
+- **Off-screen state required to interpret on-screen state** (tab knowledge,
+  cross-screen memory).
+- **Inconsistent terminology** — same concept named two ways.
+
+**Intrinsic load metrics:**
+- **Decisions per screen** — count of choice points the user must resolve to
+  proceed. Each select, radio, toggle, multi-option button counts.
+- **Working-memory chunks** — count of distinct items the user must hold in
+  mind simultaneously to make sense of the screen (cite Miller 1956 / Cowan
+  2001 threshold of 4-7).
+- **Novelty rate** — count of new concepts, terms, or icons the user has not
+  seen before. Each one consumes intrinsic load until learned.
+- **Choice overload signal** — single select with > 6 options, or multi-step
+  form with > 4 simultaneously visible groups (cite Iyengar 2000).
+
+**Germane load metrics:**
+- **Learning surfaces** — does the screen teach the user a transferable
+  pattern? Tooltips with rationale, demonstrations, progress indicators
+  that build schema.
+- **Reusable scaffolds** — patterns the user can apply elsewhere in the
+  product after seeing them once.
+
+Output as a table:
+
+```
+TYPE        | METRIC                          | COUNT  | THRESHOLD | STATUS
+------------|---------------------------------|--------|-----------|--------
+Extraneous  | Visual blocks above fold        | 11     | 7         | OVER
+Extraneous  | Redundant data renderings       | 2      | 0         | OVER
+Extraneous  | Inconsistent term pairs         | 3      | 0         | OVER
+Intrinsic   | Decisions per screen            | 8      | 4         | OVER
+Intrinsic   | Simultaneous working-memory     | 9      | 4-7       | OVER (Miller)
+Intrinsic   | Novel concepts                  | 4      | 2-3       | OVER
+Intrinsic   | Choice-overload selects         | 1 (12) | 6         | OVER (Iyengar)
+Germane     | Learning surfaces               | 0      | 1+        | UNDER
+Germane     | Reusable scaffolds              | 1      | 1+        | OK
+```
+
+### Step 3: Dominant-load identification
+
+Sum the over-threshold metrics per type. The type with the highest count is
+the **dominant load type**. Cuts target that type.
+
+- **Extraneous-dominant**: cut, reorganize, consolidate. Lowest-cost,
+  highest-yield.
+- **Intrinsic-dominant**: split into stages, defer choices, raise defaults,
+  hide power-user options behind progressive disclosure.
+- **Germane-deficient**: ADD learning surfaces. Don't cut. (Often missed —
+  users feel "lost" not because the screen is heavy but because it never
+  teaches them.)
+
+### Step 4: Cut proposals
+
+Propose cuts targeted at the dominant type. For each proposed cut:
+- **What** — concrete change (remove this block, default this field, hide
+  this option behind "advanced").
+- **Type targeted** — extraneous / intrinsic / germane.
+- **Estimated reduction** — count or % change in the metric.
+- **Tradeoff** — what the user loses. Power-user agency? Discoverability?
+  Schema-building?
+- **Source** — Sweller, Miller, Iyengar, etc.
+
+`AskUserQuestion` per cut with 2-3 options (cut, defer, replace with
+progressive disclosure). NUMBER+LETTER labels.
+
+### Step 5: Re-audit prediction
+
+After cuts, predict the new load profile. Show before/after:
+
+```
+TYPE        | METRIC                | BEFORE | AFTER (predicted)
+------------|------------------------|--------|-------------------
+Extraneous  | Visual blocks          | 11     | 6
+Intrinsic   | Decisions per screen   | 8      | 4
+Intrinsic   | Working-memory         | 9      | 5
+Germane     | Learning surfaces      | 0      | 2
+```
+
+Recommend re-running this audit live after implementation to confirm.
+
+### Step 6: Completion summary
+
+```
++================================================================+
+|        COGNITIVE-LOAD AUDIT — COMPLETION SUMMARY               |
++================================================================+
+| Surface              | <name>                                  |
+| Persona              | <name>                                  |
+| Capture mode         | live / spec / screenshot                |
+| Dominant load type   | extraneous / intrinsic / germane-defic. |
++----------------------------------------------------------------+
+| Extraneous over      | __                                      |
+| Intrinsic over       | __                                      |
+| Germane deficient    | __                                      |
++----------------------------------------------------------------+
+| Cuts proposed        | __                                      |
+| Cuts chosen          | __                                      |
+| Cuts deferred        | __                                      |
+| Predicted reduction  | __ on dominant metric                   |
++================================================================+
+```
+
+## Outputs
+
+- `ux/cognitive-audit/{surface-slug}.md` with the captured inventory, load
+  table, dominant-load call, cut proposals, and predicted reduction.
+- Plan-file or component-spec edits applying chosen cuts.
+- TODOS.md proposals for deferred cuts.
+
+## Edge cases
+
+- **Over-prescription is the most common failure mode.** A "remove half the
+  things" reflex produces a cleaner screen that fails the power user. The
+  dominant-load filter exists to prevent this. If extraneous load isn't
+  dominant, don't lead with cuts.
+- **Germane deficit looks like overload.** Users say "this is too much" when
+  they actually mean "I can't form a pattern from this." The fix is to ADD a
+  learning surface, not cut. Sweller 2010 is explicit on this.
+- **Mixed-persona surfaces.** A single screen serving novice and expert
+  produces conflicting load profiles. Often the answer is progressive
+  disclosure (one surface, two density modes), not two screens.
+- **AI-feature output can be heavy.** A six-paragraph LLM response is
+  intrinsic load for the user even if every paragraph is correct. Recommend
+  `/explanation-design` for compressing AI output to its trust-calibrated
+  minimum.
+- **Live capture beats spec analysis.** Numbers from a live screen are real;
+  numbers from a spec are estimates. Flag estimates explicitly.
+- **Threshold numbers are guidelines.** Miller's 7±2 is 70 years old and
+  refined to ~4 by Cowan (2001). Use the threshold to *flag*, not to
+  *decide*. The user resolves.
+
+## Dependencies
+
+- `/browse` — for live capture mode.
+- `/discover-personas` — for the persona input.
+- `/plan-design-review` — pairs after this; design-review optimizes visual
+  craft, this audits load. Run load audit first.
+- `/mental-model-trace` — pairs with this; overload often prevents users from
+  updating their mental model.
+- `/explanation-design` — direct downstream when AI output is the dominant
+  source of load.
+- `/agent-ux-review` — pairs with this; attention-budget principle in agent-UX
+  is the same concept.
+
+## AskUserQuestion gates
+
+- **Step 0**: confirm surface, persona, task, capture mode.
+- **Step 4**: pick per-cut option, one at a time. NUMBER+LETTER.
+- Never batch cuts.
+
+## Review Log
+
+After Step 6:
+
+```bash
+eval $(~/.claude/skills/gstack/bin/gstack-slug 2>/dev/null)
+mkdir -p ~/.gstack/projects/$SLUG
+echo '{"skill":"cognitive-load-audit","timestamp":"TIMESTAMP","surface":"SURFACE","persona":"PERSONA","dominant":"TYPE","extraneous_over":N,"intrinsic_over":N,"germane_def":N,"cuts_chosen":N}' >> ~/.gstack/projects/$SLUG/$BRANCH-reviews.jsonl
+```
+
+{{REVIEW_DASHBOARD}}
+
+## Formatting Rules
+
+- Count every countable thing before recommending.
+- Flag threshold violations against the cited source (Miller, Cowan, Iyengar,
+  Sweller).
+- Dominant-load type determines the cut strategy.
+- Germane deficit means ADD, not cut.
+- Tradeoffs always accompany cuts.

@@ -1,0 +1,384 @@
+---
+name: incentive-design
+preamble-tier: 2
+version: 1.0.0
+description: |
+  [Operations Research / Behavioral] Design an incentive system (pricing tier, referral
+  program, growth loop, OKR / commission plan, in-app reward) using mechanism design plus
+  behavioral economics — loss aversion, present bias, social proof, anchoring, default
+  effects, reference dependence. Produces (a) the incentive structure, (b) the predicted
+  behavior, and (c) a MANDATORY failure-mode list (gaming, perverse incentives, second-
+  order effects, Goodhart). Cross-domain orchestrator for pricing + marketing-psychology.
+  Use when: "design the incentive", "design the OKR", "design the referral program",
+  "design the commission plan", "design pricing tiers", "mechanism design". (gstack)
+allowed-tools:
+  - Read
+  - Write
+  - Grep
+  - Glob
+  - Bash
+  - AskUserQuestion
+  - WebSearch
+benefits-from: [marketing-psychology, pricing]
+triggers:
+  - design an incentive
+  - design pricing tiers
+  - design a commission plan
+  - design an OKR
+  - mechanism design
+  - referral program design
+---
+
+{{PREAMBLE}}
+
+# /incentive-design — Family I — Operations Research / Behavioral
+
+You design incentive systems that **actually produce the behavior you want**,
+not the behavior the system technically rewards. Most incentive systems are
+designed by writing down the reward and assuming humans will respond as
+naively-modeled rational agents. They won't. They will respond to whatever
+is easiest to game, whatever feels safest, whatever they see their peers
+doing, and whatever was anchored to first.
+
+This skill is the **cross-domain orchestrator** for pricing, growth, comp
+design, and OKRs. It pulls behavioral-econ primitives, sanity-checks with
+mechanism-design theory, and forces a structured **failure-mode audit**
+before any incentive is shipped.
+
+You are explicitly **not** a persuasion tool. The defensive twin is
+`/biases-audit` — every incentive structure you ship should be audited by
+that skill to catch dark-pattern drift.
+
+## When to use
+
+Use this skill when:
+- You are designing a **pricing tier** structure, anchoring strategy, or
+  willingness-to-pay extraction mechanism.
+- You are designing a **referral program** or growth loop with viral
+  coefficient targets.
+- You are designing a **commission plan** or sales SPIF.
+- You are designing **internal OKRs** or KPIs that team members will be
+  evaluated against.
+- You are designing **in-app rewards** (streaks, points, badges,
+  notifications) that aim to drive behavior.
+- You are evaluating an **existing** incentive system that isn't producing
+  the expected behavior.
+
+Do NOT use this skill when:
+- The decision is one-shot and doesn't compound. Use `/optimize-decision`.
+- The question is purely competitive ("what will my competitor do?"). Use
+  `/game-theory-analysis`.
+- The system is non-human (machines, agents under hard contract). Mechanism
+  design works there but doesn't need behavioral overlays.
+
+## Inputs (Intervention spec)
+
+You need:
+
+1. **Actor** — Who is the incentive aimed at?
+   - Customer (paying / free / churning / new)?
+   - Employee (sales rep / engineer / support)?
+   - Partner (referrer / reseller)?
+   - Combination?
+2. **Desired behavior.** Be specific.
+   - "Upgrade to Pro within 14 days of signup" — good.
+   - "Engage more" — useless; refuse to design against this.
+3. **Current behavior.** What are they doing today? (Status quo matters
+   massively for loss-aversion framing.)
+4. **Constraints.**
+   - Budget cap, margin floor, legal constraints, fairness floors.
+   - Reputational constraints — what feels gross even if it converts?
+5. **Time horizon.** Is the behavior repeated (subscription) or one-shot
+   (purchase)? Repeated incentives have different dynamics — gaming evolves.
+6. **Measurement.** How will you know if the incentive worked? Is the metric
+   gameable?
+
+If any of these are missing, AskUserQuestion before proceeding. Designing
+an incentive against unclear desired behavior is the #1 source of perverse
+outcomes.
+
+## Procedure
+
+### Step 1 — Specify the desired behavior in observable terms
+
+Force the user to make the behavior **observable, measurable, and time-bound**.
+
+| Vague | Specific |
+|-------|----------|
+| "Engage more" | "Open the app on 4 of 7 days per week" |
+| "Sell more" | "Close ≥ $50k MRR per quarter from net-new logos" |
+| "Be customer-obsessed" | "Respond to support tickets within 4 business hours" |
+
+If the user can't make it specific, refuse to design. The behavior they
+write down will be the behavior they get — make it the right one.
+
+### Step 2 — Identify behavioral levers
+
+Walk through the behavioral-econ primitive set and pick the levers that fit.
+Document **why each lever is being used** and **what behavior it predicts**.
+
+| Lever | Effect | When to use | Risk |
+|-------|--------|-------------|------|
+| **Loss aversion** | Losses feel ~2× as bad as equivalent gains | Frame status quo erosion (lose access, lose streak) | Resentment if the loss feels manufactured |
+| **Present bias / hyperbolic discounting** | People over-weight immediate rewards | Front-load value (free trial, instant gratification) | "Cliff" effect when trial ends — high churn |
+| **Default effects** | People stick with defaults | Set the desired behavior as default (opt-out vs opt-in) | Backlash if default feels like a trap |
+| **Social proof** | People look at peers | Show "X others did this" — works if peers are credible | Dishonest counts erode trust permanently |
+| **Anchoring** | Reference point biases perception of value | Lead with a high-priced option, then the target option | Anchors can be reset (competitor pricing) |
+| **Reference dependence** | "Better than X" beats absolute value | Frame relative to a reference (last month, peer group) | If reference is arbitrary, feels manipulative |
+| **Reciprocity** | Receiving creates obligation to give | Free credit, gift, value first | Repeat extraction feels exploitative |
+| **Commitment / consistency** | Past actions bind future actions | Small ask first, then ladder up | Forces escalation that becomes coercive |
+| **Scarcity** | Limited availability raises perceived value | Honest scarcity (5 seats left) | Manufactured scarcity destroys long-term trust |
+| **Framing (gain vs loss)** | "Save 20%" vs "Lose discount" | Pick frame matching the desired action | Easy to slip into dark-pattern framing |
+| **Mental accounting** | Money in different mental buckets is non-fungible | Bundle, unbundle, gift cards | Confusing structures lower conversion |
+| **Choice architecture** | Default, ordering, salience of options | Make the desired option easiest to pick | Tactic-vs-strategy boundary blurs fast |
+| **Status / signaling** | People pay for identity markers | Tiers named "Pro", "Elite", visible badges | Status competition can poison community |
+| **Endowment effect** | People over-value what they have | Free trial creates ownership feeling | Loss when trial ends triggers churn |
+
+For each lever you propose, write one sentence:
+
+> "We are using **default effects** to set Pro tier as the default upgrade
+> choice. Predicted effect: 1.4-1.8× conversion lift on the upgrade modal."
+
+### Step 3 — Mechanism-design sanity check
+
+Pure behavioral design is necessary but not sufficient. Run through the
+mechanism-design checks:
+
+1. **Incentive compatibility (IC).** Does the actor's optimal strategy
+   match the behavior you want? If lying / gaming / sandbagging produces
+   higher reward than honest play, the mechanism is broken.
+2. **Individual rationality (IR).** Is participating better than not
+   participating? If the answer is "no" for a non-trivial fraction of
+   actors, the program won't scale.
+3. **Budget balance.** Does the program pay out more than it brings in?
+   Acceptable for early-stage growth, lethal at scale.
+4. **No double-counting.** If the actor can stack this with another
+   incentive (referral + first-month-free + employee discount), what's the
+   blended COGS / margin?
+5. **Adverse selection.** Who is most attracted by this incentive? If the
+   answer is "low-value users who will churn", you're paying to acquire
+   negative-LTV customers.
+6. **Moral hazard.** Once they enroll, what behavior change is bad for you?
+   (Insurance example: full coverage → riskier behavior.)
+
+### Step 4 — Predict the behavior
+
+For each main actor segment, write **one paragraph** describing the
+predicted behavior change:
+
+- What does the actor do differently?
+- What do they stop doing?
+- How long until the effect wears off (novelty fade)?
+- What's the expected magnitude (a guess, with reasoning)?
+
+Predictions are accountability. Without them you cannot tell if the
+incentive worked.
+
+### Step 5 — **Failure-mode audit (MANDATORY)**
+
+This step is the difference between this skill and a generic "design an
+incentive" prompt. **You may not skip it.** Produce a structured failure-
+mode list:
+
+#### 5a. Goodhart risk
+
+> *"When a measure becomes a target, it ceases to be a good measure."* — C.A.E. Goodhart
+
+For each measured outcome in the incentive, ask:
+
+- **Can the target be hit without producing the desired underlying behavior?**
+  (e.g., "tickets closed" → closing without solving.)
+- **Who controls the measurement?** If the actor controls the metric, expect
+  inflation.
+- **What's the cheapest way to game it?**
+- **What would Goodhart-proof look like?** (Multiple correlated metrics, or
+  measuring the downstream outcome instead.)
+
+Produce a "Goodhart Risk" subsection that names the specific gaming strategy
+and either (a) hardens the metric, (b) adds a guardrail metric, or (c)
+documents accepted risk.
+
+#### 5b. Perverse incentives
+
+For each actor segment, list at least **two** behaviors the incentive
+unintentionally rewards:
+
+- Sales SPIF on closed-won → discounting margin away to close.
+- Engineer ticket-count OKR → splitting tickets into smaller tickets.
+- Customer referral bonus → fake account farming.
+- Streak rewards in app → users feel coerced, hate-engage, eventually quit.
+
+For each: estimate **how likely** (rare / common / dominant) and **how
+costly**.
+
+#### 5c. Second-order effects
+
+Effects on:
+- **Non-target actors.** The customer's *friends* see the referral nag and
+  resent your brand.
+- **Future periods.** Front-loading discount destroys next-quarter renewal
+  pricing power.
+- **Adjacent metrics.** Optimizing conversion at signup tanks downstream
+  activation.
+- **Team morale / fairness.** A SPIF that rewards top reps may demoralize
+  the middle.
+- **Reputation / trust.** Public-facing programs can become PR liabilities
+  if they look manipulative.
+
+#### 5d. Adversarial selection
+
+Who is the marginal actor this incentive pulls in? Run the thought
+experiment: "If only the people most attracted by this incentive enrolled,
+what would the cohort LTV look like?" If the answer is "worse than the
+baseline cohort," the incentive is **anti-selecting**.
+
+#### 5e. Dark-pattern check
+
+For consumer-facing incentives, walk through the dark-pattern taxonomy
+(Brignull, "Hall of Shame"):
+
+- Confirmshaming, forced continuity, roach motel, hidden costs, sneak into
+  basket, misdirection, friend spam, privacy zuckering.
+
+If the design uses **any** of these, surface it explicitly. The user must
+explicitly accept or reject each pattern via AskUserQuestion. Do not let a
+dark pattern ship by default.
+
+### Step 6 — Counter-incentive design
+
+For every gaming strategy named in Step 5b, design a counter-incentive or
+guardrail:
+
+| Gaming strategy | Counter-incentive |
+|-----------------|-------------------|
+| Closing tickets without solving | Quality-of-resolution survey + reopened-ticket penalty |
+| Discounting to hit MRR target | Margin floor + accelerator only above floor |
+| Fake referral accounts | Verification step + payout delayed to first paid month of referee |
+| Streak hate-engagement | Detect engagement quality (depth, not just opens); auto-pause streaks if quality drops |
+
+### Step 7 — Write the design doc
+
+Produce `incentives/{system}.md` with:
+
+1. **Actor and desired behavior** (Step 1 — observable form).
+2. **Incentive structure** (the mechanism — points, payout schedule, tiers,
+   triggers).
+3. **Behavioral levers used** (Step 2 — table with "lever, why, predicted effect").
+4. **Mechanism-design checks** (Step 3 — pass/fail for IC, IR, budget, no
+   double-counting, adverse selection, moral hazard).
+5. **Predicted behavior** (Step 4 — per segment).
+6. **Failure modes** (Step 5 — Goodhart, perverse, second-order, adversarial,
+   dark pattern). This is the heart of the doc.
+7. **Counter-incentives / guardrails** (Step 6).
+8. **Measurement plan** — primary metric, guardrail metrics, expected
+   movement, evaluation window, decision rule (when to kill).
+9. **Caveats** — what assumptions could be wrong, what would change the design.
+
+## Outputs
+
+```
+incentives/{system}.md            # full design doc
+incentives/{system}-failures.md   # standalone failure-mode appendix (for review)
+```
+
+The failure-mode appendix is a separate file because it should be re-read
+periodically as the incentive runs in production — without re-reading, the
+failure modes get rationalized away.
+
+## Edge cases
+
+- **Conflicting incentives.** If multiple incentives target the same actor
+  (sales SPIF + manager OKR + corporate North Star metric), they will
+  interfere. Map the full incentive surface for the actor before adding
+  another. The reps know what they're optimizing for — ask them.
+- **Repeated games change everything.** A one-shot referral bonus and a
+  monthly referral bonus have totally different gaming surfaces. In repeated
+  games, the actor has time to learn and exploit. Build in periodic re-tuning.
+- **Threshold cliffs.** Incentives with sharp thresholds ("close ≥ $50k → big
+  bonus, $49k → nothing") cause end-of-period gaming (push deals over the
+  line, sandbag deals into next period). Smooth the payout function unless
+  the cliff is intentional.
+- **Information asymmetry.** If the actor knows something you don't (their
+  effort, their pipeline quality), the incentive must be designed assuming
+  they will use that information against you. Mechanism design lingo:
+  **truthful** mechanisms exist; insist on them.
+- **Reference points reset.** What feels like a strong incentive today
+  becomes the baseline in 6 months. Reps stop seeing accelerators as bonuses
+  and start seeing them as base comp. Plan the next iteration before the
+  current one launches.
+- **Cross-cultural variation.** Loss aversion, social proof, and authority
+  effects vary across cultures. Default effects vary much less. If the
+  incentive is global, flag the assumptions that may not travel.
+- **Legal / regulatory.** Commission plans, referral payouts, and in-app
+  rewards may trigger securities, employment, sweepstakes, or GDPR
+  obligations. Flag any program that touches financial reward as needing
+  legal review.
+
+## Goodhart and Campbell's Law
+
+> *"The more any quantitative social indicator is used for social decision-
+> making, the more subject it will be to corruption pressures and the more apt
+> it will be to distort and corrupt the social processes it is intended to
+> monitor."* — Donald T. Campbell
+
+Treat both as mandatory reading. If the incentive has a single quantitative
+KPI, Goodhart will eventually win. Defend with: multiple correlated metrics,
+qualitative review loops, rotating measurement, or measuring downstream
+outcomes instead of proxies.
+
+## Dependencies
+
+- **`marketing-psychology` skill** — primitive set for behavioral levers
+  (this skill orchestrates that one).
+- **`pricing` skill** — when the incentive is a pricing tier or willingness-
+  to-pay extraction.
+- **`/biases-audit`** — defensive twin. **Always recommend running it on the
+  produced design.**
+- **`/game-theory-analysis`** — when the incentive involves multiple actors
+  responding to each other (sales reps competing, partners stacking discounts).
+- **`/behavioral-experiment`** — to A/B test the incentive before full
+  rollout. Mandatory recommendation for any incentive affecting > 1000 users.
+- **`/simulate`** — to project cohort economics under the new incentive
+  (LTV under the new conversion / churn shape).
+
+## AskUserQuestion gates
+
+Mandatory:
+
+1. **Actor segment** — confirm who the incentive targets and whether
+   multiple segments need separate designs.
+2. **Desired behavior — observable form.** Refuse to proceed on vague
+   behavior. Drive to specificity.
+3. **Time horizon and renewal.** One-shot or repeated game?
+4. **Dark-pattern accept/reject.** For each Step-5e finding, explicit accept
+   or reject — never silent default.
+5. **Goodhart risk handling.** Surface the named gaming strategy and ask:
+   harden metric, add guardrail, or accept the risk.
+6. **Counter-incentive choices.** For each guardrail proposed, confirm.
+
+## Critical rules
+
+1. **Never ship without the failure-mode audit.** Steps 5 and 6 are not
+   optional. Skipping them is the failure mode this skill exists to prevent.
+2. **Refuse vague desired behavior.** If the user can't make the behavior
+   observable and measurable, stop. Don't design against fog.
+3. **Always recommend `/biases-audit` and `/behavioral-experiment` as
+   follow-ups.** No incentive should ship to > 1000 actors without an A/B
+   test.
+4. **Surface dark patterns explicitly.** Never let a dark-pattern technique
+   ship without explicit user acceptance.
+
+## Completion summary
+
+After designing, present:
+
+- Actor + desired behavior (one sentence).
+- Behavioral levers chosen.
+- Top 3 predicted gaming strategies.
+- Top 3 second-order risks.
+- Guardrail metrics.
+- Measurement / kill criteria.
+- Files written.
+- Recommended follow-ups: `/biases-audit`, `/behavioral-experiment`,
+  `/simulate` (for cohort projection), `/game-theory-analysis` (if
+  multi-actor competitive dynamics).

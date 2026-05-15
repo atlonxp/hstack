@@ -1,0 +1,344 @@
+---
+name: cost-optimize
+preamble-tier: 2
+version: 1.0.0
+description: |
+  [Chief Architect] FinOps analysis for AWS, GCP, and Azure. Pulls Cost Explorer /
+  Cloud Billing / Cost Management, ranks the top spend, finds rightsizing
+  candidates, reserved-instance vs Savings-Plan picks, spot eligibility, and
+  idle resources. Emits an action list with $/month savings per item, sorted by
+  ratio of savings to effort. Read-only by default; tag/stop suggestions are
+  proposals, not actions. Use when: "cost optimize", "finops review", "cloud bill
+  is up", "find idle resources", "should we buy reserved instances", or "cost
+  attribution". (gstack)
+allowed-tools:
+  - Read
+  - Write
+  - Edit
+  - Grep
+  - Glob
+  - AskUserQuestion
+  - Bash
+  - WebSearch
+triggers:
+  - cost optimization
+  - finops review
+  - cloud bill review
+  - rightsizing
+  - reserved instances
+---
+
+{{PREAMBLE}}
+
+{{GBRAIN_CONTEXT_LOAD}}
+
+# /cost-optimize — Family D — Chief Architect
+
+Cloud bills grow ~8% month over month for no clear reason. This skill explains
+why and proposes the changes that pay for themselves fastest. **All cloud reads
+are read-only.** No resources are modified. The output is a ranked action list a
+human applies.
+
+## When to use
+
+- Monthly FinOps review.
+- Bill spike investigation — the alert just fired.
+- Pre-budget planning — what's the realistic spend next quarter?
+- Pre-reserved-instance / Savings-Plan purchase — what should we commit to?
+- After a `/migration-plan` cutover — re-baseline.
+
+**Do not use for:**
+
+- Per-PR cost-delta review on a pending plan — that's `/iac-review`.
+- Application-level performance tuning (slow queries, N+1) — that's `/db-perf`.
+
+## Inputs
+
+The skill needs **read-only** cloud credentials. Configure via
+`~/.gstack/config.yaml`:
+
+```yaml
+cost-optimize:
+  aws:
+    profile: gstack-readonly       # uses AWS_PROFILE
+    regions: [us-east-1, us-west-2]
+  gcp:
+    project: my-project-id
+    billing_account: 01234A-56789B-CDEF01
+    service_account_key: ~/.gstack/keys/gcp-readonly.json
+  azure:
+    subscription_id: 00000000-0000-0000-0000-000000000000
+    tenant_id: ...
+    # uses az login or service principal env vars
+```
+
+The IAM principal needs:
+
+- **AWS** — `ce:GetCostAndUsage`, `ce:GetSavingsPlansUtilization`,
+  `ce:GetReservationUtilization`, `ec2:Describe*`, `rds:Describe*`,
+  `cloudwatch:GetMetricStatistics`, `pricing:GetProducts`. Use the AWS-managed
+  `Billing` policy or attach `ReadOnlyAccess` for the discovery pass.
+- **GCP** — `billing.resourceCosts.list`, `compute.instances.list`,
+  `compute.disks.list`, `monitoring.timeSeries.list`. The `roles/billing.viewer`
+  + `roles/viewer` combo covers most of it.
+- **Azure** — `Microsoft.CostManagement/query/action`,
+  `Microsoft.Compute/virtualMachines/read`, `Microsoft.Storage/storageAccounts/read`.
+  `Cost Management Reader` role is sufficient.
+
+If credentials are missing, AskUserQuestion before doing anything.
+
+## Procedure
+
+### Step 0: Detect cloud provider(s) and creds
+
+```bash
+# AWS
+aws sts get-caller-identity --profile "$(yq '.cost-optimize.aws.profile' ~/.gstack/config.yaml)" 2>&1 | head -3
+
+# GCP
+gcloud auth list 2>&1 | head -5
+gcloud config get-value project 2>&1
+
+# Azure
+az account show --output json 2>&1 | head -10
+```
+
+Report which clouds you can reach. If none, AskUserQuestion to fix creds first.
+
+### Step 1: AskUserQuestion — scope
+
+One issue per call. Ask:
+
+- **Clouds** — which of the detected clouds to analyze (default: all).
+- **Lookback window** — 30 / 60 / 90 days (default: 30).
+- **Output detail** — top 10 actions only, or the full inventory.
+- **Tagging strictness** — strict (require `Owner`, `Environment`, `Service`
+  tags) or lenient (best effort, untag warnings only).
+
+Do not proceed until the user responds.
+
+### Step 2: Pull top spend by service
+
+**AWS Cost Explorer:**
+
+```bash
+aws ce get-cost-and-usage \
+  --time-period Start=$(date -v-30d +%Y-%m-%d),End=$(date +%Y-%m-%d) \
+  --granularity DAILY \
+  --metrics UnblendedCost UsageQuantity \
+  --group-by Type=DIMENSION,Key=SERVICE \
+  --output json > /tmp/aws-spend.json
+```
+
+**GCP Cloud Billing** (via BigQuery export — most reliable):
+
+```bash
+bq query --nouse_legacy_sql --format=json --max_rows=100 '
+SELECT service.description AS service, SUM(cost) AS cost
+FROM `'"$PROJECT"'.billing_export.gcp_billing_export_v1_*`
+WHERE _PARTITIONTIME >= TIMESTAMP("'"$(date -v-30d +%Y-%m-%d)"'")
+GROUP BY service ORDER BY cost DESC LIMIT 20'
+```
+
+If BigQuery export isn't set up, fall back to the Cloud Billing API and note that
+the data is less granular.
+
+**Azure Cost Management:**
+
+```bash
+az costmanagement query \
+  --type Usage --timeframe MonthToDate \
+  --dataset-aggregation '{"totalCost":{"name":"Cost","function":"Sum"}}' \
+  --dataset-grouping name=ServiceName type=Dimension \
+  --output json > /tmp/azure-spend.json
+```
+
+Emit a table: service, monthly spend, % of total, trend (vs prior period).
+
+### Step 3: Rightsizing candidates
+
+For every compute resource with CloudWatch / Cloud Monitoring / Azure Monitor
+data in the lookback window:
+
+1. **Compute** — fetch p99 CPU and memory utilization. If p99 CPU < 40% AND
+   p99 memory < 50% over the window, it's a downsize candidate. Suggest the
+   next-smaller instance class in the same family. Compute the monthly savings.
+2. **Block storage** — gp2 → gp3 migrations on AWS (typically ~20% cheaper at
+   equal IOPS). Oversized PIOPS volumes where p99 IOPS < 30% of provisioned.
+3. **Databases** — RDS / Cloud SQL / Azure SQL with p99 CPU < 40%. Reserved-RAM
+   is harder to right-size; flag, don't auto-recommend a class change without
+   a maintenance-window note.
+
+Exclude anything tagged `cost-optimize:skip=true` from rightsizing recommendations.
+
+### Step 4: Reserved Instance / Savings Plan / Committed Use analysis
+
+**AWS:**
+
+```bash
+# What we have today
+aws ce get-savings-plans-utilization \
+  --time-period Start=$(date -v-30d +%Y-%m-%d),End=$(date +%Y-%m-%d) --output json
+
+aws ce get-reservation-utilization \
+  --time-period Start=$(date -v-30d +%Y-%m-%d),End=$(date +%Y-%m-%d) --output json
+
+# Recommendations
+aws ce get-savings-plans-purchase-recommendation \
+  --savings-plans-type COMPUTE_SP --term ONE_YEAR \
+  --payment-option NO_UPFRONT --output json
+```
+
+Default recommendation: **Compute Savings Plan, 1-year, no upfront** for steady
+baseline. Standard RI gives a bigger discount but locks instance family —
+overpay vs underused is a real failure mode. Recommend RI only when usage of a
+specific instance family has been steady for 90+ days.
+
+**GCP** — Committed Use Discount (CUD) recommendations:
+
+```bash
+gcloud recommender recommendations list \
+  --recommender=google.compute.commitment.UsageCommitmentRecommender \
+  --location=us-central1 --project="$PROJECT"
+```
+
+**Azure** — Reserved VM Instance recommendations:
+
+```bash
+az reservations reservation-order list-with-status
+az consumption reservation recommendation list
+```
+
+For each recommendation, show: commitment, monthly cost, monthly savings,
+break-even point in months, lock-in risk (if the workload moves away from this
+family, you eat the cost).
+
+### Step 5: Spot / Preemptible / Spot VM eligibility
+
+For each compute workload:
+
+1. Read tags / labels for `interruptible:true` / `workload-type:batch` / etc.
+2. If absent, AskUserQuestion which workloads tolerate interruption (batch jobs,
+   CI runners, dev environments — yes; production API servers without
+   redundancy — no).
+3. Compute the savings if eligible workloads move to Spot (AWS), Preemptible /
+   Spot VM (GCP), or Spot (Azure). Typical savings: 60-90%.
+4. Flag the operational cost — Spot needs interruption handlers, graceful
+   shutdown, and orchestration that re-launches on eviction. Recommend Karpenter
+   / Cluster Autoscaler / managed Spot fleets, not raw Spot requests.
+
+### Step 6: Idle and orphan resource detection
+
+Find and rank:
+
+- **Unattached EBS volumes / persistent disks** — older than 30 days, no
+  attachment events. Recommend snapshot + delete.
+- **Elastic IPs not attached** — $3.60/mo each on AWS, similar on others.
+- **Old AMIs / images** — over 6 months, no recent launch reference. Recommend
+  delete after dependency check.
+- **Stopped instances over 90 days** — paying for EBS, not compute. Recommend
+  terminate + AMI.
+- **Empty load balancers** — no targets, no traffic, full hourly cost.
+- **NAT gateways with low traffic** — recommend consolidation or VPC endpoints
+  for S3 / DynamoDB / equivalent.
+- **Old snapshots** — over the retention policy. Recommend a lifecycle rule.
+- **Untagged resources** — can't attribute spend → can't optimize. List them.
+
+Group by service. Each item: resource ID, last-used date, monthly cost, action.
+
+### Step 7: Tag hygiene audit
+
+If the user picked "strict" tagging at Step 1:
+
+- For every resource type that supports tags, compute the percentage tagged with
+  the required tag set (default: `Owner`, `Environment`, `Service`, `CostCenter`).
+- Show untagged resources by service. Group by likely owner (most common tag on
+  adjacent resources in the same VPC / project / resource group).
+- Propose a tag-application plan. Do not apply — emit a script the user runs
+  manually.
+
+### Step 8: Emit the report
+
+```bash
+mkdir -p infra/cost
+REPORT="infra/cost/$(date +%Y-%m).md"
+```
+
+Report sections, in order:
+
+1. **Executive summary** — current monthly spend, target monthly spend, top 3
+   actions.
+2. **Spend by service** — table with % of total and trend.
+3. **Rightsizing recommendations** — table sorted by savings/month.
+4. **Reserved / Savings Plan recommendation** — single recommended commitment.
+5. **Spot eligibility** — workloads flagged + savings if migrated.
+6. **Idle resources** — table with resource ID, age, monthly cost, action.
+7. **Tag hygiene** — % tagged by service, untagged resource list, proposed
+   tag-application script.
+8. **Action list** — every action with effort (LOW / MED / HIGH) and savings
+   ($/mo). Sorted by savings ÷ effort.
+
+Cache the spend baseline at `~/.gstack/projects/{slug}/cost-baseline.json` for
+`/iac-review` to consume.
+
+### Step 9: AskUserQuestion — apply gate
+
+The default is read-only — recommendations only. If the user asks the skill to
+apply any action (e.g., delete unattached EBS volumes, apply tags), AskUserQuestion
+PER ACTION. Do not batch. Present 2-3 options including "defer." Recommend defer
+if the action is reversible-but-noisy (e.g., deleting hundreds of old snapshots).
+
+Refuse outright to:
+
+- Purchase reserved instances or Savings Plans — that's a financial commitment,
+  human-only.
+- Delete the last snapshot of any resource.
+- Modify production tags without a tag-change plan in version control.
+
+## Outputs
+
+- `infra/cost/{YYYY-MM}.md` — full monthly report.
+- `~/.gstack/projects/{slug}/cost-baseline.json` — cached spend per service for
+  cross-skill use.
+- `~/.gstack/projects/{slug}/cost-history.jsonl` — append-only log of every run
+  (date, top services, total spend) for trend visualization.
+- Optional: `infra/cost/scripts/{action}.sh` — generated scripts for proposed
+  actions (e.g., `tag-untagged.sh`), each guarded by `--dry-run` by default.
+
+## Edge cases
+
+- **Cost-export delay** — AWS Cost Explorer is ~24h lagged; the last day in the
+  window is usually incomplete. Note this.
+- **Multi-account / multi-project** — AWS Organizations consolidated billing,
+  GCP folder hierarchy, Azure management groups. Aggregate, but break down by
+  account / project / subscription in the report.
+- **Reserved Instance / Savings Plan in flight** — if commitments expire in the
+  next 90 days, prioritize the recommendation. If commitments under-utilize
+  (< 80%), recommend reducing future commitments first.
+- **Egress charges** — often hidden in "Data Transfer." Break out cross-AZ,
+  cross-region, and internet egress separately. CloudFront / Cloudflare in
+  front of public traffic is often a big win.
+- **Spot eviction risk** — flag stateful workloads (databases, message queues)
+  as never-spot. Statelessness is the precondition.
+- **Tag write costs** — applying tags to thousands of resources triggers API
+  throttling. Emit a rate-limited script, not a one-shot.
+- **Cross-cloud comparison** — do not recommend "move from AWS to GCP" without
+  a `/migration-plan` — the migration cost dwarfs the savings.
+
+## Dependencies
+
+- **S1 (Hall-mode preamble)** for trust-gated outputs.
+- **S5 (read-only cloud credentials)** — required.
+- `aws`, `gcloud`, `az` CLIs installed locally.
+- `jq` and `yq` for response parsing.
+- WebSearch for current price-page lookups when on-disk pricing cache is stale.
+- `/iac-review` (optional) for cost-delta comparison on pending plans.
+
+## Stop gates
+
+- After Step 1 (scope) — do not proceed without user response.
+- Before Step 9 (any apply action) — confirm per action.
+- Refuse to purchase commitments or delete last snapshots.
+
+The bill is paid in real dollars. Suggesting a $10k/year action that breaks
+production is worse than missing the savings. Default to caution.

@@ -1,0 +1,217 @@
+---
+name: workspace-sync
+preamble-tier: 3
+version: 1.0.0
+description: |
+  [Multi-Repo] Sync shared workspace configs (tsconfig, eslint, prettier, Renovate, GH Actions,
+  .editorconfig, .nvmrc) across consuming repos via Renovate-style PRs. Pulls a canonical
+  template, diffs against each consumer, opens scoped sync PRs, gates breaking diffs through
+  AskUserQuestion.
+  Use when asked to "sync workspace configs", "propagate eslint", "shared config drift",
+  "renovate-style PRs", or "fix config drift across repos". (gstack)
+allowed-tools:
+  - Bash
+  - Read
+  - Write
+  - Edit
+  - Grep
+  - Glob
+  - AskUserQuestion
+sensitive: true
+---
+
+{{PREAMBLE}}
+
+# /workspace-sync — Family E4 — Multi-Repo / Monorepo
+
+Shared configs drift between repos. Same bug gets fixed four times. /workspace-sync
+treats config as a versioned product: there's a canonical template, and consuming
+repos receive sync PRs whenever the template changes (or whenever they fall behind).
+
+Pattern is borrowed from Renovate's bot UX — one PR per config family per consumer
+repo, labels for opt-in/opt-out, clear "breaking" tag when the user must read carefully.
+
+---
+
+## When to use
+
+- "We changed our eslint config; roll it out to the 8 services."
+- Quarterly drift audit: "show me every repo behind on shared config."
+- New repo bootstrapped: "give it the standard configs."
+
+Skip if the configs are intentionally diverged per repo (e.g. node version pinning
+for a legacy service).
+
+---
+
+## Inputs
+
+1. **Template location** — `workspace/template/` in the repo running this skill, or a
+   user-specified directory. The template is a tree of files mirroring what should
+   land in each consumer.
+2. **Consumer repo list** — `owner/repo` slugs from a config file (`workspace/consumers.yaml`),
+   or queried from `/dep-graph`, or typed.
+3. **Config families to sync** — checkboxes (tsconfig, eslint, prettier, Renovate, GH
+   Actions, editorconfig, nvmrc, gitignore). Default = all present in the template.
+4. **Cadence** — `manual` (default), `weekly`, `monthly`. Cadence only affects whether
+   we open a PR if there's already a recent open PR; we never auto-merge.
+
+---
+
+## Pre-flight
+
+```bash
+gh auth status --show-token 2>&1 | grep -i "Token scopes"
+```
+
+Required scope: `repo` (write). For each consumer:
+
+```bash
+gh repo view <repo> --json viewerPermission,defaultBranchRef
+```
+
+Must be `WRITE`+. Repos failing this check go in a "skipped" list and are reported
+at the end — they don't block the rest.
+
+Verify the template directory exists and is non-empty:
+
+```bash
+test -d workspace/template && find workspace/template -type f | head -5
+```
+
+If empty: AskUserQuestion → `bootstrap from this repo's configs` | `point at a different template dir` | `abort`.
+
+**AskUserQuestion gate (consumer list + families):**
+
+> "I'll open sync PRs against these <N> consumer repos for these config families:
+> [tsconfig, eslint, ...]. Confirm or amend."
+
+Options: `confirm` | `amend consumer list` | `amend families` | `abort`.
+
+---
+
+## Procedure
+
+### Step 1: Snapshot the canonical template
+
+Compute a content hash of every file in `workspace/template/`:
+
+```bash
+( cd workspace/template && find . -type f -exec sha256sum {} + | sort ) > /tmp/workspace-sync-template.sha
+```
+
+This hash goes in every PR body so future drift audits know which template version
+each repo is on.
+
+### Step 2: For each consumer repo, diff against the template
+
+```bash
+WORK=$(mktemp -d)
+for repo in $CONSUMERS; do
+  gh repo clone "$repo" "$WORK/$(basename $repo)" -- --depth 5
+done
+```
+
+For each repo, classify every template file as:
+
+| State          | Definition                                                       |
+|----------------|------------------------------------------------------------------|
+| `missing`      | Template has it; consumer doesn't.                               |
+| `up-to-date`   | Byte-identical to template.                                      |
+| `drift-safe`   | Differs from template; diff is purely additive (consumer added local rules under a clearly-marked section). |
+| `drift-breaking` | Differs from template in ways that conflict (rule rewritten, version downgraded, plugin removed). |
+| `local-only`   | Consumer has it; template doesn't. Untouched.                    |
+
+Heuristics for `drift-safe` vs `drift-breaking`:
+- Same JSON keys with same values + extras in the consumer → `drift-safe`.
+- Same keys, different values → `drift-breaking`.
+- ESLint: extends-array changes are breaking; `rules` additions are safe.
+- GH Actions: workflow file rewritten = breaking; new step appended at end = safe.
+- When uncertain, classify as breaking. Be conservative.
+
+### Step 3: Open one PR per consumer per family
+
+PRs are scoped to a single config family. Reviewing one giant "sync everything" PR is
+brutal; reviewing a 30-line tsconfig PR is fine.
+
+For each `<consumer>` × `<family>` cell with non-empty changes:
+
+1. Branch: `workspace-sync/<family>-<template-hash:7>`. Idempotent — if the branch
+   already exists with the same content, skip and link the open PR.
+2. Apply template files for that family. For `drift-safe` files, merge:
+   - JSON files: deep-merge template into consumer, consumer wins on conflict.
+   - YAML files: re-emit template top, append consumer extras at the bottom under a
+     `# Consumer-local additions below this line` comment.
+   - Anything else: ask.
+3. For `drift-breaking` files: **AskUserQuestion** showing the diff:
+
+> "Repo <repo>: <file> has breaking drift from template. Pick one:"
+> - `take the template, drop local changes`
+> - `keep local, skip this file in this PR`
+> - `merge manually` (agent opens an editor stub PR with both versions side-by-side)
+> - `abort this repo`
+
+4. Commit per family with a clear message.
+5. `gh pr create` with body listing:
+   - Template hash.
+   - Per-file change classification.
+   - "How to test locally" snippet.
+   - `Label: workspace-sync, <family>`.
+
+### Step 4: Track results
+
+`workspace/sync-runs/<ISO-date>.md`:
+
+```markdown
+# Workspace sync — <date>
+Template hash: <sha>
+Consumers: <N> (synced: <M>, skipped: <S>, blocked: <B>)
+
+| repo | family | PR | classification | notes |
+|------|--------|-----|----------------|-------|
+| ...  | ...    | ... | ...            | ...   |
+```
+
+### Step 5: Watch the PRs (optional)
+
+If cadence is weekly/monthly, the skill schedules itself (or expects an external
+runner like a cron) to re-poll: are PRs still open? merged? closed without merge?
+Update the tracking file. Never auto-merge — config changes always need human
+review.
+
+---
+
+## Outputs
+
+- `workspace/template/` — the canonical config tree (touched only if user runs in
+  "bootstrap" mode).
+- One PR per consumer × family.
+- `workspace/sync-runs/<ISO-date>.md` — per-run status.
+- Labels applied to PRs: `workspace-sync`, `<family>`, optional `breaking-drift`.
+
+---
+
+## Edge cases
+
+- **Partial GH token scope on some consumers** — those consumers are reported as
+  blocked; the rest proceed.
+- **Consumer's main is locked behind required reviewers we can't get** — PRs open
+  normally; sit in queue; tracked in the run file as "awaiting review".
+- **Template + consumer both diverged from an older template** (3-way drift) — agent
+  treats it as drift-breaking and asks. Don't silently overwrite.
+- **GH Actions workflows reference secrets that exist in template repo but not consumer**
+  — flag in PR body so the reviewer knows to add the secret before merging.
+- **Renovate config conflicts with our sync** — yes, you can run both. Our PRs label
+  themselves so Renovate can be configured to ignore them.
+- **CI on consumer repo fails on the synced PR** — PR stays open, comment with the
+  failure summary, AskUserQuestion next run.
+
+---
+
+## Dependencies
+
+- `gh` CLI with `repo` write scope on every consumer.
+- `git` (standard).
+- Optional: `/dep-graph` to auto-derive the consumer list.
+- Used by: nothing yet; consumes the template that any team can hand-maintain or
+  generate from a "golden" repo.

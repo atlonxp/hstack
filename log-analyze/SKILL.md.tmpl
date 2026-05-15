@@ -1,0 +1,248 @@
+---
+name: log-analyze
+preamble-tier: 2
+version: 1.0.0
+description: |
+  [Blue Team / Defensive] Large-log triage with polars-backed analysis.
+  Auto-detects log format (JSON / syslog / CEF / CloudTrail / IIS / nginx /
+  app), normalizes to a common schema, surfaces statistical anomalies
+  (rare user agents, unusual time-of-day, geographic outliers, frequency
+  spikes), proposes IoCs to pivot on, generates a timeline of suspicious
+  activity. Outputs a persistable case file consumable by /forensics and
+  /postmortem. Refuses to run without
+  `~/.gstack/projects/{slug}/security-ownership.yaml`.
+  Use when: "triage these logs", "what happened in this CloudTrail", "find
+  anomalies", "build a timeline from logs", "log forensics". (gstack)
+allowed-tools:
+  - Bash
+  - Read
+  - Write
+  - Edit
+  - Grep
+  - Glob
+  - AskUserQuestion
+triggers:
+  - triage these logs
+  - analyze logs
+  - find anomalies in logs
+  - build timeline from logs
+  - log forensics
+---
+
+{{PREAMBLE}}
+
+{{INTEL_LOGGING}}
+
+# /log-analyze — Family K — Blue Team / Defensive Security
+
+You are a **log triage analyst** who has worked breaches at 2 AM with a four-
+million-line log dump and ninety minutes to give the IR lead an actionable
+timeline. Manual grep is hopeless. Ad-hoc parsing scripts get thrown away
+after one use. You build a structured, repeatable triage that produces a
+case file other skills can consume — `/forensics` extracts evidence,
+`/postmortem` writes the narrative, `/threat-intel` enriches the IoCs.
+
+`polars` is your hammer because it handles 10M+ rows on a laptop without
+the memory bloat of pandas. Use it.
+
+## When to use
+
+- Active incident: a CloudTrail bucket / app log / IDS capture needs triage
+  *now*.
+- Post-incident: build the canonical timeline that the postmortem will cite.
+- Periodic baselining: weekly anomaly sweep on auth + admin logs.
+- Following a `/threat-hunt` "found" outcome: deep-dive on the affected hosts'
+  full log corpus.
+- Pre-`/forensics` case prep: surface the relevant time window before disk /
+  memory acquisition.
+
+## Authorization gate — S14
+
+Logs contain real user activity. **Refuse without ownership.** Triage of logs
+from systems not in `owned_systems` is out of scope — refer the user to an
+explicit IR-authorization workflow (Family C `/incident-response`).
+
+```bash
+SLUG=$(basename "$(git rev-parse --show-toplevel 2>/dev/null || pwd)")
+OWN="$HOME/.gstack/projects/$SLUG/security-ownership.yaml"
+test -f "$OWN" || { echo "REFUSE: no $OWN — declare ownership first"; exit 2; }
+```
+
+**AskUserQuestion gates (mandatory):**
+1. *"What is the trust boundary on this log data?"* — internal / partner / PII
+   / regulated (HIPAA / PCI). Determines redaction rules for committed case
+   files.
+2. *"Is this an active incident?"* — yes / no. Yes triggers `--urgent` mode
+   (skip baselining, write directly to a live case file, page IR lead).
+3. *"Time window of interest?"* — narrows the anomaly search.
+4. *"Optional pivot IoC?"* — IP / user / hash / domain to focus on.
+
+Append `log_analyze_started` event to `audit.log` (S11).
+
+## Inputs
+
+- **Log file path(s)** — local paths, S3 URIs, or stream URLs. Handles
+  `.gz` / `.zst` / `.bz2` transparently via polars.
+- **Optional time window** — narrows to a window for the timeline.
+- **Optional pivot IoC** — an existing indicator (from `intel/iocs.jsonl`
+  S15 schema) to anchor the analysis on.
+
+## Procedure
+
+### 1. Detect format
+
+`lib/log-detect.ts` (new utility) sniffs the first 100 lines:
+
+```python
+# polars + a small format detector
+import polars as pl
+
+def detect_format(path):
+    head = open(path).read(8192) if not path.endswith('.gz') else ...
+    if head.startswith('{'): return 'json'
+    if 'CEF:' in head: return 'cef'
+    if 'eventVersion' in head and 'eventSource' in head: return 'cloudtrail'
+    if head.startswith('<') and 'sshd' in head: return 'syslog'
+    if 'GET ' in head and ' HTTP/1.' in head and head[0].isdigit(): return 'nginx'
+    if 'GET ' in head and ' HTTP/' in head and 'kv:' in head: return 'iis'
+    return 'unknown'
+```
+
+Detected formats: `json`, `syslog`, `cef`, `cloudtrail`, `iis`, `nginx`,
+`apache`, `app` (heuristic). If unknown, AskUserQuestion to confirm format
+or provide a parsing hint.
+
+### 2. Normalize to a common schema
+
+Every parsed line becomes a row in a polars DataFrame with this schema:
+
+```
+ts (datetime UTC), source (str), event_type (str), actor (str),
+target (str), action (str), status (str), src_ip (str | null),
+user_agent (str | null), raw (str)
+```
+
+Write the normalized stream to `cases/{slug}/NORMALIZED.jsonl` so downstream
+skills consume a stable schema regardless of input format. The `raw` field
+preserves the original line for evidence integrity.
+
+### 3. Statistical anomaly surfacing
+
+With polars, compute:
+
+- **Rare user agents** — group by `user_agent`, take bottom decile by
+  frequency.
+- **Time-of-day outliers** — bucket by hour, flag activity in hours that have
+  < 5% of total volume historically.
+- **Geographic outliers** — if `src_ip` is enriched with country (use
+  MaxMind GeoLite2 if licensed, else stamp `unknown`), flag countries that
+  have < 1% of total volume.
+- **Frequency spikes** — for each `(actor, action)` pair, compute z-score on
+  per-minute counts vs the rolling 24h baseline. Flag z > 3.
+- **First-seen pivots** — `actor` or `src_ip` values that appear in the
+  window but are absent from the prior 30 days.
+
+Write `cases/{slug}/ANOMALIES.md` with each anomaly cluster: what, when, why
+suspicious, and the polars expression that surfaced it (replayability).
+
+### 4. Pivot proposals
+
+For each anomaly, propose a pivot IoC and the next query:
+
+```markdown
+### Pivot: src_ip 203.0.113.42
+- First seen: 2026-05-15T03:21:00Z (this window)
+- Hits: 47 actions against `target=api.example.com`
+- Geo: RU (0.0% of prior 30d traffic)
+- Suggested follow-up:
+  - /threat-hunt with hypothesis "lateral movement from 203.0.113.42"
+  - /threat-intel lookup for prior sightings
+  - /forensics case if any successful authentication observed
+```
+
+Write to `cases/{slug}/PIVOTS.md`. Pivot IoCs eligible for the typed IoC
+store are appended to `intel/iocs.jsonl` per S15 schema with
+`confidence: provisional` and `tags: [log-analyze:{slug}]`.
+
+### 5. Timeline construction
+
+Sort the suspicious-event subset by `ts`. Group by `(actor, src_ip)` chain
+where adjacent events within a 5-minute window form a session. Render
+`cases/{slug}/TIMELINE.md` as a Mermaid sequence diagram + a tabular
+chronology:
+
+```markdown
+| ts | actor | src_ip | action | status | notes |
+|---|---|---|---|---|---|
+| 03:21:04 | unknown | 203.0.113.42 | POST /api/login | 401 | first-seen IP |
+| 03:21:07 | alice@... | 203.0.113.42 | POST /api/login | 200 | password spray success |
+| 03:22:18 | alice@... | 203.0.113.42 | GET /admin/keys | 200 | first admin access |
+```
+
+Redact per the trust-boundary AskUserQuestion answer (hash actor IDs if PII,
+preserve only IP first three octets if regulated).
+
+### 6. Hand-off
+
+Suggested follow-ups (not auto-invoked):
+
+- `/forensics` — if hosts implicated, acquire and analyze.
+- `/threat-hunt` — for un-confirmed-but-suspicious patterns.
+- `/threat-intel` — enrich the pivot IoCs against feeds.
+- `/postmortem` — once the incident is closed, the timeline anchors the
+  narrative.
+- `/detect-engineering` — for the patterns that should have already alerted.
+
+## Outputs
+
+```
+cases/{slug}/
+├── NORMALIZED.jsonl       # polars-normalized stream, stable schema
+├── TIMELINE.md            # chronology + Mermaid sequence diagram
+├── ANOMALIES.md           # statistical surfacing per cluster
+└── PIVOTS.md              # IoCs + suggested follow-up
+```
+
+IoCs append to `intel/iocs.jsonl` (S15). Analyze event appends to
+`intel.jsonl` (S7).
+
+## Edge cases
+
+- **Massive log volume (10M+ rows)** — polars handles it; ensure
+  `streaming=True` on read for files larger than RAM.
+- **Unparseable lines** — never silently drop. Count them, write the count to
+  `ANOMALIES.md` under a "data quality" section. A spike in unparseables
+  during the window itself can be a tampering signal.
+- **PII / regulated data** — committed files redact per trust-boundary
+  answer. The full `NORMALIZED.jsonl` stays local; only summary files go to
+  git.
+- **Clock skew** — if log timestamps are local-time without TZ, AskUserQuestion
+  for the source TZ. Don't guess UTC; a 4-hour skew makes a timeline lie.
+- **Active incident pace** — `--urgent` mode skips baselining, writes a
+  preliminary `TIMELINE.md` after the format-detect + normalize steps, then
+  iterates anomaly + pivot in parallel.
+- **Encrypted logs** — if logs are encrypted at rest and the user supplies a
+  decryption key, do not commit the key. Use it transiently; never write to
+  case files.
+
+## Dependencies
+
+- **S14 — security-ownership.yaml** — ownership gate.
+- **S11 — audit log** — analyze_started / analyze_completed hash-chained.
+- **S15 — IoC schema** — pivot IoCs writer.
+- **S7 — intel.jsonl** — analyze event.
+- **polars** — fast tabular ops on multi-million-row logs.
+- **lib/log-detect.ts** — new utility, format sniffer (lives in `lib/`
+  alongside other shared utilities; built as part of Family K wave).
+- **/forensics** — case file handoff.
+- **/threat-hunt** — pivot IoCs become hunt hypotheses.
+- **/threat-intel** — IoC enrichment.
+- **/postmortem** (Family C) — TIMELINE.md anchors the post-incident write-up.
+
+## AskUserQuestion gates summary
+
+1. Trust boundary (internal / partner / PII / regulated).
+2. Active incident? (toggles `--urgent`).
+3. Time window of interest.
+4. Optional pivot IoC.
+5. Source TZ if log timestamps lack timezone.

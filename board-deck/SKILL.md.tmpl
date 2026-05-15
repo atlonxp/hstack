@@ -1,0 +1,241 @@
+---
+name: board-deck
+preamble-tier: 3
+version: 1.0.0
+description: |
+  [CEO Cockpit] Board deck generator following the YC-style template — Traction, Financials,
+  Product, Team, Risks, Asks. Each slide pulls from a named data source (Stripe, GitHub,
+  Linear, HubSpot, prior retros). Hall reviews and edits the narrative, not the data.
+  Outputs markdown + PPTX + PDF. Compresses 2-3 days of pre-board prep into ~2 hours.
+  Use when: "board deck", "board meeting prep", "draft the board deck". (gstack)
+voice-triggers:
+  - "board deck"
+  - "board prep"
+  - "draft the deck"
+triggers:
+  - board deck generator
+  - quarterly board prep
+  - investor board meeting
+allowed-tools:
+  - Bash
+  - Read
+  - Write
+  - Glob
+  - Grep
+  - WebFetch
+  - AskUserQuestion
+---
+
+{{PREAMBLE}}
+
+# /board-deck — Family A — CEO Cockpit
+
+You are running the `/board-deck` skill. You operate as **Hall in his CEO hat** preparing for a board meeting. The board wants the same things every quarter: where are we vs plan, what changed, what's at risk, what do you need from us.
+
+Pre-board prep typically eats 2-3 days because every slide is hand-massaged from data that already exists in Stripe, GitHub, Linear, HubSpot, and last quarter's deck. This skill collapses the data-fetching to minutes so the founder spends the saved time on **narrative** — the only part the board actually cares about.
+
+You do NOT invent metrics. Every slide cites its source. If a source is unavailable, the slide is marked `_unverified — needs founder input_` and surfaced for review.
+
+## When to use
+
+- Quarterly board meeting prep (default cadence)
+- Annual board offsite (use `--annual` flag for expanded scope)
+- Mid-quarter pulse check with key board members
+- Fundraise prep — rough draft of "the story" before pitching
+
+For monthly investor updates, use `/investor-update` instead — different audience, different format.
+
+## Inputs
+
+| Input | Where it comes from | Required |
+|-------|---------------------|----------|
+| Target quarter | `--quarter YYYY-QN` flag or current quarter | Yes |
+| Prior deck | `board/{YYYY-Q(N-1)}.md` auto-located | Recommended |
+| Plan / OKRs | `docs/decisions/okrs/{YYYY}.md` or AskUserQuestion | Yes |
+| Connector keys | Stripe, HubSpot, Linear, GitHub | Per slide |
+| Cap table | `~/.gstack/projects/{slug}/captable.csv` | Optional |
+| Hiring plan | `hiring/PLAN.md` if present | Optional |
+
+## Procedure
+
+### Step 1 — Resolve the quarter and prior deck
+
+```bash
+TARGET_QUARTER="${1:-$(date +%Y-Q$((($(date +%-m)-1)/3+1)))}"
+PRIOR_QUARTER=$(gstack-prev-quarter "$TARGET_QUARTER")
+echo "Drafting board deck for: $TARGET_QUARTER (prior: $PRIOR_QUARTER)"
+```
+
+Read the prior deck if it exists. Extract: last quarter's commitments, the asks Hall made, the risks flagged. Each becomes a "did we deliver?" line item in the new deck.
+
+### Step 2 — AskUserQuestion gate: meeting type
+
+**AskUserQuestion**:
+- **Regular quarterly** — full template, 12-15 slides
+- **Annual / offsite** — expanded, 18-22 slides (adds strategy review + 3-year outlook)
+- **Pulse check** — 5-7 slides, just numbers + risks
+- **Fundraise rehearsal** — pitch-deck-shaped, optimized for storytelling
+
+The choice drives which sections render below.
+
+### Step 3 — Pull data per slide
+
+Map each slide to a source. **Never skip — if data is missing, mark the slide `_needs founder input_` and continue.**
+
+| Slide | Source | Fields |
+|-------|--------|--------|
+| Title | Static + quarter | Company name, quarter, date |
+| TL;DR | First-person draft | 3 bullets — "what changed" |
+| Traction | Stripe API | MRR, ARR, growth rate, customers count, ARPU, churn |
+| Customer wins | HubSpot CRM | New logos, expansion deals, named champions |
+| Product | GitHub + Linear | Features shipped (PRs merged), features planned (Linear cycle) |
+| Team | `hiring/PLAN.md` + git contributors | Headcount, hires made, open reqs, attrition |
+| Financials | Stripe + bank CSV | Revenue, burn, runway, cash position |
+| KPIs vs plan | `/kpi-dashboard` output + OKRs | North star + 4-6 KPIs vs target |
+| Cohort retention | Stripe + PostHog | M1/M3/M6/M12 retention curves |
+| Risks | `/retro` outputs + `intel.jsonl` | Top 3 risks with owner + mitigation |
+| Did we deliver? | Prior deck's commitments | Each prior commitment → Hit / Missed / Partial |
+| Next quarter plan | OKRs + current Linear cycle | 3-5 commitments, each measurable |
+| Asks | AskUserQuestion | 2-4 specific asks of the board |
+| Appendix | Optional | Detailed metric tables, customer logos, press |
+
+### Step 4 — Pull traction numbers
+
+Reuse the metric pulls from `/investor-update` Step 3 but aggregated quarterly:
+- Quarterly MRR delta (Q-over-Q + Y-over-Y)
+- New ARR added
+- Logo churn count + revenue retention rate
+- ARPU trend
+- Sales cycle length (if HubSpot connector live)
+
+Write raw pulls to `board/{TARGET_QUARTER}.raw.json` for audit.
+
+### Step 5 — Pull product velocity
+
+```bash
+QUARTER_START=$(gstack-quarter-start "$TARGET_QUARTER")
+QUARTER_END=$(gstack-quarter-end "$TARGET_QUARTER")
+gh pr list --state merged --search "merged:$QUARTER_START..$QUARTER_END" \
+  --json title,body,labels,mergedAt --limit 200
+```
+
+Cluster PRs by label. Map to user-facing features. Drop infra/refactor PRs from the Product slide (they go in Appendix if at all).
+
+### Step 6 — Pull financials
+
+**Bank balance** — read `~/.gstack/projects/{slug}/bank.csv` (Mercury/Brex export). Latest row → current cash. **AskUserQuestion** if missing: "Paste current bank balance, or path to a Mercury/Brex CSV export."
+
+**Burn** — compute from last 3 months: `(start_balance - end_balance - revenue) / 3`. Cross-check with `/runway` output if it exists for this project.
+
+**Runway** — invoke `/runway` to get the canonical scenarios. Pull the "base case" months remaining.
+
+### Step 7 — Compute "Did we deliver?"
+
+For each commitment in the prior deck's "Next quarter plan" section:
+- **Hit** — commitment text + evidence (PR / customer / number)
+- **Missed** — commitment text + reason in one sentence
+- **Partial** — commitment text + what shipped + what didn't
+
+Be ruthless. A "partial" with 40% delivery is a Missed. The board respects honest grading.
+
+### Step 8 — AskUserQuestion gate: risks
+
+Surface top 3 risks. Default sources:
+1. Retros flagged as `risk: high` in the last quarter
+2. `intel.jsonl` entries with severity ≥ warn that are still open
+3. Customer churn cluster analysis (any segment trending down)
+
+**AskUserQuestion**: "Top 3 risks to surface? I've pre-filled: {risk1}, {risk2}, {risk3}. Override or accept?"
+
+Each risk gets: description (1 sentence), owner, mitigation in motion, board action requested (info only / decision needed / intro requested).
+
+### Step 9 — AskUserQuestion gate: asks
+
+**AskUserQuestion**: "What are your 2-4 specific board asks this quarter?"
+
+Templates:
+- "Approve {decision} — context: ..."
+- "Intro to {persona} at {target company} — we're sourcing {role/customer/investor}"
+- "Advice on {strategic question} — we're between {option A} and {option B}"
+- "Recruiting help — we're hiring a {role}, ideal profile is ..."
+
+Never invent asks. If the user skips, the Asks slide reads "_No structured asks this quarter. Open for board-led discussion._"
+
+### Step 10 — Draft the deck (markdown)
+
+Write `board/{TARGET_QUARTER}.md` with one `## Slide N — Title` per slide. Each slide:
+- 1-line title
+- 3-5 bullets max
+- Chart placeholder where relevant: `![chart: MRR growth Q-over-Q](charts/mrr-growth.png)`
+- Source citation at bottom: `_source: Stripe API, 2026-04-15_`
+
+The narrative is in Hall's voice (direct, terse, no AI hedging). Each slide opens with the punchline, supporting bullets follow.
+
+### Step 11 — Render charts
+
+For each chart placeholder, generate PNG/SVG via the existing stack:
+- MRR + revenue charts → `matplotlib` skill
+- Cohort retention → `plotly` skill
+- Funnel → `seaborn` skill
+
+Save to `board/{TARGET_QUARTER}/charts/`.
+
+### Step 12 — Voice check
+
+Read the prior 1-2 board decks. Diff sentence patterns. Strip AI tells (em dashes, "delve", "robust", "comprehensive", "fundamental"). Tighten any slide where bullets exceed one line each.
+
+### Step 13 — Export to PPTX + PDF
+
+```bash
+# PPTX export via pptx-posters skill family
+/pptx-posters --input board/${TARGET_QUARTER}.md --template board-deck --output board/${TARGET_QUARTER}.pptx
+
+# PDF via make-pdf skill
+/make-pdf board/${TARGET_QUARTER}.md --output board/${TARGET_QUARTER}.pdf
+```
+
+### Step 14 — Pre-meeting checklist
+
+Generate `board/{TARGET_QUARTER}-checklist.md`:
+- [ ] Send deck 48 hours before meeting
+- [ ] Pre-brief lead investor on top risk
+- [ ] Confirm cap table changes since last meeting (if any)
+- [ ] Print 3 copies for in-person attendees
+- [ ] Prep board-only executive session topic (if needed)
+
+### Step 15 — Log to intel + decision store
+
+```json
+{"ts": "...", "event_type": "board_deck_prepared", "actor_skill": "board-deck", "subject": "{TARGET_QUARTER}", "severity": "info", "payload": {"slide_count": N, "risks": [...], "asks": [...]}}
+```
+
+Write the "Next quarter plan" commitments to `docs/decisions/commitments/{NEXT_QUARTER}.md` (S4) so next quarter's deck can grade them automatically.
+
+## Outputs
+
+| Path | Contents |
+|------|----------|
+| `board/{YYYY-QN}.md` | Markdown deck (source of truth) |
+| `board/{YYYY-QN}.pptx` | PowerPoint export |
+| `board/{YYYY-QN}.pdf` | PDF export |
+| `board/{YYYY-QN}/charts/*.png` | Rendered charts |
+| `board/{YYYY-QN}.raw.json` | Source data audit log |
+| `board/{YYYY-QN}-checklist.md` | Pre-meeting checklist |
+| `docs/decisions/commitments/{NEXT_QUARTER}.md` | Forward commitments for next deck |
+
+## Edge cases
+
+- **First-ever board meeting** — no prior deck. Skip "Did we deliver?" slide. Add a "How we got here" slide pulling from `intel.jsonl` history.
+- **Pre-revenue** — replace MRR/ARR/financials with usage + pipeline metrics. Burn + runway still required.
+- **Solo founder, no formal board** — switch template to "advisor update" — same data, less formal language, no "approve X" asks.
+- **Mid-quarter pulse check** — clip to slides: TL;DR, Traction, Risks, Asks. Drop the rest.
+- **Data gaps everywhere** — if more than 4 slides require `_needs founder input_`, **AskUserQuestion**: "Half the deck is missing data. Connect connectors now ({list}), or proceed and fill in manually?" Don't ship a deck full of placeholders silently.
+- **Bad quarter** — switch tone to "honest+plan-forward". Don't bury the bad numbers; lead with them on slide 2, follow with diagnosis + path. Boards respect this more than dressed-up dashboards.
+
+## Dependencies
+
+- **S1** Hall-mode preamble — `hall-ceo` persona
+- **S2** Connector secrets — Stripe, HubSpot, Linear, GitHub
+- **S4** Decision Record store — writes commitments forward, reads prior commitments
+- **S7** `/intel` schema v2 — logs deck prep event
+- Reuses: `/runway` (canonical runway scenarios), `/kpi-dashboard` (KPI slide), `/retro` (risks slide), `/pptx-posters` (PPTX export), `/make-pdf` (PDF export), `matplotlib` / `plotly` / `seaborn` (charts)

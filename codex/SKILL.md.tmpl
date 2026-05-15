@@ -3,7 +3,7 @@ name: codex
 preamble-tier: 3
 version: 1.0.0
 description: |
-  OpenAI Codex CLI wrapper — three modes. Code review: independent diff review via
+  [Code Review] OpenAI Codex CLI wrapper — three modes. Code review: independent diff review via
   codex review with pass/fail gate. Challenge: adversarial mode that tries to break
   your code. Consult: ask codex anything with session continuity for follow-ups.
   The "200 IQ autistic developer" second opinion. Use when asked to "codex review",

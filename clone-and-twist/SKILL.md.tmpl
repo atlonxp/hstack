@@ -1,0 +1,370 @@
+---
+name: clone-and-twist
+preamble-tier: 2
+version: 1.0.0
+description: |
+  [Product Transposition] Build the transposed version of a studied mechanism.
+  Reads BLUEPRINT.md + TRANSPOSITION.md from studies/<slug>/, produces an
+  /autoplan-full-compatible build plan with core skeleton, domain adapters,
+  replacement modules, and pre-stubbed proprietary slots — then hands off to
+  /autobuild for execution. Writes mechanism-fidelity tests to
+  evals/fidelity/<slug>.jsonl consumed by /eval-harness (S13). Refuses to operate
+  on a study without a non-trivial domain shift + ≥1 proprietary slot.
+  Maintains BUILD-LOG.md linking commits back to blueprint sections.
+  Use when asked to "build the transposed version", "clone and twist this",
+  "kick off the build from this transposition", or "scaffold the transposed code". (gstack)
+benefits-from: [blueprint, transpose, autoplan-full, autobuild]
+allowed-tools:
+  - Read
+  - Write
+  - Edit
+  - Grep
+  - Glob
+  - Bash
+  - AskUserQuestion
+triggers:
+  - clone and twist
+  - build the transposed version
+  - scaffold the transposed code
+  - twist this study
+  - kick off the build
+---
+
+{{PREAMBLE}}
+
+{{BASE_BRANCH_DETECT}}
+
+# /clone-and-twist — Family J — Product Transposition
+
+You have a BLUEPRINT.md (what they do) and a TRANSPOSITION.md (how you'll bridge
+to your domain). This skill turns those documents into running code. It does NOT
+hand-write the code — it produces a buildable plan + mechanism-fidelity tests
+and dispatches to `/autobuild` for execution.
+
+Pipeline location:
+
+```
+  /blueprint  →  /transpose  →  [ /clone-and-twist ]  →  /recipe
+                                  (this skill)
+```
+
+## When to use
+
+- You completed `/blueprint` and `/transpose` and the bridge plan is locked.
+- You want pre-stubbed proprietary slots so you can fill in your IP without
+  re-architecting the surrounding scaffold.
+- You want mechanism-fidelity tests (S13) created *before* the code lands.
+
+**Not for:**
+
+- Studies that haven't been transposed yet — route to `/transpose` first.
+- Studies with a trivial domain shift or zero proprietary slots — this skill
+  refuses to build a literal clone.
+
+## Inputs
+
+| Flag | Required | Meaning |
+|---|---|---|
+| `<study-slug>` | yes | The study slug under `studies/<slug>/` |
+| `--target-dir <path>` | no | Where the transposed code lands (default: project root) |
+| `--mode {full,plan-only}` | no | `full` (default) hands off to `/autobuild`; `plan-only` writes the plan and stops |
+| `--branch <name>` | no | Branch to land on; defaults to a derived `<slug>-twist` branch |
+
+---
+
+## Procedure
+
+### Step 0: Pre-flight + refusal gates
+
+```bash
+eval $(~/.claude/skills/gstack/bin/gstack-slug 2>/dev/null)
+STUDY="studies/<study-slug>"
+[ -f "$STUDY/BLUEPRINT.md" ] || { echo "BLUEPRINT.md missing — run /blueprint first"; exit 1; }
+[ -f "$STUDY/TRANSPOSITION.md" ] || { echo "TRANSPOSITION.md missing — run /transpose first"; exit 1; }
+```
+
+Read both files. Verify the S12 frontmatter chains correctly: TRANSPOSITION.md's
+`derived_from` must include the BLUEPRINT.md path.
+
+**Refusal gates (hard stops, no override):**
+
+1. **Domain-shift gate.** Parse §5 of TRANSPOSITION.md. If the sentence amounts
+   to "same thing, renamed" (heuristic: starts with "port", "rename", or "translate"
+   and lists only a name/string change), refuse:
+   > /clone-and-twist refuses to operate on a study with a trivial domain shift.
+   > Re-run /transpose and produce a genuinely transformative bridge plan.
+2. **Proprietary-slot gate.** Parse §4 of TRANSPOSITION.md. If fewer than 1
+   proprietary slot, refuse:
+   > /clone-and-twist refuses to operate on a study with zero proprietary slots.
+   > Family J builds transformative work, not derivative reproductions.
+3. **Fidelity-target gate.** Parse §8. If fewer than 1 measurable fidelity target,
+   refuse:
+   > /clone-and-twist requires ≥1 measurable mechanism-fidelity target (S13).
+   > Re-run /transpose Step 8.
+
+### Step 1: Land on the right branch
+
+```bash
+git fetch origin <base>
+BRANCH="${ARG_BRANCH:-<slug>-twist}"
+git checkout -b "$BRANCH" "origin/<base>" 2>/dev/null || git checkout "$BRANCH"
+```
+
+(`<base>` here resolves via `{{BASE_BRANCH_DETECT}}` — do not hardcode `main`.)
+
+### Step 2: Project structure for the transposed code
+
+Decide the target directory based on `--target-dir` or, if absent, by inspecting
+the repo and AskUserQuestion:
+
+> Where should the transposed code land?
+>
+> **A) `src/<slug>/`** — new top-level module in this repo.
+> **B) `packages/<slug>/`** — new package in a monorepo (if `packages/` exists).
+> **C) New repo** — generate as a sibling repo; do not land in this tree.
+> **D) Custom path** — answer with the path.
+
+### Step 3: Scaffold by S/A/R
+
+Read the TRANSPOSITION.md source→target table. Group rows:
+
+- **STAY** rows → **Core mechanism skeleton.** Concrete code with placeholder I/O.
+- **ADAPT** rows → **Domain adapters.** Adapter modules that hold the new-domain
+  content, plugged into the skeleton.
+- **REPLACE** rows → **Replacement modules.** Stub modules with a clear
+  `// implement-for-domain` marker — `/autobuild` will fill them.
+
+For each scaffolded file, the head-of-file comment must include:
+
+```
+// Derived from studies/<slug>/BLUEPRINT.md §<section> + TRANSPOSITION.md row #<n>
+// Decision: STAY | ADAPT | REPLACE
+// (Do not paste verbatim source code. Reference + cite — never copy.)
+```
+
+### Step 4: Stub the proprietary slots
+
+For each slot in TRANSPOSITION.md §4, scaffold an **interface-only** stub:
+
+- The file lives at the path indicated in the slot's "where it plugs in" entry.
+- Exports the documented interface (function signatures, types, contract).
+- Body is a single throw / panic / NotImplementedError with a pointer back to
+  TRANSPOSITION.md §4.
+
+```
+function tslPhonemeEncoder(input: TslInput): TslEncoding {
+  // PROPRIETARY SLOT: see studies/<slug>/TRANSPOSITION.md §4 (slot: tsl-phoneme-encoder)
+  throw new Error("Proprietary slot — implement before running fidelity tests");
+}
+```
+
+Stubs are deliberately runnable scaffolding — the surrounding code compiles and
+tests can be written, even though the stub itself throws until filled.
+
+### Step 5: Write mechanism-fidelity tests (S13)
+
+For each fidelity target in TRANSPOSITION.md §8, generate one entry in
+`evals/fidelity/<slug>.jsonl`:
+
+```json
+{"mechanism_property": "...",
+ "source_evidence": "studies/<slug>/BLUEPRINT.md:§4 / paper p.7 / file:line",
+ "target_test_id": "fidelity-<slug>-<n>",
+ "pass_threshold": "<concrete metric>",
+ "current_value": null}
+```
+
+Generate the matching test files under the conventions of `/eval-harness` for
+the domain (e.g., `evals/fidelity/<slug>/test-<n>.ts`). Each test imports the
+scaffolded code, runs the property check, and writes `current_value` back to
+the JSONL line on success.
+
+These tests are **written before** the proprietary slots are filled — they will
+fail until implementation lands. That's intentional. TDD on mechanism properties.
+
+### Step 6: Generate the `/autoplan-full`-compatible build plan
+
+Write `studies/<slug>/build-plan.md` with the standard sections `/autoplan-full`
+expects:
+
+1. **Implementation scope** — what `/autobuild` should produce.
+2. **Architecture** — re-derive from BLUEPRINT.md + TRANSPOSITION.md; include
+   ASCII diagrams.
+3. **File list** — every scaffolded file from Steps 3-4 + every test from Step 5.
+4. **Implementation Tasks** — checkbox list `/autobuild` consumes:
+   - `- [ ] #1: scaffold core skeleton (STAY rows)`
+   - `- [ ] #2: scaffold domain adapters (ADAPT rows)`
+   - `- [ ] #3: stub replacement modules (REPLACE rows)`
+   - `- [ ] #4: stub proprietary slots (interfaces only)`
+   - `- [ ] #5: write mechanism-fidelity tests (red, will fail until slots filled)`
+   - `- [ ] #6: wire imports + cross-module types`
+   - `- [ ] #7: smoke-test the skeleton compiles / loads`
+5. **Test plan** — link to `evals/fidelity/<slug>/`.
+6. **Edge cases** — pulled from TRANSPOSITION.md §6 (new-domain edge cases).
+7. **Out of scope** — explicitly NOT in this build: the proprietary slot
+   *implementations* (those are Hall's manual work after the scaffold lands).
+
+### Step 7: Open BUILD-LOG.md
+
+Create `studies/<slug>/BUILD-LOG.md` with the S12 frontmatter and an empty
+"Commits" section. Each future commit `/autobuild` lands MUST append:
+
+```
+- <commit-sha> <subject>
+  - Blueprint section: §<n>
+  - Transposition row: #<n>
+  - Files: <list>
+```
+
+The skill that watches commits (`/autobuild` or a post-commit hook) is responsible
+for appending. This skill seeds the file structure.
+
+### Step 8: Hand off
+
+Two paths:
+
+- **`--mode full` (default):** Invoke `/autobuild` with `studies/<slug>/build-plan.md`
+  as the plan. `/autobuild` runs the checkboxed tasks atomically, commits each,
+  and appends to BUILD-LOG.md. After `/autobuild` returns, this skill runs
+  `/verify-loop` once to catch transposition gaps (missing imports, untested
+  edges, slot stubs that aren't wired).
+- **`--mode plan-only`:** Stop after writing build-plan.md, BUILD-LOG.md, the
+  scaffold, and the fidelity tests. Print:
+
+```
+Plan + scaffold ready: studies/<slug>/build-plan.md
+Next: /autobuild studies/<slug>/build-plan.md
+```
+
+### Step 9: Write FIDELITY-EVAL.md
+
+After the build completes (or right away in `plan-only`), write
+`studies/<slug>/FIDELITY-EVAL.md`:
+
+```yaml
+---
+target: <study target>
+mode: fidelity-eval
+version: 1
+derived_from: ["studies/<slug>/BLUEPRINT.md", "studies/<slug>/TRANSPOSITION.md"]
+---
+```
+
+Sections:
+
+1. **Fidelity contract** — table of property / source evidence / target test /
+   threshold / current value (mirrors `evals/fidelity/<slug>.jsonl`).
+2. **Status** — for each property: `PRE-IMPL` (slot not filled), `RED` (impl
+   landed, test failing), `GREEN` (test passing), `DEGRADED` (passing below
+   threshold but within acceptable degradation declared in TRANSPOSITION.md §8).
+3. **Notes** — why any property is `DEGRADED` or skipped.
+
+### Step 10: Self-check + report
+
+- [ ] All three refusal gates passed (Step 0).
+- [ ] Every scaffolded file has the derivation header comment (Step 3).
+- [ ] Every proprietary slot is interface-only, throws on call (Step 4).
+- [ ] `evals/fidelity/<slug>.jsonl` has ≥1 entry; matching tests exist (Step 5).
+- [ ] `studies/<slug>/build-plan.md`, `BUILD-LOG.md`, and `FIDELITY-EVAL.md` exist.
+- [ ] No verbatim copies of source-target code, marketing, or images anywhere in
+      the scaffold (grep for likely copy-paste markers; warn loudly if found).
+
+Print:
+
+```
+Clone-and-twist complete:
+- Scaffold:           <target-dir>/...  (<N> files)
+- Proprietary slots:  <N> stubbed
+- Fidelity tests:     <N> red (will turn green as slots get filled)
+- Build plan:         studies/<slug>/build-plan.md
+- Build log:          studies/<slug>/BUILD-LOG.md
+- Fidelity eval:      studies/<slug>/FIDELITY-EVAL.md
+- Branch:             <branch>
+
+Next steps:
+  /autobuild studies/<slug>/build-plan.md   # if --mode plan-only
+  /recipe <slug>                            # after build lands, document YOURS
+```
+
+---
+
+## Outputs
+
+Per S12 + S13:
+
+```
+studies/<slug>/
+├── BLUEPRINT.md             # (input)
+├── TRANSPOSITION.md         # (input)
+├── build-plan.md            # /autoplan-full-compatible plan for /autobuild
+├── BUILD-LOG.md             # commit → blueprint section linkage
+└── FIDELITY-EVAL.md         # mechanism property status
+
+evals/
+└── fidelity/
+    ├── <slug>.jsonl         # S13 fidelity contract (one row per property)
+    └── <slug>/              # matching test files (/eval-harness consumes)
+
+<target-dir>/
+├── ...                      # scaffolded code (STAY skeletons, ADAPT adapters,
+                             #  REPLACE stubs, slot interface stubs)
+```
+
+---
+
+## Edge cases
+
+- **Trivial domain shift (S5 gate fail).** Refuse. Do not silently downgrade
+  to a "soft clone" mode — there isn't one.
+- **Zero proprietary slots (S4 gate fail).** Refuse.
+- **Zero fidelity targets (S8 gate fail).** Refuse — without fidelity tests,
+  there's no way to know the transposition preserved the mechanism.
+- **Target dir already has conflicting code.** AskUserQuestion: archive existing
+  to `<target-dir>.pre-twist/` or abort.
+- **`/autobuild` partially completes.** Resume from the BUILD-LOG.md checkbox
+  state on next invocation; do not regenerate the scaffold.
+- **Slot stub accidentally pasted real impl.** Self-check Step 10 scans slot
+  stubs for body length > 1 line; warns. The slot author can override by adding
+  a `// LITERAL-IMPL-OK` marker after re-confirming via AskUserQuestion.
+- **Verbatim-copy detection.** Scan scaffold for code blocks that match more
+  than ~25 consecutive tokens from any file in `studies/<slug>/evidence/`. Any
+  match is a hard fail — block the build until the copy is paraphrased.
+- **GPL/AGPL source from `/blueprint` `--mode code`.** Re-surface the license
+  warning here even if it was acked in `/blueprint`. Transpositions inherit the
+  obligation if mechanism is copied; require AskUserQuestion ack again.
+
+---
+
+## Dependencies
+
+- **`/blueprint`** + **`/transpose`** — required upstream.
+- **`/autoplan-full`** — output format compatibility (build-plan.md sections).
+- **`/autobuild`** — execution; reads build-plan.md, lands commits, appends BUILD-LOG.md.
+- **`/eval-harness`** — consumes `evals/fidelity/<slug>.jsonl`; runs mechanism-
+  fidelity tests against the scaffold + slot fills.
+- **`/verify-loop`** — invoked after `/autobuild` in `--mode full` to catch
+  transposition gaps.
+- **S12** — frontmatter chain `derived_from`.
+- **S13** — `evals/fidelity/<slug>.jsonl` schema.
+- **`lib/study-artifacts.ts`** — shared parser for S12 frontmatter (planned).
+
+---
+
+## Canonical examples
+
+- **fingerspelling.xyz → TSL** (post-`/transpose`). Scaffold: core spaced-rep
+  loop (STAY), TSL phoneme/handshape adapter (ADAPT), Thai UI module (REPLACE),
+  proprietary slots `tsl-phoneme-encoder`, `tsl-pedagogy-ordering`, `tsl-eval-set`.
+  Fidelity tests: "spaced-rep schedule preserves the source paper's retention
+  curve" (cite paper) and "TSL-specific phonemes are 100% covered by the
+  pedagogy graph" (target-domain invariant).
+
+- **supertonic-v3** (inference → fine-tuning). Scaffold: model architecture +
+  data loader (STAY), training-loop adapter (ADAPT), gradient-accumulation +
+  checkpoint cadence (REPLACE), proprietary slots `training-strategy`,
+  `regularization-schedule`, `eval-suite`. Fidelity tests: "fine-tuned model
+  still passes the inference-only eval at ≥98% of baseline" and "gradient
+  accumulation produces numerically equivalent updates to ungrouped step at
+  micro-batch=1".
+
+Use these as the v1 dogfood targets.

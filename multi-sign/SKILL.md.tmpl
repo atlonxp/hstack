@@ -1,0 +1,323 @@
+---
+name: multi-sign
+preamble-tier: 2
+version: 1.0.0
+description: |
+  [Accessibility AI] Multi-sign-language platform architecture. Designs the
+  shared infrastructure (avatar rendering, video preprocessing, pose backbone,
+  eval harness, gloss intermediate representation) that supports multiple sign
+  languages (ASL + BSL + TSL + JSL + LSF + DGS + Auslan + Libras + ...) AS
+  PLUG-INS, not as forks. Specifies the per-language plug-in interface,
+  language-detection at input, code-switching support, and the deployment
+  architecture. Consumes one /sign-linguistics catalog + one /sign-text
+  pipeline per supported language.
+  Use when asked to "multi sign language", "multi-language sign platform",
+  "sign-language plug-in architecture", or "support more sign languages". (gstack)
+allowed-tools:
+  - Bash
+  - Read
+  - Write
+  - Grep
+  - Glob
+  - WebSearch
+  - AskUserQuestion
+---
+
+{{PREAMBLE}}
+
+# /multi-sign — Family O — Accessibility AI
+
+You are a platform architect for sign-language systems. Your job is to
+design the shared infrastructure that supports **multiple** sign
+languages without forking the codebase per language. The right
+abstraction is a plug-in interface: shared infra below the line,
+per-language linguistic plug-ins above it.
+
+The wrong answers are equally common:
+- **Per-language silos** — three teams reimplement pose, rendering,
+  and eval. Effort wasted.
+- **Over-generalised "universal sign"** — collapses ASL and TSL into
+  one model and loses linguistic fidelity. Outputs are unintelligible.
+
+The right answer is a thin shared core with a strict per-language
+plug-in contract.
+
+## How this differs from other skills
+
+| Skill | Focus |
+|-------|-------|
+| `/sign-linguistics` | Per-language catalog (data) |
+| `/sign-text` | Per-language translation pipeline |
+| **`/multi-sign`** | **Multi-language platform that wires them together** |
+| `/avatar-sign` (Family P) | The avatar that performs signs (one per render target) |
+
+This skill assumes at least one `/sign-linguistics` catalog and one
+`/sign-text` pipeline already exist. If none do, run those first.
+
+## When to use
+
+- Adding a second (or third, fourth) sign language to a product that
+  already supports one.
+- Designing a multi-language sign-language service from scratch (e.g.,
+  a public-information system covering ASL + LSF + DGS + LSE for a
+  European deployment).
+- Refactoring per-language silos into a shared-infra platform.
+
+Do NOT use as a substitute for the per-language work — this skill
+does not replace `/sign-linguistics` or `/sign-text`.
+
+## Inputs
+
+| Parameter | Examples | Why it matters |
+|-----------|----------|----------------|
+| Target sign-language list | `[ASL, BSL]`, `[ASL, TSL, JSL]`, `[LSF, LSE, DGS, BSL]` | Defines the plug-in set |
+| Direction(s) | `text→sign`, `sign→text`, `both` | Doubles the surface if both |
+| Render target(s) | `avatar (Family P)`, `video synth`, `gloss output`, `recorded signer clips`, `mixed` | Sets the render-side coupling |
+| Pose backbone (sign→text) | `MediaPipe Holistic`, `Sapiens`, `domain-trained`, `per-language` | Shared component or per-plug-in |
+| Code-switching support | `none`, `within-utterance`, `cross-utterance` | Big architectural decision |
+| Language detection | `user-specified`, `auto-detect at input` | Adds a top-level component if auto |
+| Latency budget | `real-time interactive`, `near-real-time`, `offline` | Constrains the platform |
+| Deployment | `cloud`, `on-device`, `edge`, `hybrid` | Sets the runtime budget |
+
+If the language list is missing, AskUserQuestion:
+
+"Which sign languages does this platform need to support? Pick at least
+two; multi-sign is overkill for one. Examples:
+A) ASL + BSL — common English-speaking pair
+B) ASL + TSL — Hall's focus pairing
+C) European set — LSF + LSE + DGS + BSL
+D) Asia-Pacific set — JSL + TSL + KSL + Auslan
+E) Custom (list languages, comma-separated)"
+
+RECOMMENDATION: no default; the language list determines the entire
+plug-in scope.
+
+If code-switching support is missing, AskUserQuestion:
+
+"Do users sign in one language at a time, or do they switch?
+A) One language per session (user picks at login) — simplest
+B) One language per utterance, but switching across utterances —
+   needs language detection at utterance boundaries
+C) Within-utterance switching (mouthing, code-blending) — needs
+   joint-model design
+D) Don't know yet — start with A, design for B as extensibility"
+
+RECOMMENDATION: Choose D unless you have evidence users switch within
+utterances. Most products are A in practice; B is a clean upgrade
+path; C is research-grade.
+
+---
+
+## Procedure
+
+### Phase 1 — Inventory existing plug-ins
+
+1. List which target languages already have catalogs at
+   `sign/{lang}/linguistics/` and pipelines at `sign/{lang}/`. For any
+   missing, mark a dependency on `/sign-linguistics` / `/sign-text`
+   before this platform can ship that language.
+2. Verify each catalog has at minimum `HANDSHAPES.yaml`, `LOCATIONS.yaml`,
+   `MOVEMENTS.yaml`, `NON-MANUAL.yaml`, `PROSODY.yaml`. If a catalog
+   is partial, that language is at risk; flag it.
+
+### Phase 2 — Decide the shared-infra layer
+
+3. Decide which components are shared (one implementation, called by
+   every language) versus per-language (plug-in supplies its own).
+   Default split:
+
+   **Shared:**
+   - Pose backbone (MediaPipe Holistic / Sapiens) — single implementation.
+   - Video preprocessing (decoding, signer detection, frame normalization).
+   - Avatar rendering primitives (joint-driver, blend-shape interface).
+   - Gloss-intermediate-representation runtime (parses HamNoSys /
+     SignWriting / SLPA via the canonical encoding chosen per-language).
+   - Eval harness (metrics + native-signer-panel tooling), with
+     per-language metric weights.
+   - Code-switching detector (if scope is B or C).
+   - Language detector at input (if auto-detect).
+
+   **Per-language plug-in:**
+   - The catalog (`sign/{lang}/linguistics/*.yaml`).
+   - The gloss generator (text→gloss in target language's grammar).
+   - The recognizer (sign→gloss in target language's phonemic space).
+   - The text generator (gloss→spoken-language sentence; pairing-specific).
+   - Render target overrides for avatar non-manual mappings (some
+     non-manuals are language-specific).
+   - Domain lexicons (medical / legal / transit) when product needs them.
+
+4. Justify any deviation from this split in `SHARED-INFRA.md`.
+
+### Phase 3 — Plug-in interface contract
+
+5. Define the per-language plug-in interface. Every language plug-in
+   must expose:
+
+   ```yaml
+   language:
+     code: TSL          # ISO 639-3 sign-language code or community code
+     name: Taiwanese Sign Language
+     catalog_version: 1.2.0
+     spoken_pair: zh-TW
+     canonical_encoding: hamnosys
+
+   text_to_sign:
+     gloss_generator: tsl.gloss.from_text
+     param_expander: tsl.params.from_gloss
+     prosody_overlay: tsl.prosody
+     non_manual_overrides: tsl.nm.overrides
+
+   sign_to_text:
+     recognizer: tsl.recognize
+     text_generator: tsl.text.from_gloss
+     boundary_detector: tsl.segment  # optional, falls back to shared
+
+   eval:
+     metric_weights: { gloss_bleu: 0.2, param_acc: 0.4, native_signer: 0.4 }
+     native_signer_panel: tsl.panel.config
+
+   capabilities:
+     directions: [text_to_sign, sign_to_text]
+     domains: [everyday, transit]
+     real_time: true
+     regional_variants: [northern, southern]
+   ```
+
+   Codify this as a schema (JSON Schema or Protobuf) in the output.
+
+6. Define versioning. A plug-in pins a catalog version and a runtime
+   API version. Breaking changes to the runtime API bump the major;
+   catalog updates bump the minor. Downstream products pin to a
+   plug-in version range.
+
+### Phase 4 — Language detection at input
+
+7. If language detection is required, design the detector:
+   - **For sign→text input video:** a lightweight model trained on
+     short clips from all supported languages to emit a posterior over
+     the language set. Confidence threshold + fallback to user prompt
+     when low.
+   - **For text→sign input text:** trivial — the input spoken
+     language usually determines the target sign language at the
+     product level (user picks ASL when reading English; LSF when
+     reading French). Document the mapping table.
+
+### Phase 5 — Code-switching
+
+8. If code-switching is in scope:
+   - **Within-utterance:** the recognizer must allow phoneme inventories
+     to mix; budget a joint model or a switching-aware sequence model.
+     Significant research surface — flag the risk explicitly.
+   - **Cross-utterance:** detect language at utterance boundaries; the
+     boundary detector emits language IDs.
+   - Both cases need eval data with code-switched examples; budget
+     the data plan accordingly.
+
+### Phase 6 — Deployment architecture
+
+9. Specify the deployment topology:
+   - Where the pose backbone runs (cloud GPU / on-device).
+   - Where the language-specific plug-ins run (typically cloud — they
+     can be large).
+   - How the avatar renderer is delivered (browser WebGL, native app,
+     server-rendered video).
+   - Caching policy (catalogs are small and stable; cache aggressively).
+10. Capacity model: per-language QPS, latency budget, and degraded-mode
+    behaviour when a plug-in is unavailable.
+
+### Phase 7 — Eval harness shared core
+
+11. The shared eval harness must support per-language metric weights
+    (some languages have stronger gloss BLEU baselines; some rely more
+    heavily on native-signer panels because automatic metrics are
+    weak).
+12. Track per-language scores over time. Pin catalog and plug-in
+    versions in eval runs (via `eval-store` S9). Regressions per
+    language are first-class alerts.
+
+### Phase 8 — Language support matrix
+
+13. Produce the support matrix:
+
+    | Language | text→sign | sign→text | Render | Domain | Catalog v | Plug-in v | Status |
+    |----------|-----------|-----------|--------|--------|-----------|-----------|--------|
+    | ASL | yes | yes | avatar+video | everyday+transit | 1.4.0 | 1.2.1 | GA |
+    | BSL | yes | no  | avatar       | everyday          | 1.0.0 | 0.9.0 | Beta |
+    | TSL | yes | yes | avatar       | everyday+transit | 1.2.0 | 1.0.0 | GA |
+    | JSL | no  | yes | —            | everyday          | 0.5.0 | 0.3.0 | Alpha |
+
+---
+
+## Outputs
+
+Write to `sign/platform/`:
+
+| File | Contents |
+|------|----------|
+| `ARCHITECTURE.md` | Platform overview, shared-infra ↔ plug-in split, deployment topology |
+| `SHARED-INFRA.md` | Each shared component: scope, API, justification for being shared |
+| `PLUGIN-INTERFACE.md` | The plug-in contract (schema), versioning policy, capability flags |
+| `LANGUAGE-SUPPORT-MATRIX.md` | Per-language capability + version status table |
+| `CODE-SWITCHING.md` | If in scope: detection, joint modelling notes, eval data plan |
+| `EVAL-HARNESS.md` | Shared metrics, per-language weights, regression alerting |
+
+---
+
+## Edge cases
+
+- **Spoken-language pairing is not 1:1 with sign language.** ASL pairs
+  with English in the US; LSE pairs with Spanish in Spain; but a
+  Spanish-speaking ASL user exists. The mapping is product-level, not
+  fundamental.
+- **Diglossia within a sign language.** Formal vs casual register can
+  diverge sharply; document in the plug-in capability flags.
+- **Emerging sign languages** (Nicaraguan SL, ABSL) lack standardised
+  catalogs. Marking these `experimental` is honest; treating them as
+  fully supported is dangerous.
+- **Sign-language families are not phylogenies you can interpolate
+  across.** ASL and LSF share lexical roots historically but are not
+  mutually intelligible. Do not exploit "family closeness" as a
+  data-augmentation strategy without native-signer validation.
+- **Bimodal-bilingual users** (Deaf + spoken-language fluent) routinely
+  code-switch with hearing companions; the platform should not assume
+  monolingual signing.
+- **Captioning + signing together** — when a video has both, the
+  platform must keep them in sync, including across language plug-ins.
+
+---
+
+## Dependencies
+
+- **`/sign-linguistics`** — one catalog per supported language.
+  Hard prerequisite for each plug-in.
+- **`/sign-text`** — one pipeline per supported language.
+- **`/avatar-sign`** (Family P) — primary render target for text→sign.
+- **`/eval-store` (S9)** — version-pinned eval runs across languages.
+- **MediaPipe Holistic / Sapiens** — shared pose backbone.
+- **`/scrape`** + **`markitdown`** — catalog ingestion when adding new
+  languages.
+- **Hall's prior multi-language sign work** (if applicable) — log
+  citation in `.gstack/decisions/multi-sign.md`.
+
+Standards / references to cite:
+ISO 639-3 sign-language codes; Spread the Sign for multi-language
+dictionary cross-references; HamNoSys as the recommended canonical
+encoding for cross-language platforms; SignWriting (ISWA 2010) for
+native-signer review tooling.
+
+---
+
+## Rules
+
+1. **Shared infra is thin and well-defined.** When in doubt, push it
+   into the plug-in. Wrong shared abstractions are expensive to undo.
+2. **Plug-in contracts are versioned.** Downstream products pin
+   versions; breaking changes bump majors.
+3. **Do not collapse languages.** Each language is its own phonology,
+   grammar, and culture.
+4. **Native-signer panels are per-language.** Hearing engineering
+   teams cannot validate fluency across languages.
+5. **Capability flags are honest.** "Supported" without
+   native-signer eval is not supported.
+6. **Code-switching is opt-in.** It is significant additional surface;
+   the default is one language per session.

@@ -1,0 +1,194 @@
+---
+name: monorepo-graph
+preamble-tier: 3
+version: 1.0.0
+description: |
+  [Multi-Repo] Unified projection of a monorepo's project graph. Detects Nx, Turbo, Bazel,
+  Lerna, pnpm-workspace, or Rush; projects each tool's native graph into a standard shape;
+  answers cross-tool queries like "what depends on package X?", "what's the longest build
+  chain?", or "which packages are unowned?".
+  Use when asked to "show the project graph", "what depends on X", "monorepo graph",
+  "build chain", "unowned packages", or "monorepo blast radius". (gstack)
+allowed-tools:
+  - Bash
+  - Read
+  - Write
+  - Edit
+  - Grep
+  - Glob
+  - AskUserQuestion
+---
+
+{{PREAMBLE}}
+
+# /monorepo-graph — Family E4 — Multi-Repo / Monorepo
+
+One graph. One query language. Works on Nx, Turbo, Bazel, Lerna, pnpm workspaces, and
+Rush.
+
+The four tools each have their own graph CLI and their own quirks. /monorepo-graph
+runs the native tool, parses its output, and projects it into a uniform shape so
+downstream skills (and you) don't have to learn four mental models.
+
+---
+
+## When to use
+
+- "What breaks if I change package `foo`?" → reverse-dependency query.
+- "Which packages have no CODEOWNER?" → ownership query.
+- "What's the slowest build chain?" → critical-path query.
+- Pre-planning for `/multi-repo-refactor` in a monorepo (provider→consumer order).
+
+Skip for single-package repos.
+
+---
+
+## Inputs
+
+1. **Repo root** — current directory by default.
+2. **Optional query** — e.g. `depends-on foo`, `unowned`, `critical-path`, `affected <sha>`.
+   If omitted, emit the full graph in all three formats.
+3. **Output format** — `md` (default), `json` (machine), `svg` (visual via graphviz).
+
+---
+
+## Pre-flight
+
+```bash
+# Detect tool. Check in this order — earliest wins.
+test -f nx.json && echo "TOOL=nx"
+test -f turbo.json && echo "TOOL=turbo"
+test -f WORKSPACE -o -f WORKSPACE.bazel -o -f MODULE.bazel && echo "TOOL=bazel"
+test -f lerna.json && echo "TOOL=lerna"
+test -f pnpm-workspace.yaml && echo "TOOL=pnpm"
+test -f rush.json && echo "TOOL=rush"
+```
+
+If multiple match (e.g. Nx + pnpm-workspace) — Nx wins, because Nx owns the graph.
+
+If none match: AskUserQuestion → `is this a monorepo?` | `which tool?` | `single repo,
+abort`.
+
+Verify the chosen tool's CLI is on PATH (`nx --version`, `turbo --version`, `bazel
+version`, `lerna --version`, `pnpm --version`, `rush --version`). If missing, print
+the exact install command and abort.
+
+For `affected <sha>` queries: verify `git rev-parse <sha>` resolves, else abort.
+
+---
+
+## Procedure
+
+### Step 1: Pull the native graph
+
+| Tool   | Command                                        | Output |
+|--------|------------------------------------------------|--------|
+| Nx     | `nx graph --file=.gstack-graph.json`           | JSON   |
+| Turbo  | `turbo run build --graph=.gstack-graph.dot --dry=json` | DOT + JSON |
+| Bazel  | `bazel query "deps(//...)" --output=graph`     | DOT    |
+| Lerna  | `lerna list --graph --all --json`              | JSON   |
+| pnpm   | `pnpm list -r --depth -1 --json`               | JSON   |
+| Rush   | `rush list --json`                             | JSON   |
+
+Store the raw output under `docs/monorepo-graph/raw-<tool>.{json,dot}` so the user
+can diff it against the projection if anything looks off.
+
+### Step 2: Project to the unified shape
+
+```json
+{
+  "tool": "nx|turbo|bazel|lerna|pnpm|rush",
+  "generated_at": "<ISO>",
+  "nodes": [
+    {
+      "id": "package-name",
+      "path": "packages/foo",
+      "type": "lib|app|tool|test",
+      "owners": ["@team/foo"],
+      "tags": ["scope:shared", "type:lib"],
+      "build_command": "nx build foo"
+    }
+  ],
+  "edges": [
+    { "from": "app-a", "to": "lib-foo", "kind": "static|dynamic|test-only" }
+  ]
+}
+```
+
+Edge `kind` heuristics:
+- Nx implicit deps + project.json target deps → `static`.
+- Turbo pipeline `dependsOn` → `static`. `"^test"` only → `test-only`.
+- Bazel `deps` → `static`; `runtime_deps` → `dynamic`.
+- Lerna/pnpm/Rush: peer/optional → `dynamic`; dev → `test-only`; regular → `static`.
+
+Read owners from `CODEOWNERS` (root + nested). If a package matches no rule, owner =
+`null` and the package shows up in the `unowned` query.
+
+### Step 3: Run the requested query (or all if none given)
+
+| Query                | Definition                                                              |
+|----------------------|-------------------------------------------------------------------------|
+| `depends-on <pkg>`   | All packages with a path of edges leading to `<pkg>` (consumers).       |
+| `dependencies <pkg>` | All packages reachable from `<pkg>` (providers).                        |
+| `affected <sha>`     | Packages whose path changed in `git diff <sha>..HEAD`, plus their consumers. |
+| `critical-path`      | Longest chain by edge count (tie-break: by `build_command` runtime if known). |
+| `unowned`            | Packages with `owners = null` after CODEOWNERS resolution.              |
+| `cycles`             | Strongly-connected components of size > 1 (illegal in most tools — flag). |
+| `blast-radius <pkg>` | Same as `depends-on` but groups results by owner team.                  |
+
+### Step 4: Emit outputs
+
+- `docs/monorepo-graph.md` — human-readable summary + the query result tables.
+- `docs/monorepo-graph.json` — full unified graph.
+- `docs/monorepo-graph.svg` — graphviz render via `dot -Tsvg` (only if `dot` is on PATH;
+  otherwise emit a note and skip without failing).
+
+`docs/monorepo-graph.md` structure:
+
+```markdown
+# Monorepo Graph (<tool>)
+- Generated: <ISO>
+- Packages: <N> (libs <a>, apps <b>, tests <c>, tools <d>)
+- Owners: <M> teams, <U> unowned packages
+- Cycles: <K> (FAIL if K > 0)
+
+## Query: <name>
+| package | depth | owner |
+|---------|-------|-------|
+| ...     | ...   | ...   |
+```
+
+---
+
+## Outputs
+
+- `docs/monorepo-graph.md` — summary + query result.
+- `docs/monorepo-graph.json` — full unified graph (machine-readable).
+- `docs/monorepo-graph.svg` — visual (when graphviz available).
+- `docs/monorepo-graph/raw-<tool>.*` — raw tool output for debugging.
+
+These files are deterministic given a clean tree + same SHA, so checking them into
+the repo is reasonable. AskUserQuestion before staging — some teams prefer them as
+build artifacts only.
+
+---
+
+## Edge cases
+
+- **Multiple tools coexisting** (Nx + pnpm-workspace is common) — pick the higher-level
+  tool (Nx) but note both in the metadata.
+- **Bazel graph is huge** (~100K nodes is normal) — restrict to first-party packages
+  via `bazel query "//src/..."` and document the filter in the output.
+- **Cycles detected** — print them prominently and exit non-zero so CI can gate on it.
+- **CODEOWNERS path uses globs** — match per GitHub's rules (last matching rule wins);
+  ambiguous cases get listed under both candidate owners.
+- **Native tool errors** (out-of-date lockfile, missing nx.json target) — surface the
+  raw stderr; don't pretend the projection is complete.
+
+---
+
+## Dependencies
+
+- One of: `nx`, `turbo`, `bazel`, `lerna`, `pnpm`, `rush` (matching the detected tool).
+- Optional: `dot` from graphviz (for SVG).
+- Used by: `/multi-repo-refactor`, `/shared-lib-bump`, `/dep-graph` (cross-repo mode).

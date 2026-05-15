@@ -1,0 +1,391 @@
+---
+name: security-training
+preamble-tier: 2
+version: 1.0.0
+description: |
+  [CISO Compliance + IR] Project-specific security training generator. Replaces
+  generic SaaS training with materials that name Hall's actual vendors, cite
+  real diffs (good and bad) from the repo, and walk through the team's own
+  threat model. Outputs markdown training decks + a quiz that doubles as a
+  training-completion record (SOC 2 CC1.4, ISO 27001 A.6.3, HIPAA §164.308(a)(5),
+  PCI-DSS Req 12.6, GDPR Art. 39(1)(b) awareness).
+  Use when: "security training", "phishing simulation", "secure coding training",
+  "awareness training", "training records for SOC 2", "annual training". (gstack)
+allowed-tools:
+  - Bash
+  - Read
+  - Grep
+  - Glob
+  - Write
+  - AskUserQuestion
+  - WebSearch
+triggers:
+  - security training
+  - phishing simulation
+  - secure coding training
+  - security awareness
+  - annual training
+---
+
+{{PREAMBLE}}
+
+{{INTEL_LOGGING}}
+
+{{GBRAIN_CONTEXT_LOAD}}
+
+# /security-training — Project-Specific Security Training (Family C)
+
+Generic phishing-quiz vendors charge $50/user/year for content that doesn't reflect Hall's actual attack surface. The phishing emails name "MegaCorp" and the secure-coding example is in a language Hall doesn't use.
+
+You generate training that uses **Hall's real vendor names, real codebase diffs, and real threat model**. Output is markdown — deck-able with any Markdown→Slides tool — plus a quiz that doubles as the training-completion record auditors will sample.
+
+## When to use
+
+- Annual security awareness training (SOC 2 / ISO / HIPAA / PCI required).
+- Onboarding a new contractor / contributor.
+- After a `/postmortem` surfaces a category of mistake (e.g., "we keep merging hardcoded secrets").
+- After `/vendor-risk` identifies a new high-risk vendor (training the team on its specific phishing pretexts).
+- Quarterly micro-training on one focused topic (phishing / secure coding / data handling / IR).
+
+## Arguments
+
+- `/security-training` — interactive; pick topic.
+- `/security-training --topic phishing` — phishing scenarios using real vendor names.
+- `/security-training --topic secure-coding` — secure coding examples pulled from actual diffs.
+- `/security-training --topic data-handling` — PII / PHI / CHD handling rules per the data classification.
+- `/security-training --topic incident-response` — IR walkthrough using the team's own runbook.
+- `/security-training --topic threat-model` — threat-model walkthrough using the team's own STRIDE doc.
+- `/security-training --topic annual` — annual omnibus covering all topics.
+- `/security-training --audience engineers` — technical depth.
+- `/security-training --audience all-hands` — non-technical version (no code, more scenarios).
+
+## Inputs
+
+1. **Topic** — see arguments above; AskUserQuestion if not provided.
+2. **Audience** — engineers vs all-hands. Engineers get code-level depth; all-hands gets scenario-driven walkthroughs.
+3. **Frameworks in scope** — which compliance requirements this training is evidence for. Determines required topics.
+4. **Codebase signals** — vendor list, recent diffs (good and bad), threat model, postmortem lessons, `/cso` history.
+5. **Prior training** — read `compliance/training/` to find what was covered last cycle; don't repeat content.
+
+## Procedure
+
+### Phase 0 — Topic + audience confirmation
+
+AskUserQuestion in sequence:
+
+1. **"What's the training topic?"** Options: phishing, secure-coding, data-handling, incident-response, threat-model, annual omnibus.
+2. **"Who's the audience?"** Options: engineers (technical depth), all-hands (scenario-driven), contractors (subset of all-hands + NDA-specific), customer-success (data-handling focus).
+3. **"What's this training evidence for?"** Options: SOC 2 CC1.4 annual, ISO 27001 A.6.3, HIPAA §164.308(a)(5), PCI Req 12.6, GDPR Art. 39, internal only.
+
+The framework determines required topics — HIPAA §164.308(a)(5)(ii)(D) explicitly requires login monitoring training; PCI Req 12.6.3 requires acknowledgment annually; SOC 2 CC1.4 requires evidence of receipt.
+
+### Phase 1 — Source material harvest
+
+Pull real material from Hall's repo:
+
+```bash
+# Vendor list for phishing scenarios
+ls compliance/vendors.md compliance/sub-processors/ 2>/dev/null
+[ -f compliance/vendors.md ] && grep -E "^[A-Za-z]" compliance/vendors.md | head -30
+
+# Threat model for threat-model walkthrough
+ls docs/threat-model.md 2>/dev/null
+
+# Recent /cso findings for secure-coding examples
+ls .gstack/security-reports/*.json 2>/dev/null | tail -5
+
+# Recent postmortems for "what went wrong" stories
+ls incidents/*/postmortem.md 2>/dev/null | tail -10
+
+# Recent diffs for secure-coding before/after
+git log --oneline -100 --grep="fix\|security" 2>/dev/null
+
+# Data classification for data-handling training
+grep -E "RESTRICTED|CONFIDENTIAL|INTERNAL|PUBLIC|PII|PHI|CHD" docs/ -r 2>/dev/null | head -10
+```
+
+If artifacts are missing, AskUserQuestion to fill the gap OR note "no live example — using illustrative scenario."
+
+### Phase 2 — Topic-specific content generation
+
+#### Topic: phishing
+
+Use the actual vendor list from `compliance/vendors.md`. Generate 5-7 phishing scenarios that look real to Hall's team:
+
+```
+SCENARIO 1 — Vendor SSO password expiry
+═══════════════════════════════════════
+Real sender field:     security@auth-okta-support.com
+Spoofed brand:         Okta (you actually use Okta)
+Pretext:               "Your Okta password expires in 24 hours. Click to extend."
+Tell:                  Domain is auth-okta-support.com, not okta.com.
+                       Real Okta resets go through the Okta admin console, never email links.
+What you actually do:  Type okta.com directly. Or check the Okta admin panel from the
+                       sidebar bookmark.
+
+SCENARIO 2 — Stripe payout failed
+═════════════════════════════════
+Real sender field:     payouts-team@stripe-payments-help.com
+Spoofed brand:         Stripe
+Pretext:               "Your $4,283 payout failed. Update bank info to retry."
+Tell:                  Real Stripe sends from no-reply@stripe.com or related@stripe.com.
+                       Stripe NEVER asks you to update bank info from an email link.
+What you actually do:  Open dashboard.stripe.com directly. If a payout actually failed,
+                       it'll be in the dashboard.
+
+SCENARIO 3 — Sentry "incident" requiring acknowledgment
+═══════════════════════════════════════════════════════
+[Use ACTUAL vendors Hall uses]
+```
+
+The scenarios MUST name vendors from `compliance/vendors.md`. Generic "PayPal" scenarios don't land for a team that doesn't use PayPal.
+
+Include a section on **AI-era phishing tells**:
+- Voice cloning (the "founder's voice asking for a wire transfer" scenario)
+- LLM-generated text without typos (no longer a tell)
+- Deep-fake video on calls (verify with a known channel before acting on urgent requests)
+- Spear-phish targeting from public OSS contributions (the GitHub commit history phish)
+
+#### Topic: secure-coding
+
+Pull real diffs from `git log`. For each major secure-coding lesson, find a real example:
+
+```
+LESSON 1 — Input validation at the trust boundary
+═════════════════════════════════════════════════
+Bad example (from our own git history, anonymized):
+  // PR #142, reverted after /cso flagged it
+  const data = JSON.parse(req.body);
+  await db.query(`INSERT INTO orders (data) VALUES ('${data.payload}')`);
+
+What's wrong:
+  - No schema validation on req.body
+  - String interpolation in SQL (classic injection vector)
+  - data.payload could be any shape, including objects we'd serialize incorrectly
+
+Good example (current code, post-fix):
+  // src/api/orders.ts
+  const parsed = OrderSchema.parse(req.body);  // zod validation
+  await db.query('INSERT INTO orders (data) VALUES ($1)', [parsed.payload]);
+
+Lesson: Validate at the trust boundary. Trust nothing from req.body until a
+schema has touched it. Use parameterized queries always.
+
+This appeared in our codebase. /cso flagged it. We fixed it. Don't reintroduce it.
+```
+
+Generate 5-7 lessons covering the categories that match Hall's actual stack:
+- Input validation (universal)
+- SQL / NoSQL injection (per DB)
+- XSS / SSTI (per framework — React-safe by default, jinja2 NOT)
+- SSRF (per HTTP client)
+- Secret management (env vs hardcoded)
+- Authentication boundaries (which routes need auth)
+- Authorization boundaries (who can access whose data)
+- LLM-specific: prompt injection if Hall ships AI features
+- Rate limiting & cost containment for AI calls
+
+Pull the BAD examples from `/cso` history if available; otherwise use canonical bad examples from OWASP. Pull the GOOD examples from current code.
+
+#### Topic: data-handling
+
+Use the actual data classification from `/cso` Phase 11 output if available. Otherwise generate from the codebase:
+
+```
+WHAT WE HOLD, AND HOW WE HANDLE IT
+══════════════════════════════════
+RESTRICTED  Payment card data (PCI scope)
+            - Stored: NEVER. We tokenize via Stripe; we never see PAN.
+            - In transit: TLS 1.2+ to Stripe API only.
+            - Access: nobody on the team should ever see a PAN.
+
+RESTRICTED  PII (regulated): name, email, phone, billing address
+            - Stored: Postgres (encrypted at rest), Stripe (tokenized)
+            - Access: production read access via VPN + audit log.
+            - Sharing: only sub-processors in compliance/vendors.md.
+
+CONFIDENTIAL API keys, credentials
+            - Stored: env vars only. NEVER commit.
+            - Rotation: quarterly for non-vendor, on incident for vendor keys.
+            - Sharing: 1Password vault; never paste in Slack, email, or chat with AI.
+```
+
+Add specific rules for THIS project:
+- Where data lives (DB / Stripe / S3 / Sentry sampling)
+- Who can access prod (just Hall, or named contractors)
+- How sub-processors are added (vendor-risk review first)
+- AI / LLM data handling: what's in scope to send to OpenAI/Anthropic, what's not
+
+#### Topic: incident-response
+
+Walk through the team's own runbook at `ops/runbooks/incident-response.md`. Don't copy it; quiz on it.
+
+```
+SCENARIO — You see a 500 error spike at 2 AM
+════════════════════════════════════════════
+What do you do?
+  A) Investigate alone for an hour, then escalate
+  B) Check our runbook, declare SEV-N if criteria match, page if SEV-1/2
+  C) DM Hall directly, wait for response
+  D) Roll back the most recent deploy speculatively
+
+Correct: B. Open ops/runbooks/incident-response.md. Apply the severity rubric.
+         If symptoms match SEV-1 criteria (hard down, breach, data loss), page.
+         If SEV-2 (partial down), declare in Slack.
+         Don't speculative-rollback without IC confirmation.
+```
+
+Use the EXACT severity criteria from Hall's runbook. Use the EXACT communication channels Hall actually has set up.
+
+#### Topic: threat-model
+
+Walk through `docs/threat-model.md` (from `/threat-model-evolve`). Pick 2-3 of Hall's actual STRIDE entries and explain them as scenarios:
+
+```
+THREAT — Component: API Gateway
+═══════════════════════════════
+S (Spoofing): An attacker registers acme.example.com and CNAMEs it to our
+              ingress, hoping users connect there. Mitigation: HSTS preload,
+              Cert pinning at the SDK layer, monitoring for unauthorized
+              CNAMEs to our IPs.
+
+What's YOUR role: If you notice DNS records you didn't add, that's a sign.
+                  If a customer reports a weird URL, escalate immediately.
+```
+
+Use the team's own components, the team's own STRIDE assessments.
+
+### Phase 3 — Quiz generation
+
+Generate 10 multiple-choice questions per topic. The quiz is the audit artifact.
+
+```
+QUIZ — Phishing Awareness (annual)
+═══════════════════════════════════
+
+Q1: You receive an email from "billing@stripe-support.com" saying your
+    payout failed. What's the right action?
+    A) Click the link — it's faster
+    B) Forward to security@ours.com and ignore the email
+    C) Open dashboard.stripe.com directly; check there
+    D) Reply asking for proof
+
+Answer: C. Real Stripe issues surface in the dashboard. Don't trust email links
+       for financial info.
+
+Q2: ...
+```
+
+10 questions, mix of:
+- 3 vendor-specific phishing scenarios
+- 2 secure-coding pattern recognition (here's a snippet; spot the vuln)
+- 2 data-handling rule application (you have X data, can you put it in Y?)
+- 2 IR procedure recall (what's the SEV-1 threshold?)
+- 1 threat-model awareness (what's our biggest STRIDE risk?)
+
+Pass threshold: 8/10. Required for compliance evidence.
+
+### Phase 4 — Training record / acknowledgment
+
+Append the training completion record. This IS the compliance artifact.
+
+```
+TRAINING COMPLETION RECORD
+══════════════════════════
+Topic:           Annual Security Awareness
+Cycle:           2026-Q2
+Audience:        engineers + all-hands
+Material:        compliance/training/annual-2026-Q2.md
+Quiz pass:       8/10 minimum
+Frameworks:      SOC 2 CC1.4, ISO 27001 A.6.3, HIPAA §164.308(a)(5), PCI Req 12.6
+
+| Name           | Role            | Completed   | Quiz score | Signed |
+| ───            | ───             | ───         | ───        | ───    |
+| Hall           | Founder/CISO    | 2026-04-15  | 10/10      | ✓      |
+| [contractor 1] | Eng (contract)  | 2026-04-16  | 9/10       | ✓      |
+| [contractor 2] | CS (contract)   | pending     | -          | -      |
+```
+
+The signed column means initial / digital signature / DocuSign. SOC 2 evidence needs a signature, not just attendance. Append the row when each person completes.
+
+### Phase 5 — Save artifacts
+
+```bash
+mkdir -p compliance/training
+```
+
+Write:
+- `compliance/training/{topic}-{YYYY-MM}.md` — full deck-able training content
+- `compliance/training/{topic}-{YYYY-MM}-quiz.md` — quiz with answers
+- `compliance/training/{topic}-{YYYY-MM}-records.md` — completion record table
+
+Append to `~/.gstack/projects/{slug}/training.jsonl`:
+
+```json
+{
+  "ts": "2026-05-16T09:00:00Z",
+  "topic": "annual",
+  "cycle": "2026-Q2",
+  "audience": "all-hands",
+  "frameworks": ["soc2-CC1.4", "iso-A.6.3", "hipaa-308a5", "pci-12.6"],
+  "material_file": "compliance/training/annual-2026-Q2.md",
+  "quiz_pass_threshold": 8,
+  "completions_required": 5,
+  "completions_done": 0
+}
+```
+
+## Outputs
+
+- `compliance/training/{topic}-{YYYY-MM}.md` — training deck
+- `compliance/training/{topic}-{YYYY-MM}-quiz.md` — quiz + answer key
+- `compliance/training/{topic}-{YYYY-MM}-records.md` — signed completion records
+- `~/.gstack/projects/{slug}/training.jsonl` — typed summary
+
+## Edge cases
+
+- **No vendor list yet.** Run `/vendor-risk --discover` first. Phishing scenarios need real vendors.
+- **No threat model yet.** Run `/threat-model-evolve` first. Threat-model walkthrough is empty without it.
+- **No prior /cso run.** Secure-coding examples fall back to OWASP canonical bad examples; note "no project-specific examples yet."
+- **Solo founder + no team.** Training still required for SOC 2 CC1.4 ("entity-wide" includes founder). Hall takes the training and self-signs. The record is still valid.
+- **Contractor onboarding.** Same training; record kept. Contract should reference completion.
+- **Audit asks "show me training material" mid-cycle.** Use last cycle's `compliance/training/` files until current cycle completes.
+- **Quiz too easy.** If the entire audience scores 10/10 in 2 minutes, the training was too generic. Next cycle, draw harder examples from actual incidents.
+- **Acknowledgment fraud risk.** Digital signature with timestamp + IP is the minimum evidence; DocuSign or 1Password Watchtower is stronger.
+
+## Dependencies
+
+- **S1 — Hall-mode preamble** (founder-CISO framing — Hall takes the training too)
+- **S4 — Decision Record store** (training policy decisions go to `docs/decisions/`)
+- **S7 — `/intel` schema v2** (typed training events)
+- **`/cso`** — provides real secure-coding examples (good + bad) from history
+- **`/vendor-risk`** — provides real vendor list for phishing scenarios
+- **`/threat-model-evolve`** — provides real threat model for threat-walkthrough topic
+- **`/postmortem`** — lessons feed into "what went wrong" sections
+- **`/incident-response`** — runbook drives IR-topic content
+- **`/compliance-audit`** — consumes training records as evidence for CC1.4, A.6.3, §164.308(a)(5), Req 12.6
+
+{{LEARNINGS_LOG}}
+
+{{GBRAIN_SAVE_RESULTS}}
+
+## Important rules
+
+- **Use REAL vendor names, real diffs, real threat-model entries.** Generic training is what Hall is replacing.
+- **The quiz IS the evidence.** No pass record → no compliance evidence. Score + sign + date.
+- **Don't recycle last cycle's content verbatim.** SOC 2 asks for evidence of "ongoing" training; identical content year-over-year is a finding.
+- **Founder is in scope.** SOC 2 CC1.4 covers "the entity." Hall takes the training and self-signs.
+- **Contractors are in scope.** Anyone with prod access takes the training. Document it in the contract.
+- **AI / LLM data handling is a 2026+ section.** Don't ship training without it if Hall uses any LLM in product or tooling.
+
+## Disclaimer
+
+**This skill is not a substitute for an enterprise security awareness platform
+(KnowB4, Hoxhunt, Living Security, etc.) or qualified compliance counsel.**
+/security-training generates project-specific content suitable for founder-mode
+CISO operation; auditors will accept the material + signed records as evidence
+for CC1.4 / A.6.3 / §164.308(a)(5) / Req 12.6, but as the team grows past ~10
+people, a dedicated training platform with per-user tracking, regulatory updates,
+and simulated phishing is the next step. For HIPAA + PHI scope, also engage a
+qualified HIPAA security officer for content review. Always include this
+disclaimer at the end of every report output.

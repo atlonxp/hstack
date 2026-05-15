@@ -1,0 +1,434 @@
+---
+name: chaos
+preamble-tier: 2
+version: 1.0.0
+description: |
+  [Cloud-Native] Design and run chaos engineering experiments per dependency-graph
+  node. Generates Litmus / Chaos Mesh experiments (pod kill, network delay,
+  CPU stress, dep failure), defines steady-state hypotheses from existing SLOs,
+  runs in staging, and measures actual SLO impact. Requires /sre-slo and a
+  dependency graph. Use when: "chaos engineering", "fault injection experiments",
+  "game day", "resilience testing", "litmus", "chaos mesh". (gstack)
+allowed-tools:
+  - Read
+  - Write
+  - Edit
+  - Glob
+  - Grep
+  - Bash
+  - AskUserQuestion
+  - WebSearch
+triggers:
+  - chaos engineering
+  - fault injection experiment
+  - game day
+  - resilience testing
+  - litmus
+  - chaos mesh
+---
+
+{{PREAMBLE}}
+
+{{GBRAIN_CONTEXT_LOAD}}
+
+# /chaos — Family E3 — Cloud-Native
+
+Chaos engineering is talked about, not done. Engineers don't know what to
+break, can't measure impact when they do, and the runs get filed under
+"interesting" without changing anything.
+
+This skill fixes that pipeline:
+
+1. Read the dependency graph (services + downstream deps).
+2. Recommend one experiment **per node** in priority order (riskiest first).
+3. For each: define a **steady-state hypothesis** from the service's
+   `/sre-slo` (e.g., "p95 latency < 1s, error rate < 0.1%").
+4. Generate the Chaos Mesh / Litmus experiment manifest.
+5. Run in staging, measure impact on the steady state, write the report.
+6. If the hypothesis fails: file a real ticket with a remediation, don't
+   just say "interesting."
+
+This is the discipline that turns chaos engineering from theater into
+learning.
+
+## When to use
+
+- Service is in prod, has SLOs, and has never been intentionally broken.
+- "Game day" coming up — generate the experiment plan.
+- Resilience claims (retries, circuit breakers, failovers) need verification.
+- Post-incident: prove the fix actually fixed the failure mode.
+
+NOT for: production-only "let's see what happens" runs without hypotheses,
+chaos in environments without metrics, or one-off pod kills with no measurement.
+
+## Inputs (gather via AskUserQuestion)
+
+1. **Dependency graph source**
+   - Existing `/dep-graph` output (preferred)
+   - Manual list (user provides services + deps)
+   - Auto-detect from Kubernetes (Services + NetworkPolicy edges) — best effort
+2. **Target environment**
+   - Staging (default; the right answer for first runs)
+   - Pre-prod / canary cluster
+   - Production (only with explicit confirmation, blast-radius limits, and
+     a rollback plan — see Step 9)
+3. **Chaos engine**
+   - **Chaos Mesh** — k8s-native, CRD-driven, good UI, broad fault catalog.
+     Recommended default.
+   - **Litmus** — broader workflows, ChaosCenter UI, hooked into Argo workflows.
+   - **Gremlin** — managed SaaS; pick if no operator interest.
+   - **AWS Fault Injection Simulator / GCP equivalents** — for cloud-resource
+     faults (zone outage simulation, EBS slow disk).
+4. **Steady-state metrics source**
+   - SLOs from `/sre-slo` (preferred)
+   - Custom thresholds (define explicitly)
+5. **Rollout authorization**
+   - For prod: who signs off? Default is "no prod without explicit `prod=true`
+     flag in the experiment, plus written approval."
+
+Persist to `CLAUDE.md` under `## Chaos Engineering`.
+
+## Procedure
+
+### Step 1: Verify prerequisites
+
+```bash
+# Dep graph exists?
+ls docs/dep-graph.* deploy/dep-graph.* 2>/dev/null
+
+# SLOs defined?
+ls docs/slos/*.md 2>/dev/null
+
+# Chaos engine installed?
+kubectl get crd | grep -E "chaos-mesh.org|litmuschaos.io" 2>/dev/null
+```
+
+If `/sre-slo` and `/dep-graph` haven't run, send the user there first.
+Chaos without an SLO is theater.
+
+### Step 2: Enumerate experiment candidates per node
+
+For each service S in the dep graph, generate one experiment per failure mode:
+
+| Failure mode | What it tests | Fault injection |
+|---|---|---|
+| **Pod kill** | Pod replacement, PDB, graceful drain | `PodChaos: pod-kill` |
+| **Pod failure (no restart)** | HPA reaction, capacity planning | `PodChaos: pod-failure` |
+| **Container CPU stress** | CPU limits, HPA, neighbor isolation | `StressChaos: cpu` |
+| **Container memory stress** | OOMKill behavior, memory limits | `StressChaos: memory` |
+| **Network delay** | Retries, timeouts, p99 latency | `NetworkChaos: delay` |
+| **Network packet loss** | TCP retries, timeout tuning | `NetworkChaos: loss` |
+| **Network partition** | Circuit breaker, fallback path | `NetworkChaos: partition` |
+| **DNS failure** | Resolver caching, retry behavior | `DNSChaos` |
+| **Downstream dep slow** | Timeout policy, queue backpressure | `NetworkChaos: delay` (target=dep) |
+| **Downstream dep error** | Retry storm, error budget burn | `HTTPChaos: response delay/status` |
+| **Disk pressure** | StatefulSet behavior, eviction | `IOChaos: latency/fault` |
+| **Time skew** | TTL caches, JWT expiry, monitoring | `TimeChaos` |
+| **Zone failure** | Topology spread, multi-AZ failover | `kubectl drain` of all zone nodes |
+
+Score each by **expected impact × likelihood × ease-of-rollback**. Start
+with the highest-impact / safest-rollback experiments. Pod kill on a
+3-replica web service with a PDB is low-cost; partitioning a database is
+high-cost.
+
+### Step 3: Define the steady-state hypothesis
+
+Per experiment, write the hypothesis BEFORE running. Format:
+
+> **During fault `F` applied to `S` for duration `D` in environment `E`,
+> the steady-state metrics `M` will remain within bounds `B`.**
+
+Example:
+
+> During pod-kill of one replica of `api-server` (3 replicas total) for 5
+> minutes in staging, the SLI metrics will remain within:
+> - error rate < 0.5% (3× steady-state)
+> - p95 latency < 1500ms (1.5× steady-state)
+> - successful requests per second ≥ 90% of baseline
+
+If you can't write this hypothesis, you don't know what you're testing —
+go back to Step 2.
+
+### Step 4: Generate the Chaos Mesh manifest
+
+```yaml
+# chaos/experiments/api-pod-kill.yaml
+apiVersion: chaos-mesh.org/v1alpha1
+kind: PodChaos
+metadata:
+  name: api-pod-kill
+  namespace: chaos-testing
+spec:
+  action: pod-kill
+  mode: one          # kill one pod at a time, not all
+  duration: "5m"
+  selector:
+    namespaces: [staging]
+    labelSelectors:
+      app.kubernetes.io/name: api-server
+  scheduler:
+    cron: "@every 10m"   # repeat to get >1 data point per run; remove for single-shot
+```
+
+For network delay:
+
+```yaml
+apiVersion: chaos-mesh.org/v1alpha1
+kind: NetworkChaos
+metadata: { name: api-to-db-slow, namespace: chaos-testing }
+spec:
+  action: delay
+  mode: all
+  selector:
+    namespaces: [staging]
+    labelSelectors: { app.kubernetes.io/name: api-server }
+  delay:
+    latency: "200ms"
+    correlation: "50"
+    jitter: "50ms"
+  direction: to
+  target:
+    mode: all
+    selector:
+      namespaces: [staging]
+      labelSelectors: { app.kubernetes.io/name: postgres }
+  duration: "10m"
+```
+
+For HTTP-level fault (returns 500 from a downstream):
+
+```yaml
+apiVersion: chaos-mesh.org/v1alpha1
+kind: HTTPChaos
+metadata: { name: payment-dep-500, namespace: chaos-testing }
+spec:
+  mode: all
+  selector:
+    labelSelectors: { app.kubernetes.io/name: api-server }
+  target: Request
+  port: 8080
+  path: "/payments/*"
+  abort: true
+  duration: "5m"
+```
+
+### Step 5: Write the run plan per experiment
+
+Each experiment gets a markdown plan:
+
+```markdown
+# chaos/experiments/api-pod-kill.md
+
+## Experiment: api-pod-kill
+
+### Hypothesis
+During pod-kill of one api-server replica (3 replicas total) for 5
+minutes in staging, the SLI metrics will remain within:
+- error rate < 0.5%
+- p95 latency < 1500ms
+- successful RPS ≥ 90% of baseline
+
+### Pre-run checklist
+- [ ] Staging cluster healthy (run `kubectl get pods -n staging`).
+- [ ] Baseline metrics captured (run `chaos/scripts/baseline.sh api-server 15m`).
+- [ ] Alerts routed to chaos channel, NOT pager.
+- [ ] Rollback runbook reviewed (`chaos/runbooks/abort.md`).
+- [ ] On-call notified that chaos is in progress.
+
+### Run command
+```bash
+kubectl apply -f chaos/experiments/api-pod-kill.yaml
+```
+
+### Post-run analysis
+```bash
+chaos/scripts/measure.sh api-pod-kill 2026-MM-DDTHH:MM:SSZ 2026-MM-DDTHH:MM:SSZ
+```
+
+### Abort
+```bash
+kubectl delete -f chaos/experiments/api-pod-kill.yaml
+```
+
+### Expected outcomes
+- 1 pod terminates, k8s schedules replacement within ~30s.
+- Readiness probe drops failing pod from Service endpoints.
+- Brief spike in p95 latency expected (~5-10% increase for ~1m).
+- Error rate should NOT exceed 0.5%.
+
+### Failure → ticket
+If error rate exceeds 0.5%:
+- Likely cause 1: rolling-update PDB blocks replacement.
+- Likely cause 2: client retries amplify load on remaining 2 pods.
+- Likely cause 3: connection draining not honored.
+Open a ticket tagged `resilience` with the captured metrics.
+```
+
+### Step 6: Run in staging
+
+Always staging first. Order:
+
+1. Establish baseline (15min of clean metrics, captured).
+2. Apply experiment.
+3. Watch dashboards in real time. Be ready to abort.
+4. Let duration complete OR abort if metrics breach the hypothesis.
+5. Wait for system to return to steady state (typically 5-10 minutes).
+6. Capture post-experiment metrics.
+
+### Step 7: Measure impact
+
+Pull the four SLO-relevant series from Prometheus over the experiment
+window:
+
+```bash
+# Compare to baseline
+chaos/scripts/measure.sh {experiment} {start} {end} > chaos/runs/$(date +%Y-%m-%d)-{experiment}.json
+```
+
+Generate a comparison table:
+
+| Metric | Baseline (pre) | During | Post-recovery | Bound | PASS/FAIL |
+|---|---|---|---|---|---|
+| Error rate | 0.05% | 0.3% | 0.05% | < 0.5% | PASS |
+| p95 latency | 800ms | 1200ms | 850ms | < 1500ms | PASS |
+| Successful RPS | 1000 | 920 | 990 | ≥ 900 | PASS |
+
+### Step 8: Write the run report
+
+```markdown
+# chaos/runs/2026-MM-DD-api-pod-kill.md
+
+## Run: api-pod-kill — <date> <HH:MM TZ>
+**Environment:** staging
+**Duration:** 5m
+**Operator:** <name>
+
+### Hypothesis
+<paste from experiment plan>
+
+### Result: PASS / FAIL
+
+### Metrics
+<paste comparison table>
+
+### Observations
+- <what happened, in plain language>
+- <anything surprising — even on a PASS>
+
+### Action items
+- [ ] <ticket reference + owner>
+- [ ] <follow-up experiment, if any>
+
+### Decisions
+- Promote experiment to weekly scheduled run? Y/N
+- Promote experiment to production game day? Y/N (only if 3 consecutive
+  PASS runs in staging)
+```
+
+### Step 9: Production guardrails (only if user asks)
+
+Prod runs require ALL of:
+
+1. **Three consecutive PASS in staging** for the same experiment.
+2. **`prod=true`** explicitly in the experiment manifest annotations.
+3. **Blast-radius limits**: target one pod, one zone, one tenant — never all.
+4. **Active operator** at the keyboard — never scheduled chaos in prod
+   without a human on standby.
+5. **Auto-abort hook**: a watchdog that kills the experiment when SLO
+   burn-rate alert fires. Generate:
+
+```yaml
+apiVersion: chaos-mesh.org/v1alpha1
+kind: Workflow
+metadata: { name: api-pod-kill-with-watchdog, namespace: chaos-prod }
+spec:
+  entry: parallel
+  templates:
+    - name: parallel
+      templateType: Parallel
+      children: [kill, watchdog]
+    - name: kill
+      templateType: PodChaos
+      podChaos: { action: pod-kill, mode: one, duration: "2m", selector: { ... } }
+    - name: watchdog
+      templateType: Task
+      task:
+        container:
+          image: gstack/chaos-watchdog:latest
+          env:
+            - { name: ABORT_ON_ALERT, value: "<service>SLOFastBurn" }
+            - { name: ABORT_ACTION, value: "kubectl delete podchaos/api-pod-kill" }
+```
+
+6. **AskUserQuestion gate** at run time: "Confirm prod chaos run? Y/N"
+   — agent does NOT auto-execute.
+
+### Step 10: Quarterly chaos backlog review
+
+```markdown
+# chaos/QUARTERLY-<quarter>.md
+
+## Coverage
+- Services with at least one PASS experiment: <count> / <total>
+- Services with no chaos coverage: <list>
+
+## Tickets filed
+- <list of resilience tickets opened from chaos runs>
+
+## Fixed regressions
+- <previously-failed experiments that now PASS>
+
+## Promotion candidates
+- <experiments ready to graduate from staging to weekly schedule>
+- <experiments ready for production game day>
+```
+
+## Outputs
+
+- `chaos/experiments/{slug}.yaml` — the manifest.
+- `chaos/experiments/{slug}.md` — the plan + hypothesis.
+- `chaos/runs/{YYYY-MM-DD}-{slug}.md` — the run report.
+- `chaos/runbooks/abort.md` — generic abort procedure.
+- `chaos/QUARTERLY-{quarter}.md` — review.
+- `chaos/scripts/baseline.sh` + `chaos/scripts/measure.sh` — helper scripts.
+
+## Edge cases
+
+- **No SLOs defined.** Refuse to generate experiments. Send to `/sre-slo`.
+- **Dep graph is stale.** Surface in the report; topology drift makes
+  experiments target wrong nodes.
+- **Single-replica deployments.** Don't pod-kill — that's just a deploy.
+  Test failover differently (zone failure if multi-zone; otherwise it's
+  not a resilience test, it's a deploy test).
+- **Stateful primary (DB / queue leader).** Killing the primary should
+  trigger failover, not data loss. Have a recovery plan AND a backup
+  ready BEFORE the run.
+- **Shared staging cluster.** Chaos in a shared cluster affects other
+  teams. Coordinate; better yet, isolate per namespace + NetworkPolicy.
+- **Vendor SaaS dependencies.** Can't fault-inject. Simulate with mocks
+  or local proxies that return failures (toxiproxy, WireMock).
+- **Time chaos breaks JWT / TLS.** Documented gotcha. Don't time-skew a
+  pod that validates JWTs unless you understand the blast radius.
+
+## Dependencies
+
+- **S1 (Hall-mode preamble)** — provided by `{{PREAMBLE}}`.
+- **/sre-slo** — required. Hypotheses are written against SLO metrics.
+- **/dep-graph** — required. Experiment priority comes from graph topology.
+- **/observability** — required upstream. Prometheus must have the
+  pre-experiment metrics.
+- **S5 (cluster access)** — required for staging cluster.
+- `chaos-mesh` or `litmus` operator installed.
+
+## Important rules
+
+- **No hypothesis → no experiment.** Every YAML has a `.md` peer with the
+  steady-state hypothesis.
+- **Staging before prod, three PASS before prod.** Production game days
+  require track record.
+- **Bound the blast radius.** Default `mode: one`, never `mode: all` in
+  prod.
+- **Operator on standby.** Never schedule chaos in production unattended.
+- **Watchdog + abort hook.** Auto-stop on SLO burn-rate alert.
+- **A failed hypothesis files a ticket.** Don't just write "interesting"
+  in the run report.

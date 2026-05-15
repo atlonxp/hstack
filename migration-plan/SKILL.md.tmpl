@@ -1,0 +1,327 @@
+---
+name: migration-plan
+preamble-tier: 2
+version: 1.0.0
+description: |
+  [Chief Architect] Given a from→to migration (DB engine swap, framework upgrade,
+  language port, region move, monolith→services), picks the safest pattern
+  (strangler fig, parallel run, blue-green, canary, dark launch) and emits a
+  phased plan with cutover criteria, rollback triggers, observability
+  requirements, and team-capacity check. Also produces an `/autobuild`-compatible
+  TASKS.md so the plan can drive implementation. Use when: "migration plan",
+  "migrate from X to Y", "strangler fig", "blue-green deploy", "cutover plan",
+  or "how do we get off this thing". (gstack)
+allowed-tools:
+  - Read
+  - Write
+  - Edit
+  - Grep
+  - Glob
+  - AskUserQuestion
+  - Bash
+  - WebSearch
+triggers:
+  - migration plan
+  - migrate from
+  - strangler fig
+  - cutover plan
+  - blue-green
+---
+
+{{PREAMBLE}}
+
+{{GBRAIN_CONTEXT_LOAD}}
+
+# /migration-plan — Family D — Chief Architect
+
+Big migrations are scary because there's no de-risked plan. This skill picks
+the **safest pattern for the specific from→to shape**, then writes a phased
+plan with explicit cutover criteria, rollback triggers, and a team-capacity
+sanity check. The output is a markdown plan + a TASKS.md `/autobuild` can run.
+
+## When to use
+
+- DB engine swap (Postgres → Aurora, MySQL → Postgres, Mongo → Postgres).
+- Framework / runtime upgrade with breaking semantics (Rails 5 → 7, Node 14 →
+  20, Python 2 → 3, Java 8 → 21).
+- Language port (Ruby → Go, Python → Rust) of a single service.
+- Region or cloud move (AWS us-east-1 → eu-west-1, AWS → GCP, on-prem → cloud).
+- Monolith → services decomposition (or services → monolith, if that's the
+  honest call).
+- Auth provider swap (custom JWT → Auth0, Okta → Cognito).
+- Sync → async architecture move (REST → queue).
+
+**Do not use for:**
+
+- A library upgrade that's a `pnpm up` — that's not a migration.
+- A schema change inside the same DB — that's a `/db-design` migration with
+  a backfill plan.
+- A re-platform of multiple unrelated services at once — split into one
+  `/migration-plan` per service.
+
+## Inputs
+
+The skill needs:
+
+1. **From state** — what runs today. Tech, version, scale (RPS, GB, MAU),
+   dependencies. Read from `/service-catalog` if present, else codebase scan,
+   else AskUserQuestion.
+2. **To state** — target tech, version, deployment shape, business reason.
+3. **Hard constraints** — downtime budget, compliance (e.g., PCI requires no
+   data egress to other regions), team headcount, deadline.
+4. **Observability today** — does prod have metrics, logs, traces? Migration
+   without observability is a migration without rollback signal.
+
+## Migration patterns this skill knows
+
+The choice of pattern is the most important decision. The skill picks one
+explicitly and explains why.
+
+| Pattern        | Best for                                                                  | Worst for                                              |
+|----------------|---------------------------------------------------------------------------|--------------------------------------------------------|
+| **Strangler fig** | Framework upgrade, language port of a service with stable boundaries.   | DB engine swap (data has to be in one place).          |
+| **Parallel run** | DB engine swap, business-critical logic change, anything irreversible.  | High-write workloads where doubling writes is too costly. |
+| **Blue-green**  | Stateless service deploy, region move, infra-only changes.                | Stateful systems (DB, queue) where two copies diverge. |
+| **Canary**      | Risky deploy of a small change to a large user base.                      | Schema or contract changes that can't be partial.      |
+| **Dark launch** | New feature that needs production-traffic validation before user exposure. | Backward-incompatible changes.                         |
+| **Big-bang cutover** | Rare. Only when above patterns are demonstrably impossible.          | Most things.                                           |
+
+The skill's default mapping:
+
+| From → To shape                                  | Recommended pattern               |
+|--------------------------------------------------|-----------------------------------|
+| DB engine swap (e.g., Mongo → Postgres)          | Parallel run + dual-write + read-shadow |
+| Framework version upgrade (Rails 5 → 7)          | Strangler fig (route by feature flag) |
+| Monolith → services                              | Strangler fig per bounded context |
+| Region / cloud move (stateless)                  | Blue-green (DNS / global LB cutover) |
+| Region / cloud move (stateful)                   | Parallel run with data replication, blue-green cutover |
+| Auth provider swap                               | Dual-validate (accept old + new tokens), strangler |
+| Sync → async (REST → queue)                      | Dark launch behind feature flag, then strangler |
+| Single small risky deploy                        | Canary (5% → 25% → 100%) |
+
+If the user disagrees, take their pick but flag the tradeoff explicitly.
+
+## Procedure
+
+### Step 0: Detect current state
+
+```bash
+# Check for catalog
+[ -f docs/services/INDEX.md ] && echo "service-catalog: yes" || echo "service-catalog: no"
+
+# Check for c4 diagram
+ls docs/architecture/02-container.md 2>/dev/null && echo "c4-container: yes"
+
+# Common tech detection
+[ -f package.json ] && jq -r '.dependencies // {} | keys[]' package.json 2>/dev/null | head -20
+[ -f requirements.txt ] && head -20 requirements.txt
+[ -f go.mod ] && head -5 go.mod
+[ -f Gemfile ] && head -10 Gemfile
+
+# Infra detection
+find . -maxdepth 3 -name "docker-compose*.yml" -o -name "Chart.yaml" -o -name "main.tf" 2>/dev/null | head -10
+```
+
+Summarize the current state out loud.
+
+### Step 1: AskUserQuestion — migration scope
+
+One issue per call. Ask:
+
+- **From → To** — concrete tech with versions, not "modernize the app." Bad:
+  "move to the cloud." Good: "RDS Postgres 14 → Aurora Postgres 15 with read
+  replicas in 3 AZs."
+- **Driver** — performance, cost, end-of-life, compliance, team capability,
+  scale ceiling, feature requirement. The driver shapes the rollback policy.
+- **Downtime budget** — zero / minutes / hours / planned maintenance window.
+  This is the single most constraining input.
+- **Deadline** — hard deadline vs flexible. A hard deadline rules out
+  multi-quarter patterns.
+- **Reversibility requirement** — must we be able to roll back at any phase, or
+  is there a point-of-no-return that's acceptable?
+
+Do not proceed until the user responds.
+
+### Step 2: Pick the pattern
+
+Apply the table above. State the pattern name. Explain in one paragraph why this
+pattern fits the from→to shape and constraints, and what the alternative would
+have been if a different constraint dominated.
+
+If you would have picked a different pattern but a hard constraint (e.g., zero
+downtime + stateful + tight deadline) makes it infeasible, name that explicitly.
+Do not silently downgrade.
+
+### Step 3: Build the phased plan
+
+Every plan has these phases. Adapt names and counts to the pattern.
+
+**Phase 0 — Preconditions (always)**
+
+- Observability baseline: are the metrics that will signal success/failure in
+  place? If not, this is Phase 0a (instrument first). Skipping this is the
+  most common migration failure mode.
+- Backup / snapshot plan in place. Recovery time objective documented.
+- Stakeholder list and notification plan.
+- Rollback playbook drafted before any change ships.
+
+**Phase 1 — Stand up the target**
+
+- New target system deployed, idle, no traffic.
+- Smoke test against the target.
+- Define cutover criteria (Phase N) and rollback triggers as concrete metric
+  thresholds, not adjectives. "Error rate p99 < 0.5% over 1h" — not "looks good."
+
+**Phase 2 — Dual / shadow**
+
+- Pattern-specific.
+- **Parallel run:** dual-write. Every write goes to both old and new. Reads
+  stay on old. Read-shadow: every read fires against new in the background and
+  diffs against old; alerts on divergence > threshold.
+- **Strangler:** new code path behind a flag. Per-feature, per-route, or
+  per-user-bucket gradual rollout.
+- **Blue-green:** target deployed, all traffic still on blue. Routing layer
+  (LB / DNS / service mesh) ready to switch.
+- **Canary:** target deployed, 1-5% of traffic routed.
+
+**Phase 3 — Validation**
+
+- Define what "validated" means. Concrete: p99 latency, error rate, data
+  divergence percentage, conversion rate (for user-facing changes).
+- Validation window: how long does the new system have to behave before the
+  next step? Minimum 1 week of business cycle; 1 month for billing-critical paths.
+- Synthetic load tests vs real traffic — both.
+
+**Phase 4 — Cutover**
+
+- Pattern-specific.
+- **Parallel run:** flip reads to new, keep dual-write briefly, then drop the
+  old write path.
+- **Strangler:** ramp flag to 100%, remove the old code path.
+- **Blue-green:** DNS / LB switch, drain blue.
+- **Canary:** ramp 5 → 25 → 50 → 100 with a hold at each step.
+
+**Phase 5 — Decommission**
+
+- Remove the old system. THIS IS A SEPARATE PHASE. Premature decommission is
+  the most common cause of "we can't roll back" pain. Hold the old system idle
+  but available for at least one full business cycle (usually 30 days) after
+  cutover.
+
+For each phase, define:
+
+- Entry criteria (what must be true to start this phase).
+- Exit criteria (what must be true to advance).
+- Rollback trigger (what makes us go back, and by how many phases).
+- Observability: which metrics, which dashboard, which alert.
+- Owner.
+- Estimated duration.
+
+### Step 4: Capacity sanity check
+
+```bash
+# Optional: read team size from catalog
+[ -f docs/services/INDEX.md ] && grep -A2 "team_size:" docs/services/*.md 2>/dev/null | head -20
+```
+
+AskUserQuestion: team size and % allocation. Multiply duration by the standard
+2-3x fudge factor for migrations (they always take longer). If the resulting
+estimate exceeds the deadline, surface this BEFORE writing the plan. Options:
+
+- Cut scope (migrate fewer services, fewer regions, in this round).
+- Add headcount or contractors.
+- Extend deadline.
+- Pick a riskier-but-faster pattern (e.g., big-bang) only if user owns it.
+
+Do not silently produce an undeliverable plan.
+
+### Step 5: Rollback triggers and observability requirements
+
+For each rollback trigger, define:
+
+- **Metric** — what we measure (e.g., 5xx rate, p99 latency, dual-write
+  divergence percentage, customer-reported error tickets/hour).
+- **Threshold** — concrete number with units.
+- **Window** — duration the threshold must hold (1 minute? 10 minutes? 1 hour?).
+- **Action** — what we do when triggered: revert, hold, escalate, ignore-once.
+- **Owner** — who pages.
+
+For each phase, list the observability that must exist before entry. If it
+doesn't exist today, add it as a precondition task in Phase 0a.
+
+### Step 6: Emit the plan + TASKS.md
+
+```bash
+SLUG="$(date +%Y-%m-%d)-$(echo "$MIGRATION_NAME" | tr ' ' '-' | tr '[:upper:]' '[:lower:]')"
+mkdir -p docs/migrations
+PLAN="docs/migrations/${SLUG}.md"
+TASKS="docs/migrations/${SLUG}-TASKS.md"
+```
+
+Plan sections, in order:
+
+1. **Headline** — From → To, pattern, downtime budget, deadline.
+2. **Driver** — why we're doing this.
+3. **Pattern + rationale** — why this pattern, what we considered.
+4. **Phased plan** — table per phase with entry/exit/rollback/observability/owner/duration.
+5. **Rollback playbook** — concrete commands per phase.
+6. **Risk register** — top 5 risks, owners, mitigations.
+7. **Open questions** — anything Step 1 didn't pin down.
+
+TASKS.md is `/autobuild`-compatible: numbered atomic tasks, each with a clear
+acceptance criterion and a phase tag. Skill `/autobuild` consumes this file.
+
+### Step 7: AskUserQuestion — sign-off
+
+Present the plan summary (pattern, phase count, total duration, hard constraints
+met / unmet). One AskUserQuestion: accept / revise scope / revise pattern. Do
+not silently advance to /autobuild.
+
+## Outputs
+
+- `docs/migrations/{YYYY-MM-DD-slug}.md` — the plan.
+- `docs/migrations/{YYYY-MM-DD-slug}-TASKS.md` — `/autobuild`-compatible task list.
+- `~/.gstack/projects/{slug}/migrations.jsonl` — append-only log of plans
+  generated (for trend and history).
+- Optional: a draft PR opened on a `migration/{slug}` branch with the plan
+  file committed.
+
+## Edge cases
+
+- **Migration during a freeze** — if the project is in code-freeze for a
+  launch, surface this and recommend deferring. The capacity overlap rarely works.
+- **Migration of the migration tool itself** — moving from one CDC tool to
+  another while migrating a DB. Don't. Pin the migration tooling, do the data
+  migration, then upgrade the tool separately.
+- **Dual-write divergence drift** — over weeks, even a "perfect" dual-write
+  develops drift. Schedule reconciliation passes inside the validation phase.
+- **Data egress fees / cross-region replication cost** — region moves often
+  reveal a 5-figure data egress bill nobody planned for. Estimate in Phase 0.
+- **Multi-tenant cutover** — per-tenant cutover often beats global cutover.
+  Strangler is naturally per-tenant.
+- **Compliance constraints** — PCI, HIPAA, SOC2, GDPR may forbid certain
+  patterns (e.g., dual-write to a non-compliant target during validation).
+  Surface upfront.
+- **Reversibility window** — once you drop the old system, you can't roll back.
+  The decommission phase is a one-way door. Pad the hold time.
+
+## Dependencies
+
+- **S1 (Hall-mode preamble)** for trust-gated outputs.
+- `/service-catalog` (optional) for owners and service inventory.
+- `/c4-diagram` (optional) for Container-level boundary identification.
+- `/dep-graph` (optional) for blast-radius computation per phase.
+- `/plan-eng-review` (recommended) to review the resulting plan before sign-off.
+- `/autobuild` (downstream) to execute the TASKS.md.
+
+## Stop gates
+
+- After Step 1 (migration scope) — do not proceed without user response.
+- After Step 4 (capacity check) — if capacity is short, surface BEFORE writing
+  the plan. Do not silently produce an undeliverable plan.
+- After Step 7 (sign-off) — do not chain to `/autobuild` without explicit
+  acceptance.
+
+The plan is only as honest as the cutover criteria and rollback triggers.
+Vague triggers ("if it looks bad") mean no rollback ever happens. Force concrete
+numbers.

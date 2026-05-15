@@ -1,0 +1,449 @@
+---
+name: recipe
+preamble-tier: 2
+version: 1.0.0
+description: |
+  [Product Transposition] Document YOUR built thing as a reproducible cookbook:
+  INGREDIENTS.md, STEPS.md, TECHNIQUES.md, PLATING.md. Four output modes via
+  `--for {paper, blog, onboarding, replay}`. Works on transposed projects
+  (studies/<slug>/) and on plain built projects (project root). Defaults to
+  `--exclude proprietary` for paper + blog modes; `--anonymize` strips identifying
+  info for review. Replay mode emits a strict reproducibility bundle (Dockerfile,
+  seeded configs, golden outputs). Use when asked to "document this project",
+  "write the recipe", "paper supplement", "onboarding doc", "blog draft", or
+  "make this reproducible". (gstack)
+benefits-from: [blueprint, transpose, clone-and-twist, document-generate]
+allowed-tools:
+  - Read
+  - Write
+  - Edit
+  - Grep
+  - Glob
+  - Bash
+  - AskUserQuestion
+triggers:
+  - write the recipe
+  - document YOURS
+  - paper supplement
+  - reproducibility bundle
+  - onboarding walkthrough
+  - blog draft of this project
+---
+
+{{PREAMBLE}}
+
+# /recipe — Family J — Product Transposition
+
+You shipped something. Now turn the commit history + your head + the scattered
+configs into a **reproducible cookbook**. Four sections, four output modes,
+one consistent backing artifact set.
+
+Pipeline location:
+
+```
+  /blueprint  →  /transpose  →  /clone-and-twist  →  [ /recipe ]
+                                                       (this skill)
+```
+
+`/recipe` also runs **retroactively** — on projects that never went through
+`/blueprint` or `/transpose` (e.g., supertonic-v3 today). The four-section
+format works regardless of whether the project came from a Family J pipeline.
+
+## When to use
+
+- You just landed `/clone-and-twist` + `/autobuild` and want a recipe before
+  the knowledge evaporates.
+- You have a project (Family J or not) that works and want to write its paper
+  supplement, blog post, onboarding guide, or replay bundle.
+- A first hire is starting next week and needs an onboarding walkthrough.
+- You want supertonic-v3's recipe in `--for paper` mode for the next submission.
+
+**Not for:** documenting a tool you used but didn't build — that's `/document-generate`
+(or just read the upstream docs).
+
+## Inputs
+
+| Flag | Required | Meaning |
+|---|---|---|
+| `<project-or-study>` | yes | Path to project root OR `studies/<slug>/` |
+| `--for` | yes | One of: `paper`, `blog`, `onboarding`, `replay` |
+| `--anonymize` | no | Paper-mode: strip identifying info for double-blind review |
+| `--exclude proprietary` | no (default ON for `paper`+`blog`) | Redact slots marked proprietary |
+| `--include proprietary` | no | Explicit opt-in to publish proprietary content (paper/blog only) |
+| `--audience <text>` | no | Tone hint (e.g., `--audience "first-time ML engineer"`) |
+| `--slug <name>` | no | Override the recipe slug (defaults from project name) |
+
+If the input is a `studies/<slug>/` path, the skill reads BLUEPRINT.md,
+TRANSPOSITION.md, BUILD-LOG.md, and FIDELITY-EVAL.md to chain context.
+If the input is a plain project root, the skill works retroactively from
+commit history, configs, READMEs, tests, and AskUserQuestion gaps.
+
+## Modes
+
+### `--for paper`
+
+Renders the recipe as **paper supplementary material**: reproducible methods
+section, dataset provenance, hyperparameters, ablation tables (if available
+from `/eval-harness`), fidelity contract (S13) when chained from a Family J
+study. Default behavior:
+
+- **`--exclude proprietary` is ON.** Proprietary slot contents are redacted to
+  `[REDACTED — proprietary slot, see internal docs]`. The *interface* of each
+  slot is still described (inputs / outputs / contract) so reviewers can judge
+  reproducibility of the surrounding mechanism.
+- **`--anonymize` available.** When passed, strips author names, institution
+  names, repo URLs, project slug, and any commit metadata that would identify
+  the author. Substitutes consistent placeholders (`AuthorA`, `InstA`, `RepoA`).
+  Run `grep -i` against an author-info list before emitting; warn loudly if any
+  match survives.
+- Output: `recipes/<slug>/paper-supplement.tex` (plus the four backing `.md` files).
+  Bibliography pulled from `studies/<slug>/citations.md` if available.
+
+### `--for blog`
+
+Renders the recipe as a **narrative blog-post draft** in Hall's voice —
+direct, opinionated, no AI vocabulary. The four backing `.md` files become
+input; the rendered post weaves them into a single readable post with:
+
+- A 1-2 sentence headline that promises a concrete payoff.
+- A "why this exists" hook.
+- The build journey (compressed STEPS.md).
+- The 2-3 most opinionated technique calls (from TECHNIQUES.md).
+- Final deployment + how to try it (from PLATING.md).
+- `--exclude proprietary` is **ON by default.** Public surface only.
+
+Output: `recipes/<slug>/blog-draft.md` (+ the four backing files).
+Voice rules match CHANGELOG style (no em dashes, no "delve", no "robust").
+
+### `--for onboarding`
+
+Renders as a **new-hire walkthrough** with explicit checkpoints. Each `STEPS.md`
+step becomes an `onboarding/step-NN.md` with:
+
+- The step's goal (one sentence).
+- Prereqs from the prior step.
+- The action ("run X / open Y / read Z").
+- A **checkpoint exercise** the hire does + how to verify they're on the rails.
+- "What you should now understand" — 2-3 bullets.
+
+`--exclude proprietary` defaults to **OFF** here (a hire on the project needs
+the IP). But surface the choice via AskUserQuestion before emitting.
+
+Output: `recipes/<slug>/onboarding/{step-01.md, step-02.md, ...}`.
+
+### `--for replay`
+
+Renders as a **strict reproducibility bundle**:
+
+- `recipes/<slug>/replay/Dockerfile` — pinned base image, pinned dependencies,
+  fixed entry point.
+- `recipes/<slug>/replay/config.seeded.yaml` — every random seed pinned, every
+  config value explicit.
+- `recipes/<slug>/replay/run.sh` — one command that reproduces the headline
+  result end-to-end.
+- `recipes/<slug>/replay/golden/` — expected outputs (small samples) for diff-
+  based verification.
+- `recipes/<slug>/replay/README.md` — what the bundle reproduces, what hardware
+  it assumes, expected wall-clock.
+
+`--exclude proprietary` defaults to **OFF** but the bundle defaults to a
+**private** path (`recipes/<slug>/replay/` is git-ignored by template) and is
+**not pushed to a public repo unless `--public` is passed**. Print a clear
+warning at exit explaining this.
+
+---
+
+## Procedure
+
+### Step 0: Pre-flight
+
+```bash
+eval $(~/.claude/skills/gstack/bin/gstack-slug 2>/dev/null)
+INPUT="<project-or-study>"
+RECIPE_SLUG="${ARG_SLUG:-<derived-from-input>}"
+mkdir -p "recipes/$RECIPE_SLUG"
+```
+
+Detect the input shape:
+
+- If `INPUT` is a `studies/<slug>/` dir → Family J chain. Read BLUEPRINT.md,
+  TRANSPOSITION.md, BUILD-LOG.md, FIDELITY-EVAL.md (whichever exist).
+- Otherwise → retroactive recipe. The project root is the only input; read
+  README, CLAUDE.md, package.json/pyproject.toml/etc., and last 50 commits.
+
+Verify `--for` is one of the supported modes; if missing, AskUserQuestion:
+
+> What's this recipe for?
+>
+> **A) paper** — supplementary material for a paper submission
+> **B) blog** — narrative blog post draft
+> **C) onboarding** — new-hire walkthrough with checkpoints
+> **D) replay** — strict reproducibility bundle (Dockerfile + golden outputs)
+
+### Step 1: Research the built thing
+
+This is where most of the time goes. Do not skip.
+
+1. **Read the headline files.** README, CLAUDE.md / AGENTS.md, ARCHITECTURE.md,
+   CHANGELOG, the main entry point(s).
+2. **Inventory dependencies.** Parse `package.json` / `pyproject.toml` /
+   `Cargo.toml` / `go.mod` / `requirements.txt` / `Gemfile`. Pin versions exactly.
+3. **Find the services.** Read `docker-compose.yaml`, `.env.example`, infra
+   manifests, CI workflows. Note required environment variables (capture the
+   *shape*, never the values).
+4. **Detect datasets + models.** Anything pulled from S3 / Hugging Face / a
+   `data/` dir? Record provenance + license posture.
+5. **Walk the commit history.** `git log --oneline` for the last 50 commits;
+   if this is a Family J project, read BUILD-LOG.md instead.
+6. **Find the design decisions.** Grep `// WHY:`, `// DESIGN:`, `// NOTE:`,
+   ADRs (`docs/adr/`, `decisions/`), and skill output dirs (`~/.gstack/projects/<slug>/`).
+7. **Read the tests.** Tests reveal contracts and edge cases the README didn't.
+
+### Step 2: Detect proprietary content
+
+For Family J inputs: parse TRANSPOSITION.md §4 for slot definitions; mark those
+files / functions / blocks as **proprietary**.
+
+For retroactive (non-J) inputs: heuristic scan + AskUserQuestion to confirm.
+Surface candidates:
+
+- Anything under a `proprietary/` or `private/` directory.
+- Anything imported from a private package.
+- Hand-tuned hyperparameters, training strategies, datasets with no public
+  license.
+- Anything the project's CLAUDE.md flags as not-for-publication.
+
+AskUserQuestion:
+
+> I flagged the following as proprietary candidates. Confirm what to redact:
+>
+> 1. [file/function/block] — REDACT / PUBLISH / DESCRIBE-INTERFACE-ONLY
+> 2. ...
+
+The `DESCRIBE-INTERFACE-ONLY` option preserves the slot's contract without
+publishing its implementation — the standard `paper` / `blog` posture.
+
+### Step 3: Write INGREDIENTS.md
+
+YAML frontmatter (S12-compatible):
+
+```yaml
+---
+target: <project name>
+mode: recipe
+version: 1
+derived_from: ["studies/<slug>/BLUEPRINT.md", "studies/<slug>/TRANSPOSITION.md"]  # or [] retroactive
+recipe_for: paper | blog | onboarding | replay
+proprietary_exclusion: on | off
+anonymized: true | false
+extracted_on: <ISO date>
+---
+```
+
+Body:
+
+1. **Runtime + framework versions.** Pinned. Example: "Python 3.11.7, PyTorch
+   2.3.1+cu121, CUDA 12.1, Ubuntu 22.04."
+2. **Dependencies.** Library + version per language. Lockfile reference.
+3. **Services.** External services (S3, Postgres, Redis, SaaS APIs). Required
+   permissions / scopes. Never values.
+4. **Datasets.** Each with: source, license, size, retrieval method, preprocessing
+   summary, license posture vs your redistribution.
+5. **Models / weights.** Each with: source, license, retrieval method, size,
+   any LoRA / adapter / fine-tune layered on.
+6. **Environment variables.** Name + purpose + example shape only. NEVER values.
+7. **Secrets shape.** What kind of secret (API key, JWT signing key, service
+   account JSON). NEVER values.
+8. **Hardware assumption.** GPU/CPU/RAM/disk if relevant.
+
+### Step 4: Write STEPS.md
+
+Numbered, ordered, prerequisite-aware. The acid test: a hire could follow this
+without asking you. Each step has:
+
+- **Goal** — one sentence.
+- **Prereqs** — which prior steps must be done.
+- **Action** — exact commands / file edits / clicks.
+- **Verify** — how to know it worked (a command + expected output, a URL
+  showing a specific UI state).
+- **If broken** — the most common failure mode + the fix.
+
+In Family J projects, each step links to its BUILD-LOG.md commit when relevant.
+
+### Step 5: Write TECHNIQUES.md
+
+The "why" of every non-obvious design choice. Sections:
+
+1. **Key algorithms.** Named. Described in your own words. Cited (to
+   BLUEPRINT.md / a paper / an ADR).
+2. **Why this, not the obvious thing.** The decisions that diverge from the
+   default. State the tradeoff explicitly. Cross-reference TRANSPOSITION.md
+   §3 (S/A/R rows) and §6 (new-domain edge cases) if available.
+3. **Hard-won lessons.** Bugs that bit you, instrumentation that paid off,
+   eval signals you learned to trust or distrust.
+4. **What we'd do differently.** If you started over today, what would you
+   change? (Frequently the single most useful section to the next reader.)
+
+### Step 6: Write PLATING.md
+
+The final assembly: how this gets to users.
+
+1. **Deployment topology.** Diagram (ASCII). Hosts, regions, scaling shape.
+2. **UX surfaces.** What users touch (web, CLI, API, mobile).
+3. **Integration points.** External systems this talks to.
+4. **Runtime characteristics.** Latency, throughput, cost shape.
+5. **"Running the dish."** The minimum command sequence that takes a fresh
+   environment to a serving system.
+
+### Step 7: Render the mode-specific output
+
+Dispatch to one of:
+
+- **`--for paper`:** Generate `paper-supplement.tex` from the four `.md` files.
+  Apply `--exclude proprietary` (default ON) and `--anonymize` (if passed).
+  Run the anonymizer's identity-leak grep (Step 8).
+- **`--for blog`:** Generate `blog-draft.md` weaving the four files into a
+  single readable narrative. Voice check (Step 8).
+- **`--for onboarding`:** Explode STEPS.md into per-step files with checkpoint
+  exercises. Generate `onboarding/INDEX.md` with the curriculum.
+- **`--for replay`:** Generate `Dockerfile`, `config.seeded.yaml`, `run.sh`,
+  `golden/`, and `README.md`. Mark the directory `.gitignore`d unless `--public`.
+
+### Step 8: Self-check (per mode)
+
+Universal checks:
+- [ ] All four `.md` files exist and have S12-compatible frontmatter.
+- [ ] No env-var values or secret values appear anywhere in any file.
+- [ ] No proprietary content slipped through (run a redaction marker grep:
+      `grep -RIn "PROPRIETARY SLOT" recipes/<slug>/` should match only the
+      explicitly-described slots from Step 2).
+
+`--for paper` extra checks:
+- [ ] If `--anonymize`: grep for author name, institution, project slug, repo
+      URL across all output. Any hit → fail; do not emit.
+- [ ] Citations resolve (no `[??]` placeholders).
+- [ ] Reviewer-reproducibility statement is present (which parts can be
+      reproduced from this supplement alone).
+
+`--for blog` extra checks:
+- [ ] Voice scan: no em dashes, no banned AI words (`delve`, `robust`,
+      `comprehensive`, etc. per CHANGELOG style). Warn on hits, do not
+      auto-fix — let Hall edit.
+
+`--for onboarding` extra checks:
+- [ ] Every step has a verifiable checkpoint exercise.
+- [ ] Steps are independently runnable from the prereq state.
+
+`--for replay` extra checks:
+- [ ] `Dockerfile` builds without warnings on the documented base image.
+- [ ] `run.sh` is idempotent (re-running on existing outputs is safe).
+- [ ] `golden/` has at least one expected-output sample.
+- [ ] If not `--public`: `recipes/<slug>/replay/` is in `.gitignore` (or warn).
+
+### Step 9: Report
+
+```
+Recipe complete: recipes/<recipe-slug>/
+- INGREDIENTS.md, STEPS.md, TECHNIQUES.md, PLATING.md  (4 backing files)
+- Mode: --for <mode>
+- Proprietary exclusion: <on|off>
+- Anonymized: <yes|no>
+- Mode-specific output:
+    paper      → recipes/<slug>/paper-supplement.tex
+    blog       → recipes/<slug>/blog-draft.md
+    onboarding → recipes/<slug>/onboarding/*
+    replay     → recipes/<slug>/replay/* (private unless --public was passed)
+
+Next steps:
+  • Edit the draft for voice and accuracy.
+  • For paper/blog: re-run with --include proprietary if you decide to
+    publish a slot's content.
+  • Cross-project recipe-pattern learning will pick this up via /intel.
+```
+
+---
+
+## Outputs
+
+```
+recipes/<recipe-slug>/
+├── INGREDIENTS.md
+├── STEPS.md
+├── TECHNIQUES.md
+├── PLATING.md
+├── (one of)
+│   ├── paper-supplement.tex
+│   ├── blog-draft.md
+│   ├── onboarding/{INDEX.md, step-01.md, ...}
+│   └── replay/{Dockerfile, config.seeded.yaml, run.sh, golden/, README.md}
+```
+
+For Family J projects, the recipe lives **alongside** `studies/<slug>/` —
+the recipe's frontmatter `derived_from` chains back to the study.
+
+---
+
+## Edge cases
+
+- **Project has no commits / brand new.** Refuse — there's nothing to document
+  yet. Suggest `/document-generate` for forward-looking docs instead.
+- **No CLAUDE.md / README.** Run anyway, but AskUserQuestion liberally to fill
+  gaps; warn that the recipe quality will be lower without those anchors.
+- **`--anonymize` with author info in commit history.** Strip identifying info
+  from the rendered output, but **never** rewrite the git history itself.
+- **`--include proprietary` for `paper` / `blog`.** Require an extra
+  AskUserQuestion ack: "You're about to publish proprietary content. Confirm
+  you've reviewed the IP implications. Type the slot names you're publishing."
+- **Replay mode on a project that touches paid APIs.** The Dockerfile cannot
+  hide that — note clearly in `replay/README.md` that reproduction requires
+  paid keys; do NOT embed keys.
+- **Replay mode with non-deterministic models.** Seed everything. If
+  non-determinism is intrinsic (sampling models), document the expected
+  output *distribution* in `golden/` not single golden outputs.
+- **GPL/AGPL upstream dependency.** Recipe inherits citation duty. Surface
+  in TECHNIQUES.md §1 and PLATING.md §3.
+- **Existing recipe with same slug.** Bump frontmatter `version:`; archive old
+  one under `recipes/<slug>/archive/v<N>/`.
+- **Recipe-input project still has failing fidelity tests (Family J).** Warn
+  but proceed — the recipe can describe the in-progress state honestly. Tag
+  the affected TECHNIQUES.md sections with `[FIDELITY: RED]`.
+
+---
+
+## Dependencies
+
+- **S12 (study artifact format)** — recipe frontmatter compatibility +
+  `derived_from` chain to upstream BLUEPRINT.md / TRANSPOSITION.md when
+  documenting a Family J project.
+- **S13 (mechanism-fidelity contract)** — paper-mode pulls fidelity statuses
+  from `evals/fidelity/<slug>.jsonl` for the reproducibility statement.
+- **`/document-generate`** — Diataxis-aware rendering helpers; reuse its
+  research-then-write discipline.
+- **`/paper-pipeline`** (planned) — paper-mode LaTeX rendering pipeline.
+- **`/onboarding`** (planned) — onboarding-mode walkthrough conventions.
+- **`/intel`** — cross-project recipe-pattern learning. Recipes themselves
+  become future-blueprint reference material (recursive Family J).
+- **`lib/study-artifacts.ts`** — shared parser for S12 frontmatter (planned).
+
+---
+
+## Canonical examples
+
+- **supertonic-v3 (`--for paper`)** — paper supplement. Default
+  `--exclude proprietary` redacts the training strategy and regularization
+  schedule slot contents while preserving their interfaces. Cites BLUEPRINT.md
+  (paper-mode study of the upstream paper) and the FIDELITY-EVAL.md showing
+  which mechanism properties the fine-tuned model preserves. With `--anonymize`,
+  emits a review-ready supplement.
+
+- **fingerspelling-TSL (`--for onboarding`)** — new-hire walkthrough. With
+  `--exclude proprietary` OFF (hires need the IP), STEPS.md becomes a 12-step
+  onboarding with checkpoint exercises ("after step 4, run `pytest tests/
+  phoneme/` — expected 32/32 green").
+
+- **Any project (`--for replay`)** — Dockerfile + seeded config + run.sh +
+  golden outputs. Defaults to private path; the user opts into `--public` if
+  they want to ship a public reproducibility bundle.
+
+These three are the v1 dogfood targets — supertonic-v3 retroactive recipe is
+the day-one usage per the v3 roadmap.

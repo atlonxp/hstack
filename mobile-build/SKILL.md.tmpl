@@ -1,0 +1,302 @@
+---
+name: mobile-build
+preamble-tier: 3
+version: 1.0.0
+description: |
+  [Mobile] Mobile feature scaffolding across React Native, Flutter, native iOS (Swift), and
+  native Android (Kotlin). Auto-detects the project's stack, generates a feature scaffold
+  with screen + state + navigation + tests, and follows the project's idioms (RN New
+  Architecture / Fabric, Flutter Riverpod or Bloc, SwiftUI + Observation, Jetpack Compose).
+  Hooks into /feature-build's commit cadence so each scaffolded artifact lands as its own
+  atomic commit. Use when: "build a mobile feature", "scaffold this screen", "RN feature",
+  "Flutter feature", "iOS screen", "Android screen", or "new mobile feature". (gstack)
+allowed-tools:
+  - Read
+  - Write
+  - Edit
+  - Grep
+  - Glob
+  - AskUserQuestion
+  - Bash
+  - WebSearch
+triggers:
+  - build a mobile feature
+  - scaffold a screen
+  - new mobile screen
+  - rn feature
+  - flutter feature
+  - ios screen
+  - android screen
+---
+
+{{PREAMBLE}}
+
+{{BASE_BRANCH_DETECT}}
+
+# /mobile-build — Family E1 — Mobile
+
+Scaffold a mobile feature end to end. Detects the project's stack (React Native, Flutter,
+native iOS, native Android, or hybrid), picks the right idioms for that stack, and lays
+down screen + state + navigation + tests as a coherent unit. Each artifact lands as an
+atomic commit so the diff stays bisectable.
+
+The goal is **a feature that runs on a clean simulator/emulator and has at least one test
+proving it does what the spec says**. Polish, edge cases, and platform parity are tracked
+as follow-up TODOs, not blockers to landing the scaffold.
+
+## When to use
+
+- A new screen or flow needs to land in a mobile codebase and the project conventions are
+  not obvious from a one-line prompt.
+- The team is mid-migration (Bridge → New Architecture, UIKit → SwiftUI, View system →
+  Compose) and you want the scaffold to follow the *target* idiom, not the legacy one.
+- Cross-platform projects where the same feature must ship on iOS and Android with shared
+  business logic but native-feel UI.
+
+**Do not use for:**
+
+- Web features — that's `/feature-build`.
+- App-store metadata + screenshots — that's `/aso`.
+- Release pipeline — that's `/mobile-release`.
+- QA flow generation — that's `/mobile-qa`.
+
+## Stack auto-detection
+
+Run detection in this order. First match wins. State the detected stack out loud before
+asking the user to confirm.
+
+```bash
+# 1) React Native
+test -f package.json && grep -q '"react-native"' package.json && echo "STACK=react-native"
+
+# 2) Flutter
+test -f pubspec.yaml && grep -q '^name:' pubspec.yaml && echo "STACK=flutter"
+
+# 3) Native iOS — look for an Xcode project at repo root or one level down
+find . -maxdepth 3 -type d \( -name "*.xcodeproj" -o -name "*.xcworkspace" \) -not -path "*/node_modules/*" -not -path "*/ios/*" 2>/dev/null | head -3
+
+# 4) Native Android — Gradle wrapper + AndroidManifest
+test -f settings.gradle -o -f settings.gradle.kts && find . -maxdepth 4 -name "AndroidManifest.xml" -not -path "*/node_modules/*" 2>/dev/null | head -3
+
+# 5) RN/Flutter hybrid with native modules
+test -d ios -a -d android && echo "Hybrid project — confirm primary stack with user"
+```
+
+Sub-signals to refine the idiom inside a detected stack:
+
+- **RN New Architecture (Fabric/TurboModules):** `grep -r "newArchEnabled=true" android/gradle.properties` + `RCT_NEW_ARCH_ENABLED=1` in Podfile.
+- **RN state library:** Check `package.json` for `zustand`, `@reduxjs/toolkit`, `jotai`,
+  `recoil`, or `mobx`. Fall back to React Context + `useReducer`.
+- **Flutter state library:** Check `pubspec.yaml` for `flutter_riverpod`, `flutter_bloc`,
+  `provider`, `get`, or `mobx`. Fall back to `ChangeNotifier` + `Provider`.
+- **iOS UI framework:** `grep -rln "import SwiftUI" Sources/ App/ 2>/dev/null | head -1`
+  vs `import UIKit`. New code: SwiftUI + Observation (iOS 17+) unless the project is
+  UIKit-only.
+- **Android UI framework:** Check `build.gradle(.kts)` for `androidx.compose` dependencies.
+  New code: Jetpack Compose unless the project is View-system-only.
+
+If detection is ambiguous (e.g., RN repo with significant native iOS code), AskUserQuestion
+to confirm which stack the new feature lives in.
+
+## Inputs
+
+The skill accepts one or more of:
+
+1. A **feature design doc** from `/feature-build`'s Phase 1.75 at
+   `~/.gstack/projects/{slug}/*-feature-design-*.md`. This is the preferred input — it
+   already contains persona, workflow, and acceptance criteria.
+2. A **natural-language brief** ("Add a profile-edit screen that lets the user change
+   their display name and avatar").
+3. A **wireframe or mockup path** (PNG/Figma export) — Read it for layout hints.
+
+If none of these is present, AskUserQuestion to collect: feature name, persona, 3-5
+acceptance criteria, target stack (if auto-detect was ambiguous).
+
+## Procedure
+
+### Step 0: Stack detection + confirmation
+
+Run the detection block above. State the detected stack and sub-idioms in one sentence:
+"Detected: React Native 0.74 with New Architecture enabled, Zustand for state, React
+Navigation v7 for routing."
+
+AskUserQuestion to confirm the stack and the target idiom. Do not proceed silently.
+
+### Step 1: Read the spec
+
+If a feature design doc exists, Read it. Otherwise AskUserQuestion to gather inputs.
+
+State back the persona, workflow, and acceptance criteria in your own words before
+generating any code. The user confirms or corrects.
+
+### Step 2: AskUserQuestion — OS version range + device targets
+
+Mobile features behave differently across OS versions and form factors. Ask:
+
+- **iOS minimum target** — default to the project's current `IPHONEOS_DEPLOYMENT_TARGET`.
+- **Android minSdk** — default to the project's current `minSdk` in `build.gradle(.kts)`.
+- **Tablet / large screen support** — yes / no / out of scope for this feature.
+- **Dark mode** — required / opt-in / not yet.
+
+Lock these once chosen. They drive which APIs are safe to use.
+
+### Step 3: Generate the scaffold (per-stack branches)
+
+Generate files in this order. **Each file is its own commit.**
+
+#### Branch A: React Native
+
+1. **Screen file** — `src/screens/{FeatureName}Screen.tsx`. Use functional component +
+   hooks. If New Architecture is on, use `react-native-reanimated` v3+ and avoid the
+   bridge.
+2. **State** — `src/state/{featureName}Store.ts`. Use the detected state library
+   (Zustand store, Redux slice, Jotai atom, etc.). Define: state shape, actions,
+   selectors.
+3. **Navigation entry** — register the screen in the existing navigator. For React
+   Navigation v7+, add to the stack/tab/drawer navigator config. Type the route params
+   in the `RootStackParamList` (or equivalent).
+4. **Tests** — `src/screens/__tests__/{FeatureName}Screen.test.tsx` using Jest +
+   `@testing-library/react-native`. Cover: renders without crashing, primary user
+   action triggers the expected state change, error state renders.
+5. **Storybook story (if Storybook detected)** — `src/screens/{FeatureName}Screen.stories.tsx`.
+
+#### Branch B: Flutter
+
+1. **Screen widget** — `lib/features/{feature_name}/{feature_name}_screen.dart`. Use
+   `StatelessWidget` + the detected state library (Riverpod `ConsumerWidget`, Bloc
+   `BlocBuilder`, etc.).
+2. **State** — `lib/features/{feature_name}/{feature_name}_controller.dart` (Riverpod
+   `Notifier`) or `_bloc.dart` (Bloc) or `_provider.dart` (Provider).
+3. **Routing** — register the route in `go_router` config (`lib/router/app_router.dart`)
+   or in the existing `MaterialApp.routes` map.
+4. **Tests** — `test/features/{feature_name}/{feature_name}_screen_test.dart` using
+   `flutter_test` + `mocktail`. Cover: pumps the widget, finds key elements, taps the
+   primary action, expects state change.
+5. **Golden tests (if golden_toolkit detected)** — baseline golden for the screen.
+
+#### Branch C: Native iOS (Swift + SwiftUI)
+
+1. **View** — `Sources/{App}/Features/{FeatureName}/{FeatureName}View.swift`. SwiftUI
+   `View` struct. Use `@Observable` (Observation framework, iOS 17+) for the view
+   model; fall back to `@StateObject` + `ObservableObject` for older targets.
+2. **View model** — `{FeatureName}ViewModel.swift`. Pure Swift class, no UI imports.
+3. **Navigation** — add a destination case to the app's navigation enum + handler in
+   the parent `NavigationStack`.
+4. **Tests** — `Tests/{App}Tests/{FeatureName}ViewModelTests.swift` using `XCTest` or
+   `swift-testing`. Cover: state transitions, error paths.
+5. **Preview** — SwiftUI `#Preview` block with mock data for Xcode canvas.
+
+#### Branch D: Native Android (Kotlin + Compose)
+
+1. **Composable** — `app/src/main/java/{pkg}/ui/{feature}/{Feature}Screen.kt`. Top-level
+   composable + smaller composables for sub-sections. Hoist state.
+2. **ViewModel** — `{Feature}ViewModel.kt` extending `androidx.lifecycle.ViewModel`.
+   Use `StateFlow` for UI state; `Hilt` `@HiltViewModel` if Hilt is detected.
+3. **Navigation** — add a destination to the existing `NavHost` (Navigation Compose).
+   Type-safe routes via Kotlin Serialization where the project already uses them.
+4. **Tests** — `app/src/test/java/{pkg}/ui/{feature}/{Feature}ViewModelTest.kt` (JUnit
+   + MockK + Turbine for Flow). Plus a Compose UI test in `androidTest/`.
+5. **Preview** — `@Preview` composable variants for light/dark + tablet width.
+
+#### Branch E: RN/Flutter + native modules (hybrid)
+
+If the feature needs a native capability (camera, biometrics, push), check for an existing
+library first (`react-native-vision-camera`, `image_picker`, `expo-local-authentication`).
+Only generate a custom native module if no maintained library covers the need. Surface
+the native-module decision as an AskUserQuestion.
+
+### Step 4: Wire it up
+
+After all scaffold files exist:
+
+1. **Run the platform's package manager** if anything was added to a manifest:
+   - RN: `bun install` or `npm install` then `cd ios && pod install` (if iOS).
+   - Flutter: `flutter pub get`.
+   - iOS: nothing if SPM, or `pod install` if CocoaPods.
+   - Android: Gradle sync is implicit on next build.
+2. **Build for one platform** to confirm the scaffold compiles:
+   - RN: `npx react-native run-ios` (or `run-android`) in a sub-shell with a 5-minute
+     timeout; cancel and report build error if it hangs.
+   - Flutter: `flutter analyze && flutter test`.
+   - iOS: `xcodebuild -scheme {Scheme} -destination 'platform=iOS Simulator,name=iPhone 15' build`.
+   - Android: `./gradlew :app:assembleDebug`.
+3. **Run the new test file** to confirm it passes:
+   - RN: `bun test src/screens/__tests__/{FeatureName}Screen.test.tsx`.
+   - Flutter: `flutter test test/features/{feature_name}/`.
+   - iOS: `xcodebuild test -scheme {Scheme} -only-testing:{App}Tests/{FeatureName}ViewModelTests`.
+   - Android: `./gradlew :app:testDebugUnitTest --tests "*{Feature}ViewModelTest"`.
+
+If any step fails, fix the scaffold and re-run. Do not advance to Step 5 with a broken
+build.
+
+### Step 5: Commit cadence
+
+Follow `/feature-build`'s atomic commit pattern. One commit per file group:
+
+```
+git commit -m "feat(mobile): scaffold {FeatureName}Screen"
+git commit -m "feat(mobile): add {FeatureName} state store"
+git commit -m "feat(mobile): wire {FeatureName} into navigation"
+git commit -m "test(mobile): add {FeatureName} unit tests"
+```
+
+If invoked via `/feature-build`, return control to the parent skill with the head commit
+SHA so it can run Phase 4 (scoped workflow verification).
+
+## Outputs
+
+- **Screen / view / composable file** in the project's conventional location.
+- **State file** matching the project's state-management idiom.
+- **Navigation registration** (one-line edit) connecting the new screen to the app graph.
+- **Test file** with at least one passing test exercising the primary action.
+- **Preview / storybook artifact** when the stack supports it.
+- A short build log written to `.gstack/mobile-build/build-{YYYY-MM-DD}-{feature-slug}.md`
+  recording: detected stack, sub-idioms, files generated, build command run, test command
+  run, exit codes.
+
+## Edge cases
+
+- **Old RN versions (< 0.71)** — New Architecture is not available; use the bridge
+  patterns and Hermes 0.x. Flag the project version drift as a TODO.
+- **Flutter package conflicts** — `flutter pub get` may fail on transitive constraints.
+  Surface the conflict and AskUserQuestion before bumping any dependency.
+- **iOS deployment target gaps** — if the spec needs an API only available on iOS 17+ and
+  the project targets iOS 15, AskUserQuestion: bump deployment target, polyfill, or drop
+  the feature on older OS.
+- **Android minSdk gaps** — same logic. Material 3 dynamic color needs API 31+; offer a
+  Material 2 fallback for older devices.
+- **Hybrid projects** — when a feature spans RN + native, generate the RN side first and
+  define a clean `NativeModule` boundary; only generate the native module if a maintained
+  library does not exist.
+- **Tablet / foldable layouts** — adaptive layout is a follow-up TODO unless the spec
+  explicitly demands it. Default to phone portrait; add a Preview/Story variant for
+  larger widths only.
+- **Simulator vs device** — biometrics, camera, ARKit/ARCore, push, and many sensors do
+  not work on simulators. Tests must mock these. Document the simulator gap in the build
+  log.
+
+## Dependencies
+
+- **React Native**: `react-native`, the project's state library, React Navigation v7+,
+  Jest + `@testing-library/react-native`. `bun` or `npm` for installs.
+- **Flutter**: Flutter SDK, the project's state library, `go_router` (if used),
+  `flutter_test`, `mocktail`.
+- **Native iOS**: Xcode 15+, `xcodebuild`, optionally `xcbeautify` for cleaner logs.
+- **Native Android**: Android Studio Hedgehog+, Android SDK 34, Gradle 8+, JDK 17.
+- **Cross-cutting**: `ripgrep` (or `grep -r`) for code-pattern detection. WebSearch for
+  current best-practice lookups (e.g. "Jetpack Compose navigation type-safe routes 2026").
+
+No new gstack libs.
+
+## Stop gates
+
+- After Step 0 (stack confirmation) — do not proceed silently if detection was ambiguous.
+- After Step 2 (OS targets) — version range is locked before generation.
+- After Step 4 if the platform build fails — fix the scaffold first; never commit a
+  broken build.
+
+The AskUserQuestion call is a tool_use, not prose — call the tool directly. Loading the
+schema via ToolSearch and writing the recommendation as chat prose is the failure mode
+these gates exist to prevent.
+
+{{LEARNINGS_LOG}}

@@ -1,0 +1,384 @@
+---
+name: voice-clone
+preamble-tier: 2
+version: 1.0.0
+description: |
+  [Speech & Voice AI] End-to-end voice cloning workflow with consent + watermark
+  guardrails. Picks the right tier (zero-shot XTTSv2 / Tortoise, few-shot StyleTTS2
+  fine-tune, full fine-tune VITS) per requirements. Generates data-prep + training +
+  inaudible-watermark + eval pipeline. Includes synthetic-voice attribution test that
+  proves the output is YOUR clone, not someone else's voice. Refuses to operate
+  without a signed CONSENT declaration.
+  Use when: "clone a voice", "voice cloning", "synthetic voice", "voice replica",
+  "build a voice double". (gstack)
+voice-triggers:
+  - "clone my voice"
+  - "voice clone"
+  - "synthetic voice"
+  - "build a voice"
+triggers:
+  - voice clone
+  - voice cloning
+  - synthetic voice
+  - voice double
+allowed-tools:
+  - Bash
+  - Read
+  - Write
+  - Glob
+  - Grep
+  - AskUserQuestion
+---
+
+{{PREAMBLE}}
+
+# /voice-clone — Family L — Speech & Voice AI
+
+You are running the `/voice-clone` skill. This designs and stages a voice-cloning
+pipeline. The skill picks the right cloning tier (zero-shot / few-shot / full),
+generates a data + training + watermark + eval plan, and produces a signed
+CONSENT.md the user MUST review before any data is collected.
+
+**The consent declaration is non-negotiable.** This skill REFUSES to write any
+clone-config or initiate any data-prep step until CONSENT.md is signed by the
+voice owner OR a licensed-actor agreement is on file. There is no `--skip-consent`
+flag. There is no `--research-only` bypass. This is a hard floor.
+
+This skill does NOT clone the voice itself — that's `/finetune --domain speech-tts`
+downstream. This skill produces the build plan + the consent + the watermarking
+keys + the attribution test.
+
+---
+
+## When to use
+
+- Hall (or any voice owner) wants a synthetic clone of their own voice.
+- A licensed voice actor is producing a synthetic persona under contract.
+- A character voice (synthetic from scratch, no real person) needs the same
+  watermark + attribution infrastructure as a real-person clone.
+
+Do NOT use for:
+- "Clone any voice from a YouTube clip" — refuse. This skill requires consent.
+- Multi-voice TTS where each voice is real and unconsented — refuse. Route the
+  user to `/tts-design` and have them line up consent per voice first.
+- TTS for fictional / public-domain characters — that's `/tts-design` with a
+  cleaner architecture call.
+
+---
+
+## Inputs
+
+| Input | Required? | Format |
+|---|---|---|
+| Voice owner identity | yes | Name + role (self / licensed actor / synthetic persona) |
+| Consent declaration | yes | Signed CONSENT.md (skill generates the template; user signs) |
+| Voice samples | yes | Path to audio directory (per-tier minimums below) |
+| Target quality tier | yes | "demo" / "production" / "studio" |
+| Deployment use case | yes | "own voice (Hall speaks)" / "licensed actor (agent voice)" / "synthetic persona (no real person)" |
+| Languages | yes | BCP-47 list (single or multi) |
+| Expression scope | optional | "neutral" / "emotion-tagged" / "free-form" (drives backbone choice) |
+| Existing TTS architecture | optional | If `/tts-design` already ran, point at the slug |
+
+Sample minimums per tier:
+- **Zero-shot** (XTTSv2, Tortoise, F5-TTS): 6-30 seconds of clean reference audio.
+- **Few-shot** (StyleTTS2 adaptation, XTTSv2 fine-tune): 5-30 minutes paired audio+transcript.
+- **Full fine-tune** (VITS from scratch, StyleTTS2 full): 5-50+ hours paired data.
+
+---
+
+## Procedure
+
+### Step 0: Locate plan root + voice slug
+
+```bash
+PLAN_ROOT="${CLAUDE_PLANS_DIR:-$HOME/.gstack/projects/$(basename "$PWD")}/voices"
+mkdir -p "$PLAN_ROOT"
+echo "PLAN_ROOT: $PLAN_ROOT"
+```
+
+Ask the user for a voice slug (e.g., `hall-en`, `support-agent-th`, `narrator-male-01`).
+Outputs land at `$PLAN_ROOT/{voice-slug}/`.
+
+### Step 1: Consent gate — HARD FLOOR
+
+AskUserQuestion (preamble format):
+- **Re-ground:** current project + branch.
+- **Simplify:** "Voice cloning without consent is identity theft. This skill will
+  not produce a cloning plan until the voice owner signs a consent declaration.
+  Even for your own voice, we document scope, retention, revocation, and watermark
+  policy — so if your clone ever shows up where it shouldn't, you have a paper trail."
+- **RECOMMENDATION:** A because anything else is a refusal path.
+- **Options:**
+  - A) The voice owner is signing CONSENT.md — generate the template now.
+    Completeness: 10/10.
+  - B) The voice is a fully synthetic persona (no real human reference).
+    Completeness: 10/10 (skill still requires CONSENT.md from the project
+    owner attesting "no real-person reference"; watermark stays mandatory).
+  - C) I want to clone without consent. **REFUSED — skill exits here.**
+
+If C: print the refusal message, log the attempt to
+`~/.gstack/security/voice-clone-refusals.jsonl` (timestamp, project slug, user,
+"consent_refused"), and exit. Do not proceed.
+
+If A or B: write `$PLAN_ROOT/{voice-slug}/CONSENT.md` from the template below.
+The user MUST open it, fill in the required fields, and sign (gpg-signed commit OR
+explicit "I, {name}, on {date}, consent to the scope above" line). Until you can
+verify the file has the signature line, the rest of this skill REFUSES to proceed.
+
+**CONSENT.md template:**
+
+```markdown
+# Voice Cloning Consent Declaration
+
+**Voice owner:** [full legal name, OR "Synthetic persona — no real-person reference"]
+**Project:** [project slug + branch]
+**Date:** [YYYY-MM-DD]
+
+## Scope of consent
+
+- **Permitted uses:** [list — e.g., "narration for product demos", "agent voice
+  in customer support chatbot", "personal experiments by Hall"]
+- **Prohibited uses:** [explicit list — e.g., "any political speech",
+  "deepfake of third parties", "advertising without owner approval"]
+- **Languages:** [list]
+- **Geographic scope:** [global / specific markets]
+
+## Data retention
+
+- **Source audio retained until:** [date OR "indefinitely while owner consents"]
+- **Trained model retained until:** [date OR event]
+- **Revocation procedure:** [how the owner withdraws consent — e.g., "email +
+  signed letter triggers model + data deletion within 30 days"]
+
+## Watermark + attribution
+
+- **Watermark key fingerprint:** [auto-filled by skill]
+- **Audible watermark frequency:** [if any]
+- **Inaudible watermark spec:** [auto-filled — model + key fingerprint]
+- **Attribution test passing score required:** [threshold, e.g., "AUC >= 0.95"]
+
+## Liability + recourse
+
+- Owner retains right to inspect every recorded use of the clone.
+- Owner retains right to demand model + data deletion at any time.
+- Producer (skill caller) attests outputs will carry the inaudible watermark.
+
+## Signature
+
+I, **[full legal name]**, on **[YYYY-MM-DD]**, consent to the scope above.
+
+Signature: ______________________
+
+(Or: signed by gpg key fingerprint **[16-char fingerprint]** via commit attestation.)
+```
+
+After generating the template, STOP and tell the user: "Fill in CONSENT.md
+completely, sign the final line, then continue this skill. I will refuse to
+proceed without the signed line on disk."
+
+### Step 2: Verify signature presence
+
+```bash
+SIGN_LINE=$(grep -E "^I, .+, on [0-9]{4}-[0-9]{2}-[0-9]{2}, consent to the scope above\.$" \
+  "$PLAN_ROOT/{voice-slug}/CONSENT.md" || true)
+[ -z "$SIGN_LINE" ] && echo "CONSENT_UNSIGNED" || echo "CONSENT_OK"
+```
+
+If `CONSENT_UNSIGNED`: stop with "CONSENT.md is not signed. Fill in the signature
+line exactly: `I, {name}, on {YYYY-MM-DD}, consent to the scope above.` (no trailing
+whitespace). Re-run this skill once signed."
+
+### Step 3: Pick the cloning tier
+
+AskUserQuestion:
+- **Simplify:** "There are three tiers of voice cloning. Zero-shot needs almost
+  no data but quality has a ceiling. Few-shot is the sweet spot for most production
+  use. Full fine-tune is the gold standard but expensive."
+- **RECOMMENDATION:** B (few-shot) for production agents; A (zero-shot) for prototypes;
+  C (full) for studio-quality narration only.
+- **Options:**
+  - A) Zero-shot — 6-30 seconds reference audio, XTTSv2 or Tortoise. Completeness:
+    7/10 (intelligible, recognizable; not studio-grade; emotion control limited).
+  - B) Few-shot — 5-30 minutes paired audio + transcript, StyleTTS2 adaptation
+    or XTTS fine-tune. Completeness: 9/10.
+  - C) Full fine-tune — 5-50+ hours paired data, VITS / StyleTTS2 from scratch.
+    Completeness: 10/10 (studio-quality, weeks of training, full prosody control).
+
+Apply this matrix to write `$PLAN_ROOT/{voice-slug}/clone-config.yaml`:
+
+| Tier | Backbone candidates | Data requirement | Training time (single voice) | Quality ceiling |
+|---|---|---|---|---|
+| Zero-shot | XTTSv2, Tortoise, F5-TTS | 6-30s clean reference | None (inference only) | MOS ~3.8-4.2 |
+| Few-shot | StyleTTS2 (adaptation head), XTTSv2 fine-tune | 5-30 min paired | 2-8 GPU-hours | MOS ~4.0-4.4 |
+| Full | VITS, StyleTTS2 full, Tacotron2 | 5-50+ hours paired | 50-500 GPU-hours | MOS ~4.3-4.6 |
+
+### Step 4: Watermark spec
+
+Every clone produced under this skill MUST carry an inaudible watermark. Hall's
+fingerspelling work taught us: the question "is this synthetic" is not optional.
+
+Generate the watermark key:
+
+```bash
+mkdir -p "$PLAN_ROOT/{voice-slug}/keys"
+# Watermark key is a 256-bit random secret; the lib/voice-watermark.ts module
+# (introduced alongside this skill) handles embedding + extraction.
+openssl rand -hex 32 > "$PLAN_ROOT/{voice-slug}/keys/watermark-key.hex"
+chmod 0600 "$PLAN_ROOT/{voice-slug}/keys/watermark-key.hex"
+FINGERPRINT=$(openssl dgst -sha256 "$PLAN_ROOT/{voice-slug}/keys/watermark-key.hex" \
+  | awk '{print $2}' | cut -c1-16)
+echo "WATERMARK_KEY_FINGERPRINT: $FINGERPRINT"
+```
+
+Update CONSENT.md's "Watermark key fingerprint" field with `$FINGERPRINT`.
+
+Pick the watermark technique. Write the choice into clone-config.yaml:
+
+| Technique | Robustness | Audible quality impact | Library |
+|---|---|---|---|
+| **AudioSeal** (Meta, 2024) | Survives MP3, low-pass, light noise | Imperceptible | `audioseal` (PyTorch) |
+| **WavMark** | Survives MP3, time stretch | Imperceptible | `wavmark` (PyTorch) |
+| **Spectral notch + spread-spectrum** | Survives compression; fragile to filtering | Imperceptible | Custom |
+| Audible voice signature (TTS reads "synthetic" tag) | 100% robust but obvious | Audible | None (just prepend a phrase) |
+
+**RECOMMENDATION:** AudioSeal as primary + audible signature for high-stakes outputs.
+
+### Step 5: Watermark failure plan
+
+What happens if watermark extraction fails post-deployment? Write
+`$PLAN_ROOT/{voice-slug}/WATERMARK-FAILURE-PLAN.md` covering:
+
+- **Detection cadence:** sample N% of production outputs, run extraction, alert
+  if recovery rate drops below threshold (e.g., < 95%).
+- **Failure modes:** lossy transcoding, aggressive noise reduction, partial
+  re-recording (someone played the clone through a speaker and recorded it).
+- **Response:** rotate watermark key; rebuild model with new key; expire old key
+  in CONSENT.md.
+
+### Step 6: Attribution test
+
+Write `$PLAN_ROOT/{voice-slug}/attribution-test.md` defining:
+
+- **Test corpus:** 100+ utterances from the cloned voice + 100+ from a held-out
+  set of OTHER voices (real and other clones).
+- **Method:** ECAPA-TDNN embeddings → cosine similarity to a reference centroid.
+  AUC > 0.95 is the passing bar.
+- **Frequency:** run before every model release + once per month in production.
+- **Failure response:** if AUC drops, freeze the model release; investigate
+  whether training data was contaminated or the watermark is leaking similarity
+  to other voices.
+
+This test is what proves your clone is your clone — not just that it sounds like
+the owner, but that an independent classifier can distinguish it from impostors.
+
+### Step 7: Data + training plan
+
+Write `$PLAN_ROOT/{voice-slug}/DATA-AND-TRAIN.md` covering (per tier):
+
+- **Audio capture protocol** (mic, sample rate, room treatment, prompt list).
+- **Annotation** (Montreal Forced Aligner / WhisperX for alignment, g2p for phonemes).
+- **Cleaning** (SNR threshold, loudness norm, silence trim).
+- **Train recipe** with hyperparameters cited from the picked backbone's reference.
+- **Compute estimate** ($$ + GPU-hours).
+- **Watermark injection point** (during synthesis, NOT during training — confirm
+  the chosen library supports the runtime).
+
+### Step 8: Eval plan
+
+Write `$PLAN_ROOT/{voice-slug}/EVAL.md` that calls `/voice-eval` with:
+
+- Speaker similarity (ECAPA-TDNN) — required.
+- MOS / MOSNet — required for production tier.
+- WER via Whisper back-transcribe — required.
+- Watermark extraction recovery rate — required.
+- Attribution test AUC — required.
+
+S9 eval-store `task_id`s: `voice-{voice-slug}-{metric}`.
+
+### Step 9: Hand-off
+
+Print the file tree. AskUserQuestion:
+- **Simplify:** "Plan is staged. Next step is usually `/finetune --domain speech-tts`
+  to actually train (or just configure inference for zero-shot)."
+- **RECOMMENDATION:** A.
+- **Options:**
+  - A) Run /finetune to start training. Completeness: 10/10.
+  - B) I'll review the plan first. Completeness: 9/10.
+
+---
+
+## Outputs
+
+```
+$PLAN_ROOT/{voice-slug}/
+├── CONSENT.md                  # Signed declaration — MANDATORY before next step
+├── clone-config.yaml           # Tier, backbone, watermark spec, deployment notes
+├── keys/
+│   └── watermark-key.hex       # 0600, never committed
+├── WATERMARK-FAILURE-PLAN.md   # Detection cadence + rotation procedure
+├── attribution-test.md         # ECAPA-TDNN AUC test definition
+├── DATA-AND-TRAIN.md           # Capture protocol + training recipe
+└── EVAL.md                     # Calls /voice-eval with required metric set
+```
+
+Add to project `.gitignore`: `keys/`, `*.hex` — watermark keys NEVER commit.
+
+---
+
+## Edge cases
+
+- **Voice samples include third-party speakers** (e.g., podcast clips with guests):
+  refuse. Demand consent from every speaker OR demand cleaned mono-speaker audio.
+- **Owner withdraws consent mid-project:** delete model + data per CONSENT.md
+  retention clause. Hash-chain the deletion event into the audit log.
+- **Watermark library doesn't support target runtime** (e.g., AudioSeal on WASM):
+  fall back to spectral-notch watermark OR audible signature. Never ship without
+  one.
+- **Synthetic persona (no real reference):** still requires CONSENT.md (project
+  owner attests no real-person reference, accepts watermark obligation). The
+  attribution test in this case proves "this is the persona's voice, not a
+  drift toward a real person's voice that would re-introduce identity risk."
+- **Licensing audit conflict:** XTTSv2 has CPML (Coqui Public Model License) with
+  commercial caveats. If clone-config picks XTTSv2 + deployment is commercial,
+  flag the license terms in clone-config.yaml.
+- **Cross-language clone** (clone a Thai voice, synthesize English with it):
+  XTTSv2 and StyleTTS2 with cross-lingual training data support this; pure VITS
+  does not. Bake the cross-lingual capability flag into clone-config.yaml.
+- **Multilingual code-switch** (Hall's TSL case — Thai-accented English with Thai
+  phrases mid-sentence): few-shot StyleTTS2 with code-switched fine-tune corpus
+  OR XTTSv2 native. Coordinate with `/prosody-control` for the cadence layer.
+
+---
+
+## Dependencies
+
+- **S9 — Eval-store schema:** EVAL.md baselines write to the shared eval store
+  with `task_id` = `voice-{voice-slug}-{metric}`.
+- **S11 — Authorization log:** every consent refusal and key rotation appends to
+  `~/.gstack/projects/{slug}/audit.log` with hash chain.
+- `/tts-design` — upstream architecture skill; clone-config.yaml may reference
+  its output.
+- `/voice-eval` — eval harness; called by EVAL.md.
+- `/prosody-control` — for expression / accent overlays on the cloned voice.
+- `/finetune --domain speech-tts` — downstream training executor.
+- New `lib/voice-watermark.ts` — wraps AudioSeal / WavMark / spectral-notch
+  embedding + extraction (introduced alongside this skill per roadmap).
+- Model checkpoints (downloaded by `/finetune`): XTTSv2, StyleTTS2, Tortoise,
+  VITS, F5-TTS, plus AudioSeal generator + detector.
+
+---
+
+## Important Rules
+
+- **CONSENT.md unsigned ⇒ HARD REFUSAL.** No flags bypass this. No "research
+  mode" bypass. No "I trust myself" bypass.
+- **Every clone carries a watermark.** Even synthetic personas. Even research demos.
+- **Watermark keys NEVER commit.** Verify `.gitignore` excludes the `keys/` dir.
+- **Attribution test is mandatory before any production release.** AUC < 0.95
+  means do not ship.
+- **Refuse cloning from non-owned audio.** YouTube clips, leaked recordings,
+  third-party podcasts: refuse, log the refusal.
+- **Cross-language commercial deployment ⇒ verify backbone license.** XTTSv2 has
+  CPML caveats; surface them in clone-config.yaml.
+- **On consent withdrawal:** delete within the retention clause's timeframe.
+  Hash-chain the deletion. Do not "soft delete" or "archive."

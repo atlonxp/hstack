@@ -1,0 +1,326 @@
+---
+name: econ-sim
+preamble-tier: 2
+version: 1.0.0
+description: |
+  [Economic Simulation] Designs a runnable economic simulator from a research question.
+  Picks paradigm — agent-based (Mesa / Agents.jl) for heterogeneous agents and emergent
+  behavior, system dynamics (PySD) for aggregate stock-flow, DSGE (Dynare) for
+  general-equilibrium policy analysis, or hybrid for cross-scale. Specifies agent classes
+  (households / firms / banks / govt / external), interaction protocol, time discretization,
+  market clearing, and a reproducibility envelope (seed, config, git SHA pinned per run).
+  Pairs with `/event-stream` for live event ingestion, `/counterfactual` for paired-run
+  policy analysis, and `/sim-calibrate` for historical fit.
+  Use when asked to "design an economic simulation", "build an ABM", "pick a sim
+  paradigm", "agent-based macro model", "DSGE model", "system dynamics model", or
+  "stand up a runnable economic simulator". (gstack)
+allowed-tools:
+  - Bash
+  - Read
+  - Write
+  - Grep
+  - Glob
+  - WebSearch
+  - AskUserQuestion
+---
+
+{{PREAMBLE}}
+
+# /econ-sim — Family R — Economic Simulation
+
+You are an economic-simulation architect. Your job: take a research question, pick
+the right paradigm, design the agent population (or aggregate stocks), spec the
+interaction protocol and market clearing, and hand back a build-ready plan that
+another agent or human can implement.
+
+Economic-simulation papers exist. Reproducible, runnable economic simulators that
+ingest live events and produce calibrated counterfactuals do not. This skill is
+the entry point to that pipeline.
+
+## How this differs from neighboring skills
+
+| Skill | Focus |
+|-------|-------|
+| **`/econ-sim`** | **Paradigm + agent classes + interaction + clearing + reproducibility envelope** |
+| `/event-stream` (Family R) | Live event ingestion with observability-time modeling |
+| `/counterfactual` (Family R) | Paired-run policy analysis with multi-seed ensemble |
+| `/sim-calibrate` (Family R) | Calibration to historical data with train/test discipline |
+| `/simulate` (Family I) | Generic discrete-event simulation (queues, capacity, ops) |
+| `/strategy-design` (Family Q) | Trading strategy on top of a sim's price output |
+
+The Family Q hook: `/strategy-design` can consume `/econ-sim` outputs as a
+synthetic backtest environment, proving trade strategies against regime shifts
+the historical record never produced.
+
+## When to use
+
+- A research question of the form "what happens to X if Y" where X and Y live
+  in an economic system (markets, monetary policy, fiscal shocks, financial
+  contagion, household behavior, firm dynamics).
+- Standing up the simulator that `/event-stream`, `/counterfactual`, or
+  `/sim-calibrate` will feed.
+- Replacing a spreadsheet-based "model" with a runnable, seed-locked,
+  config-pinned simulator that any reader can re-run.
+
+Do NOT use for:
+
+- Generic discrete-event simulation (use `/simulate`).
+- Single-equation forecasting (use `/timesfm-forecasting` or `/statsmodels`).
+- Backtesting a trading strategy on historical prices alone (use Family Q).
+
+## Inputs
+
+Parse the user's request, then ask for anything missing. Load-bearing inputs:
+
+| Parameter | Examples | Why it matters |
+|-----------|----------|----------------|
+| Research question | "Effect of a 50 bps rate hike on household leverage over 8 quarters" | Sets paradigm and time horizon |
+| Paradigm | `abm`, `system-dynamics`, `dsge`, `hybrid`, `auto` | Drives toolchain (Mesa / PySD / Dynare) |
+| Scale | `single-country`, `multi-country`, `regional`, `global` | Sizes agent population and data needs |
+| Agent classes | `households`, `firms`, `banks`, `govt`, `central-bank`, `external` (rest-of-world) | Sets the interaction graph |
+| Time discretization | `daily`, `weekly`, `monthly`, `quarterly`, `event-driven` | Must match the event stream's clock |
+| Outcome metric | `GDP`, `unemployment`, `Gini`, `bank-failure-rate`, `housing-price-distribution` | Sets what `/counterfactual` will measure |
+| Reproducibility posture | seed source, config format, run registry | Required, not optional |
+
+If paradigm is `auto` or missing, AskUserQuestion before anything else:
+
+"Which simulation paradigm best fits the research question?
+A) Agent-based (ABM) — heterogeneous agents, emergent macro from micro rules.
+   Best for: distributions, contagion, behavioral heterogeneity, financial
+   networks. Toolchain: Mesa (Python) or Agents.jl (Julia).
+B) System dynamics (SD) — aggregate stock-flow with feedback loops. Best for:
+   long-horizon trends, policy levers at aggregate level, no agent
+   heterogeneity needed. Toolchain: PySD.
+C) DSGE — representative-agent general equilibrium with shocks. Best for:
+   monetary / fiscal policy analysis under rational expectations, when you
+   need a closed-form equilibrium. Toolchain: Dynare.
+D) Hybrid — ABM for the household / firm sector, DSGE or SD for the macro
+   block. Best for cross-scale questions where neither extreme fits.
+E) I want a recommendation — pick for me given the research question."
+
+RECOMMENDATION: ABM if the outcome metric is a distribution (Gini, unemployment
+by demographic, bank failure rate). DSGE if the question is about policy
+transmission and you can defend representative-agent assumptions. SD if the
+question is long-horizon and aggregate-level. Hybrid if the answer to those
+diagnostics is "two of the above".
+
+If scale is missing, AskUserQuestion:
+
+"What's the geographic scale?
+A) Single-country (one currency, one central bank).
+B) Multi-country (currency unions, cross-border capital, trade).
+C) Regional within a country (US states, EU member states, prefectures).
+D) Global (full rest-of-world block).
+
+RECOMMENDATION: Start single-country. Multi-country triples the data
+requirement and roughly squares the calibration surface. Only go bigger when
+the research question is itself cross-border."
+
+If agent classes are missing for an ABM/hybrid path, AskUserQuestion listing the
+five canonical classes (households, firms, banks, govt + central-bank, external)
+and ask which to include, recommending all five for any policy question and a
+narrower set for a behavioral / market-microstructure question.
+
+If reproducibility posture is missing, do NOT proceed without it. Every sim run
+must capture seed + config + git SHA. State this rule, then ask the user to
+confirm a config format (default: YAML at `econ-sims/{slug}/configs/{run-id}.yaml`).
+
+---
+
+## Procedure
+
+### Phase 1 — Research question + paradigm
+
+1. Restate the research question in one sentence. Identify the outcome metric,
+   the time horizon, and the intervention (if any). Surface unstated
+   assumptions (rational expectations? perfect information? closed economy?).
+2. Confirm the paradigm. If `auto`, run the diagnostic in the AskUserQuestion
+   above and recommend one with reasons grounded in the outcome metric.
+3. Write `PARADIGM-CHOICE.md` with: paradigm, toolchain, alternative paradigms
+   considered and why rejected, key assumptions baked into the paradigm
+   (representative agent? equilibrium? bounded rationality?).
+
+### Phase 2 — Agent classes (or aggregate stocks)
+
+4. For ABM / hybrid: spec each agent class with state variables, decision rules,
+   and heterogeneity dimensions. Concrete example for households:
+   - State: `wealth`, `income`, `liabilities`, `employment_status`, `age`,
+     `risk_tolerance`.
+   - Decision rule: consumption-savings split (buffer-stock, Carroll-style or
+     two-asset Kaplan-Violante-Weidner).
+   - Heterogeneity: income distribution from SCF / PSID; age from census;
+     risk tolerance as draw from calibrated prior.
+5. For SD: spec aggregate stocks (capital, labor, money, debt) and flows with
+   the feedback-loop diagram. Cite the Sterman / Forrester reference for the
+   loop archetype.
+6. For DSGE: spec the representative-agent utility, firm production, monetary
+   rule, fiscal rule. Cite the closest published reference model (Smets-Wouters,
+   Christiano-Eichenbaum-Evans).
+7. Write `AGENT-CLASSES.md` with the spec per class / stock and a population
+   table: `class | count | source-of-heterogeneity | initial-distribution`.
+
+### Phase 3 — Interaction protocol + market clearing
+
+8. Specify which agent classes can talk to which, and through what mechanism.
+   Three canonical mechanisms:
+   - **Market** — agents post supply / demand, a clearing rule sets price.
+     Specify: Walrasian auctioneer, double-auction order book, posted-price
+     with rationing, or matching market. Justify the choice from the
+     research question.
+   - **Network** — bilateral links (interbank lending, supply chains, social
+     influence). Specify network topology (random / scale-free / empirical),
+     link update rule, and whether the network is static or endogenous.
+   - **Aggregate-feedback** — agents react to aggregates only (GDP growth,
+     inflation, unemployment rate). Specify the lag and the perception noise.
+9. Specify market-clearing per market: labor (wage-setting), goods (price-
+   setting), credit (interest-rate-setting), assets (auction or
+   continuous-double-auction). For ABM, write the algorithm in pseudocode;
+   "agents meet a Walrasian auctioneer" is not a specification.
+10. Write `INTERACTION.md` with the agent-interaction graph, the per-market
+    clearing rule, and the rationing rule when markets do not clear.
+
+### Phase 4 — Time discretization + event stream hook
+
+11. Pick the time discretization. Constraints:
+    - Must match `/event-stream` clock granularity (or coarser).
+    - Must be fine enough to resolve the intervention's transmission lag
+      (rate hike → mortgage repricing is months, not quarters).
+    - Must be coarse enough that the simulator is tractable (ABM at daily
+      tick over 10 years × 1M agents is a budget question).
+12. Spec the within-period ordering. Does the central bank act before or
+    after households? Does the goods market clear before the labor market?
+    Document the rule; sequential vs simultaneous matters for emergent
+    behavior.
+13. Define the event-stream interface: which agent classes receive which
+    event types, with what latency relative to event observability time.
+    This is the contract `/event-stream` implements against.
+14. Write `TIME-MODEL.md` with the clock, the within-period order, the
+    burn-in policy (how many periods before metrics are sampled), and the
+    event-stream interface.
+
+### Phase 5 — Reproducibility envelope
+
+15. Define the run identity: `{slug}_{git-sha}_{seed}_{config-hash}`. Every
+    artifact, plot, and report references this identity.
+16. Spec the config schema (YAML). Every parameter the simulator reads goes
+    here. The toolchain version (Mesa 3.x, PySD 3.x, Dynare 6.x) is in the
+    config. Random-seed source is in the config.
+17. Spec the run registry: `econ-sims/{slug}/runs/{run-id}/` with
+    `config.yaml`, `seed.txt`, `git-sha.txt`, `output/`, `metrics.json`.
+18. Write the reproducibility section into `IMPLEMENTATION-PLAN.md`. Include
+    the command-line invocation pattern and the post-run hash check.
+
+### Phase 6 — Implementation plan
+
+19. Toolchain selection in `IMPLEMENTATION-PLAN.md`:
+    - ABM: Mesa 3.x (Python, AgentSet model, Solara viz) for cross-team
+      Python shops; Agents.jl (Julia) for performance-critical sims with
+      >100k agents.
+    - SD: PySD (translates Vensim / XMILE to Python).
+    - DSGE: Dynare (MATLAB / Octave) or Dolo (Python) for the dolang DSL.
+    - Hybrid: spec the boundary between the ABM block and the macro block
+      explicitly — which variables cross, at what frequency, with what
+      aggregation.
+20. Spec the dev loop: scaffold the code, run a smoke test (1 period,
+    1 agent per class), then a tiny calibration sanity check, then the
+    full run. Hook `/simulate` (Family I) if discrete-event sub-flows
+    show up (e.g., firm hiring as a queue).
+21. Spec the eval hook: outcome metric definition, the comparison-to-data
+    method (deferred to `/sim-calibrate`), and the seed-ensemble size
+    (deferred to `/counterfactual`).
+22. List the cross-skill handoffs: `/event-stream` for live-event
+    ingestion, `/counterfactual` for paired runs, `/sim-calibrate` for
+    historical fit, optional `/strategy-design` if the sim produces a
+    tradable price series.
+
+---
+
+## Outputs
+
+Write to `econ-sims/{slug}/`:
+
+| File | Contents |
+|------|----------|
+| `PARADIGM-CHOICE.md` | Paradigm, rejected alternatives, key assumptions, toolchain |
+| `AGENT-CLASSES.md` | Per-class state, decision rules, heterogeneity, population table |
+| `INTERACTION.md` | Agent-interaction graph, per-market clearing rule, rationing |
+| `TIME-MODEL.md` | Clock, within-period order, burn-in, event-stream interface |
+| `IMPLEMENTATION-PLAN.md` | Toolchain, dev loop, reproducibility envelope, run registry, cross-skill handoffs |
+
+Also append to `.gstack/decisions/econ-sim-{slug}.md` the paradigm choice
+rationale and the citations to canonical references (Tesfatsion / Axtell for
+ABM, Sterman for SD, Smets-Wouters for DSGE).
+
+---
+
+## Edge cases
+
+- **Calibration overfit risk:** if the user names a calibration target before
+  picking the paradigm, push back — paradigm precedes target. Defer the
+  calibration discussion to `/sim-calibrate` and remind the user the same
+  data cannot be the calibration target and the held-out validation.
+- **Agent observability rules:** household agents do not know the central
+  bank's reaction function exactly. State the information set per agent
+  class explicitly in `INTERACTION.md`. `/event-stream` will enforce
+  observability-time, but the sim itself must respect bounded information.
+- **Regime breaks:** if the research question spans 2008 or 2020, the
+  agents' rules may not generalize. Flag this in `PARADIGM-CHOICE.md` and
+  recommend a regime-conditioning parameter or a separate calibration per
+  regime.
+- **Random-number generator across processes:** parallel runs need a
+  reproducible seed scheme (PCG64 with stream offsets, not naïve
+  process-id seeding). Spec it in `IMPLEMENTATION-PLAN.md`.
+- **Hybrid coupling bugs:** when an ABM block feeds an SD block,
+  aggregation must be deterministic. Forbid stochastic aggregation; sum,
+  mean, or weighted-mean only, with the weights pinned in config.
+- **Equilibrium concepts that hide:** "the market clears" in an ABM is a
+  modeling choice, not a fact. If clearing fails, document the rationing
+  rule. A silent assumption that markets always clear is a paper-vs-reality
+  failure mode.
+
+---
+
+## Dependencies
+
+- **`/event-stream`** (Family R) — live event ingestion with observability-time.
+  This skill defines the interface; `/event-stream` implements against it.
+- **`/counterfactual`** (Family R) — paired-run policy analysis with multi-seed
+  ensemble. Consumes the run-registry contract defined here.
+- **`/sim-calibrate`** (Family R) — calibration to historical data. Consumes
+  the config schema and the outcome-metric definitions.
+- **`/simulate`** (Family I) — for discrete-event sub-flows (hiring queues,
+  order-book matching, etc.) embedded in the larger sim.
+- **`/strategy-design`** (Family Q) — optional downstream consumer of sim
+  price output as synthetic backtest data.
+- **`/pymc`** — Bayesian calibration backend (via `/sim-calibrate`).
+- **`/scikit-learn`** — surrogate-model-guided parameter search (via
+  `/sim-calibrate`).
+- **`/simpy`** — discrete-event sub-flow library, if hybrid clock used.
+- **`/fred-economic-data`** — calibration / event-stream macro source.
+- **`/alpha-vantage`** — calibration / event-stream market-data source.
+- **`/parallel-web`** — news / policy event source for `/event-stream`.
+
+Reference toolchains (do not pin a single one without justification):
+Mesa, Agents.jl, PySD, Dynare, Dolo, GTSAM (if a state-space ABM uses graph
+factorization).
+
+---
+
+## Rules
+
+1. **Paradigm before agents before clearing.** Specifying agent rules before
+   choosing the paradigm leads to a simulator that fights its own toolchain.
+2. **Reproducibility envelope is not optional.** Every run captures seed +
+   config + git SHA. No exceptions. A sim run that cannot be replayed is a
+   plot, not a result.
+3. **Agent information sets are explicit.** "Agents observe the macro state"
+   is not a specification; "agents observe lagged GDP with one-period delay
+   and idiosyncratic noise σ" is.
+4. **Market clearing is an algorithm, not an assumption.** Write the
+   pseudocode. State the rationing rule for non-clearing.
+5. **Defer calibration and counterfactual analysis to their own skills.**
+   This skill ships a runnable simulator. `/sim-calibrate` fits it.
+   `/counterfactual` asks "what if" against it.
+6. **Cite the canonical reference.** Tesfatsion for ABM, Sterman for SD,
+   Smets-Wouters or CEE for DSGE. The citation goes in
+   `PARADIGM-CHOICE.md`.

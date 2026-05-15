@@ -1,0 +1,332 @@
+---
+name: avatar-design
+preamble-tier: 2
+version: 1.0.0
+description: |
+  [Avatar & Embodiment] Full avatar architecture designer. Given a use case
+  (real-time conversational / pre-rendered cinematic / sign-language performer
+  / scripted explainer), picks the face model (NeRF / Gaussian Splatting / 3DMM
+  / 2D portrait), body model (SMPL-X / VR avatar / 2D), animation driver,
+  expression vocabulary, voice (from Family L), and integration layer. Outputs
+  build-ready ARCHITECTURE + SUBSYSTEMS + INTEGRATION + EVAL-HUMANNESS docs
+  the downstream avatar skills consume.
+  Use when: "design an avatar", "avatar architecture", "embodied agent stack",
+  "build a virtual human", "talking-head system", or "sign-performing avatar". (gstack)
+voice-triggers:
+  - "design an avatar"
+  - "avatar architecture"
+  - "build a virtual human"
+  - "embodied agent"
+triggers:
+  - avatar design
+  - avatar architecture
+  - virtual human
+  - embodied agent stack
+allowed-tools:
+  - Bash
+  - Read
+  - Write
+  - Glob
+  - Grep
+  - AskUserQuestion
+---
+
+{{PREAMBLE}}
+
+# /avatar-design — Family P — Avatar & Embodiment
+
+You are running the `/avatar-design` skill. This is the **architecture designer**
+for Hall's mixed track: virtual avatars that move + speak + express (and optionally
+perform sign language). Input: a use-case spec. Output: a four-doc architecture
+package that the rest of Family P (`/lip-sync`, `/gesture-synth`,
+`/expression-synth`, `/avatar-sign`) and Family L (`/tts-design`, `/voice-clone`)
+consume.
+
+You are NOT an avatar builder. You design the system, recommend the subsystems,
+and hand off a build-ready plan. Do not start training. Do not download models.
+Do not render frames. The output is four planning docs and a hand-off.
+
+The avatar space moves fast — NeRF gave way to Gaussian Splatting in 18 months,
+EMO replaced SadTalker for cinematic quality, MuseTalk took over real-time. When
+you cite a state-of-the-art model, pin the version (e.g., "MuseTalk v1.5, Aug 2024
+checkpoint"). If the user wants absolute latest, suggest `/discover --domain avatar`
+first.
+
+---
+
+## When to use
+
+- Greenfield avatar project — no face/body/voice picked yet.
+- Existing avatar feels uncanny / dead / robotic and the team is debating a rebuild.
+- Use case shifted (e.g., from cinematic explainer to real-time conversational).
+- Adding sign-language performance to an existing avatar.
+- Multimodal subsystem mismatch (e.g., great TTS, bad lip-sync) and you need a
+  coherent re-design instead of patches.
+
+Do NOT use for:
+- Lip-sync model selection only → use `/lip-sync`.
+- Gesture synthesis only → use `/gesture-synth`.
+- Expression / FACS surface only → use `/expression-synth`.
+- Sign-performing avatar pipeline only → use `/avatar-sign` (which depends on this skill).
+- Voice work in isolation → use `/tts-design` / `/voice-clone`.
+
+---
+
+## Inputs
+
+| Input | Required? | Format |
+|---|---|---|
+| Use case | yes | "real-time conversational" / "pre-rendered cinematic" / "sign-language performer" / "scripted explainer" |
+| Face rig source | yes | "from scratch (no source asset)" / "single photo" / "video capture" / "3D scan" / "existing 3DMM/FLAME asset" |
+| Body rig source | yes | "head-and-shoulders only" / "half-body" / "full body, no hands" / "full body w/ hand articulation" / "VR-style avatar" |
+| Voice source | yes | "from Family L (/tts-design or /voice-clone)" / "external TTS" / "pre-recorded audio" |
+| Target latency | yes | ms end-to-end (e.g., 300ms streaming, 1500ms turn, "offline only") |
+| Hardware envelope | yes | "cloud GPU (A100/H100)" / "consumer GPU (4090)" / "edge (single CPU)" / "browser WASM" / "mobile NPU" |
+| Expressivity scope | yes | "neutral talking head" / "emotional range" / "full conversational beats + micro-expressions" |
+| Sign-language performance | optional | "no" / "yes — fingerspelling only" / "yes — full sign" + target sign language(s) |
+| License posture | yes | "permissive only (MIT/Apache)" / "research OK (CC-BY-NC)" / "commercial w/ attribution" |
+| Existing baseline | optional | If iterating, name the current stack + observed limitation |
+
+Spec mode: `--spec avatar-spec.yaml` reads YAML with these keys.
+Interactive mode: AskUserQuestion through each in order.
+
+---
+
+## Procedure
+
+### Step 0: Locate plan root + project slug
+
+```bash
+PLAN_ROOT="${CLAUDE_PLANS_DIR:-$HOME/.gstack/projects/$(basename "$PWD")}/avatars"
+mkdir -p "$PLAN_ROOT"
+echo "PLAN_ROOT: $PLAN_ROOT"
+```
+
+Ask the user for a project slug (e.g., `tsl-tutor`, `support-bot`, `cinematic-narrator`).
+Final outputs land at `$PLAN_ROOT/{slug}/`.
+
+### Step 1: Confirm intent + scope
+
+AskUserQuestion (preamble format):
+- **Re-ground:** current project + branch.
+- **Simplify:** "Avatar architecture is five interlocking decisions (face, body, voice,
+  animation, expression) that lock 80% of the user-perceived quality. Picking wrong
+  on any one of them looks uncanny no matter how good the others are. Let's lock the
+  use case before we touch subsystems."
+- **RECOMMENDATION:** A because subsystem-by-subsystem design without a use-case anchor
+  is how teams ship mismatched stacks (cinematic face on a real-time pipeline = stutter).
+- **Options:**
+  - A) Design a full new avatar stack from scratch. Completeness: 10/10.
+  - B) I already have subsystems picked — just give me the integration plan. Completeness:
+    7/10 (this skill is overkill; consider per-subsystem skills directly).
+  - C) Evaluating two architectures head-to-head. Completeness: 9/10 (this skill will
+    produce two parallel plans for `/voice-eval` + humanness eval to compare).
+
+### Step 2: Gather the spec (interactive or `--spec`)
+
+For each input row in the table above, AskUserQuestion with:
+- **Simplify:** plain-language gloss of why the field matters.
+- **RECOMMENDATION:** sensible default with rationale.
+- **Options:** 2-4 concrete choices each, with a Completeness score.
+
+For `use case` specifically gloss as: "real-time conversational means the user can
+interrupt and the avatar has to respond inside ~1 second end-to-end. Cinematic means
+you can spend minutes per second of footage. Sign performer means hand articulation
+is non-negotiable. Scripted explainer is the easiest — pre-render everything."
+
+For `target latency` gloss: "end-to-end latency is from user-speech-end to
+avatar-mouth-open. Streaming (<400ms) requires a real-time lip-sync model
+(MuseTalk / audio2lip) and rules out diffusion-based face models. Anything above
+~1500ms feels like a video call on bad wifi."
+
+For `expressivity scope` gloss: "neutral means the face does mouth movement and
+nothing else — fine for a navigation prompt, lethal for a teaching tutor. Emotional
+range adds Ekman-style discrete emotions. Full conversational beats adds turn-taking
+cues, back-channels, micro-expressions — that's what makes the avatar feel like it's
+listening."
+
+### Step 3: Architecture recommendation
+
+Apply the decision matrices below, then write `$PLAN_ROOT/{slug}/ARCHITECTURE.md`.
+
+**Face model matrix:**
+
+| If user needs... | Recommended face model | Rationale |
+|---|---|---|
+| Photoreal cinematic, no real-time constraint | **3D Gaussian Splatting** (GaussianAvatars, GaussianHead) | Best photoreal quality 2024; ~30fps render on consumer GPU once trained |
+| Real-time portrait talking head from one photo | **2D portrait + MuseTalk** | <100ms inference; works zero-shot from a single frame |
+| Multi-view consistency required (turning head, walking) | **NeRF-based avatar** (NerFACE, INSTA) or **Gaussian Splatting** | NeRF has slower render but cleaner geometry; GS faster but needs more capture |
+| Riggable, animatable from blendshapes | **3DMM / FLAME / MetaHuman** | Industry-standard parametric face; works with FACS action units cleanly |
+| Sign-performer (face matters for non-manual features) | **FLAME-based mesh + facial blendshapes** | Required: brow raise / eye gaze / mouth shapes drive ASL/TSL grammar |
+| Edge / mobile / browser | **2D portrait + lightweight lip-sync** (Wav2Lip distilled / SadTalker quantized) | Only viable face model at <500MB and CPU/NPU inference |
+| Stylized / cartoon | **2D rigged sprite** + Live2D / Spine | Photoreal models look broken when stylized; rigged 2D is the right tool |
+
+**Body model matrix:**
+
+| If user needs... | Recommended body model | Rationale |
+|---|---|---|
+| Head-and-shoulders only | None — face model alone | Don't over-engineer |
+| Half-body, gesture-light | **SMPL-X (face + hands + body)** rendered as upper-body crop | Standard parametric body; integrates with gesture synth |
+| Full body, presenter-style | **SMPL-X** + retargeted gestures | Industry standard; gesture-synth models target SMPL-X joints |
+| Full body w/ fine hand articulation (sign / craft) | **SMPL-X w/ MANO hands** | MANO is the de facto hand model; required for sign-performing avatars |
+| VR / metaverse avatar | **VRM (VRoid) format** | Open standard; works with Unity / VRChat / Pretext pipelines |
+| 2D-stylized | **Rigged 2D body** (Spine / DragonBones) | Pairs with 2D face model |
+
+**Animation driver matrix:**
+
+| Use case | Lip-sync driver | Gesture driver | Expression driver |
+|---|---|---|---|
+| Real-time conversational | `/lip-sync` w/ MuseTalk | `/gesture-synth` w/ light beat-only model | `/expression-synth` w/ conversational-beat surface |
+| Cinematic | `/lip-sync` w/ EMO or latentSync | `/gesture-synth` w/ GENEA-SOTA / retargeted MoCap | `/expression-synth` w/ full FACS surface |
+| Sign performer | `/avatar-sign` (drives mouth, brows, gaze from gloss) | `/avatar-sign` (drives hands + body) | `/avatar-sign` (drives non-manual features) |
+| Scripted explainer | `/lip-sync` w/ SadTalker or EMO | Pre-keyframed or `/gesture-synth` offline | Pre-keyframed or `/expression-synth` offline |
+
+For each recommendation include in ARCHITECTURE.md:
+- The picked face / body / voice / animation triple, with version pins.
+- Framework / engine: PyTorch for ML subsystems; Three.js / Babylon / Unity / Unreal
+  for rendering layer; ONNX Runtime for edge deployment.
+- Hardware envelope per subsystem (training and inference, broken out).
+- The integration topology: which subsystem owns the master clock (usually audio),
+  how A/V sync is enforced, where state lives between turns.
+- What this stack CAN'T do — explicit limitations so the user doesn't get burned.
+
+### Step 4: Subsystems doc
+
+Write `$PLAN_ROOT/{slug}/SUBSYSTEMS.md` covering each subsystem with:
+- Picked model + version pin.
+- Inputs / outputs / data format (e.g., "MuseTalk consumes 25fps RGB + 16kHz audio,
+  emits RGB").
+- Training data needs (or "uses public checkpoint, no training").
+- Inference cost (GPU memory, latency per chunk, throughput).
+- Hand-off skill (e.g., "the face model is handed to `/lip-sync` Step 3").
+
+### Step 5: Integration doc
+
+Write `$PLAN_ROOT/{slug}/INTEGRATION.md` covering:
+- **Master clock:** which subsystem drives time (audio for streaming, video timeline
+  for cinematic).
+- **A/V sync mechanism:** explicit sync points (e.g., "viseme timestamps from
+  `/lip-sync` are emitted at 25Hz, gesture timestamps at 30Hz, expression at 60Hz —
+  the renderer interpolates").
+- **State management:** conversational state (turn-taking, back-channels) lives in
+  `/expression-synth`'s beat-cue surface; emotion state hands across subsystems via
+  shared valence-arousal scalars.
+- **Failure modes:** what happens when lip-sync misses a frame, when gesture model
+  stalls, when TTS streams a chunk late. Per-subsystem degradation policy.
+- **Telemetry:** what each subsystem emits (latency p50/p99, sync drift, etc.) for
+  the eval harness.
+
+### Step 6: Eval-humanness doc
+
+Write `$PLAN_ROOT/{slug}/EVAL-HUMANNESS.md` calling into the eval harness with the
+metric set this stack needs:
+
+- **Perceived humanness (MOS-style human panel)** — required for any production tier.
+- **Lip-sync quality** (Sync-D, LSE-C from `/lip-sync` EVAL.md, cross-ref Family L
+  `/voice-eval` for cross-modal sync).
+- **Gesture appropriateness** (FGD from `/gesture-synth` EVAL.md).
+- **Expression naturalness** (from `/expression-synth` EVAL.md).
+- **Sign-fluency** if `/avatar-sign` is in the stack — native-deaf-reviewer loop is
+  mandatory; no MOS-equivalent automated metric is trustworthy enough yet.
+- **Uncanny-valley early-warning probe** — show a 5-second clip to N reviewers, ask
+  "does this person feel alive?" — gate threshold per quality tier.
+
+Eval cadence: per-subsystem during build; end-to-end nightly during integration;
+full human panel before release.
+
+### Step 7: Hand-off
+
+Print the four file paths. AskUserQuestion:
+- **Simplify:** "Architecture is on disk. Next step is to design each subsystem in
+  parallel — `/lip-sync`, `/gesture-synth`, `/expression-synth`, optionally
+  `/avatar-sign`. Or run `/autoplan-full` to expand the whole stack into a build pipeline."
+- **RECOMMENDATION:** B — run subsystem skills in dependency order so each plan
+  references this architecture.
+- **Options:**
+  - A) Run /autoplan-full on the architecture. Completeness: 10/10.
+  - B) Walk through subsystem skills now (`/lip-sync`, then `/gesture-synth`, then
+    `/expression-synth`, optionally `/avatar-sign`). Completeness: 10/10.
+  - C) Stop — I'll review the docs first. Completeness: 9/10.
+
+---
+
+## Outputs
+
+```
+$PLAN_ROOT/{slug}/
+├── ARCHITECTURE.md     # Face + body + voice + animation + expression picks + can't-do list
+├── SUBSYSTEMS.md       # Per-subsystem spec, inputs/outputs, training needs, hand-off
+├── INTEGRATION.md      # Master clock, A/V sync, state, failure modes, telemetry
+└── EVAL-HUMANNESS.md   # Metric set, cadence, gate thresholds, uncanny-valley probe
+```
+
+Every file has YAML frontmatter with `target`, `version`, `derived_from` for S12
+artifact format and S9 eval-store consumption.
+
+---
+
+## Edge cases
+
+- **Uncanny valley risk:** photoreal face + crappy gesture = worse than stylized face
+  + crappy gesture. If gesture budget is small and face quality is medium-high, push
+  user toward a slightly-stylized face (FLAME with soft-shaded textures) — coherent
+  beats photoreal-but-broken.
+- **Latency budget physically impossible:** user wants 200ms end-to-end on consumer
+  CPU with diffusion face. Surface the conflict. Recommend 2D portrait + MuseTalk +
+  light gesture or drop to scripted-explainer mode.
+- **Sign performer w/o hand articulation:** if face rig has no hands, refuse to write
+  the doc with sign-language enabled. Hand articulation is non-negotiable for
+  `/avatar-sign`.
+- **Voice/face mismatch:** XTTSv2 cloning a 60-year-old male voice on a 25-year-old
+  female 3DMM is a strong uncanny signal. Flag the demographic mismatch and ask the
+  user to confirm intentional choice.
+- **License conflict:** user said "commercial" but recommended stack pulls in a
+  research-only checkpoint (e.g., F5-TTS, certain GENEA challenge models). Refuse the
+  doc and surface the conflict — pick license-compatible alternates or change deploy
+  intent.
+- **Multilingual expression:** discrete-emotion models (Ekman) ARE cross-cultural-ish
+  but micro-expressions and gesture grammar are NOT. If targeting multiple cultures,
+  flag that `/gesture-synth` and `/expression-synth` need cultural-vocab branches per
+  target.
+- **Hall's TSL-performing-avatar case:** face rig must have FLAME blendshapes for
+  non-manual features (brow raise, mouth shapes, eye gaze). Body rig must have MANO
+  hands. Recommend FLAME face + SMPL-X body w/ MANO + `/avatar-sign` pipeline.
+- **"Just one feature" creep:** user comes for cinematic, then asks "can it also do
+  real-time?" mid-skill. Stop. Force a use-case re-pick — these are different stacks,
+  not toggles.
+
+---
+
+## Dependencies
+
+- **Family L (Speech & Voice AI):** `/tts-design`, `/voice-clone`, `/prosody-control`,
+  `/voice-eval`. The avatar's voice is upstream of every subsystem.
+- **Family P sibling skills (downstream):** `/lip-sync`, `/gesture-synth`,
+  `/expression-synth`, `/avatar-sign`.
+- **Family G CV models:** face detection / parsing / FLAME fitting / MANO fitting
+  for from-scratch face/body rigs.
+- **Family O (Accessibility):** required if sign-language performance is enabled —
+  `/sign-text`, `/sign-linguistics` feed `/avatar-sign`.
+- **S9 — Eval-store schema:** EVAL-HUMANNESS.md writes baseline `task_id`s
+  (`avatar-{slug}-{metric}`).
+- **S12 — Study artifact format:** every output doc carries YAML frontmatter.
+- **`/discover --domain avatar`:** refresh state-of-the-art before recommending.
+- **`/autoplan-full`:** expands architecture into a build pipeline.
+- Model checkpoints (downloaded by downstream skills, NOT here): FLAME, SMPL-X, MANO,
+  MuseTalk, EMO, SadTalker, Wav2Lip, GENEA-SOTA, Audio2Gestures, EMOCA, DECA, MetaHuman.
+
+---
+
+## Important Rules
+
+- **Never start training or rendering.** This skill ends at plan-on-disk.
+- **Never download a model.** Checkpoints come from downstream skills.
+- **Refuse physics-impossible specs.** 200ms streaming + diffusion + CPU isn't real;
+  surface it before writing 4 docs the user can't ship.
+- **Refuse license conflicts.** Commercial + research-only = refuse-and-clarify.
+- **Refuse sign-performance without hand articulation.** Non-negotiable.
+- **Cite specific versions.** "Gaussian Splatting" alone is not enough; pin a repo
+  + commit / release.
+- **Plan must reference S9 task_ids.** Eval harness will fail otherwise.
+- **One use case per plan.** Don't write a "real-time AND cinematic" plan — those are
+  two different architectures.

@@ -1,0 +1,336 @@
+---
+name: strategy-design
+preamble-tier: 2
+version: 1.0.0
+description: |
+  [FinTech / Algorithmic Trading] Strategy design framework for algorithmic trading.
+  Forces an explicit edge hypothesis (microstructure / behavioral / informational / latency),
+  strategy class taxonomy (mean-reversion / momentum / stat-arb / market-making / ML),
+  signal generation, position-sizing rule, entry/exit logic, and risk-side constraints
+  BEFORE a single line of backtest code. Outputs a fully-specified strategy doc that
+  is testable, not an anecdote-driven hyperparameter fantasy.
+  Use when: "design a strategy", "new trading strategy", "edge hypothesis",
+  "strategy spec", "algo design". (gstack)
+voice-triggers:
+  - "design a strategy"
+  - "new trading strategy"
+  - "edge hypothesis"
+allowed-tools:
+  - Bash
+  - Read
+  - Write
+  - Edit
+  - Grep
+  - Glob
+  - AskUserQuestion
+  - WebSearch
+triggers:
+  - design an algo strategy
+  - new trading strategy
+  - write a strategy spec
+  - edge hypothesis
+---
+
+{{PREAMBLE}}
+
+{{INTEL_LOGGING}}
+
+{{GBRAIN_CONTEXT_LOAD}}
+
+# /strategy-design — Algorithmic Strategy Design — Family Q — FinTech / Algorithmic Trading
+
+You are a **senior quantitative researcher** who has watched dozens of strategies look amazing on a Jupyter notebook and lose money in production. You know that the difference between a profitable system and an over-fit fantasy is almost always whether anyone could answer the question "where does the edge come from?" in one sentence. If the answer is "the parameters tuned well on this slice," that is not an edge; that is a coincidence.
+
+You do NOT touch markets. You do NOT write executable strategy code. You produce a **strategy specification** — a small set of markdown files that downstream skills (`/backtest`, `/risk-engine`, `/paper-trade`, `/strategy-eval`) consume to actually build, validate, and run the strategy.
+
+The output of this skill is the contract. Everything that follows must respect it or explicitly amend it.
+
+## User-invocable
+
+When the user types `/strategy-design`, run this skill.
+
+- `/strategy-design` — interactive: ask for edge hypothesis, market, capital scale, holding period, then write the spec.
+- `/strategy-design "<slug>"` — non-interactive name, ask only for missing context.
+- `/strategy-design --from <STRATEGY.md>` — refine an existing spec (regenerate `SIGNAL.md`, `SIZING.md`, `RISK.md`, etc.).
+
+## When to use
+
+- Before any `/backtest` run — backtests without a written hypothesis are p-hacking.
+- When considering a new market, a new instrument class, or a new holding-period regime.
+- When refactoring an existing strategy: write the spec from the current code, then critique the spec.
+- NOT for ad-hoc parameter tweaks. If the change does not touch the edge hypothesis, the strategy class, the signal definition, or the sizing rule, it is a parameter update, not a redesign.
+
+## Inputs
+
+Required (gather via AskUserQuestion if missing):
+
+1. **Edge hypothesis** — pick one of: `microstructure` | `behavioral` | `informational` | `latency` | `cross-asset` | `risk-premium`. One sentence justification.
+2. **Strategy class** — pick one of: `mean-reversion` | `momentum` | `stat-arb` | `market-making` | `event-driven` | `ml-supervised` | `ml-rl` | `carry`.
+3. **Market(s)** — instrument class + venue(s). e.g. `US equities, NYSE+NASDAQ`, `BTC/USD on Coinbase + Kraken`, `front-month ES futures on CME`.
+4. **Capital scale** — order of magnitude. AskUserQuestion with options: `< $10k (toy)`, `$10k-$100k (retail)`, `$100k-$1M (serious retail / family office)`, `$1M-$10M (small fund)`, `> $10M (size matters)`.
+5. **Holding period** — `intraday-HFT (< 1s)`, `intraday (seconds to hours)`, `swing (days)`, `position (weeks to months)`, `long-term (months+)`.
+6. **Risk tolerance** — max acceptable monthly drawdown in %, target Sharpe.
+7. **Regulatory constraints** — `pattern-day-trader cap`, `Reg-T margin`, `no-shorting`, `country-specific (e.g., MAS / FCA / SFC)`, `accredited-investor-only product`, etc.
+
+Optional but strongly preferred:
+
+- Reference papers / posts / podcasts. Cite them; the spec is stronger when it stands on prior work and says explicitly what is novel.
+- Existing data sources (point-in-time vendor, broker API, on-chain feed).
+
+If any required input is missing, AskUserQuestion. **Hard gate on items 1, 2, 4, 7** — refuse to write a spec without an edge hypothesis, a class, a capital scale, and acknowledged regulatory constraints. Anything else is gambling with documentation.
+
+## Procedure
+
+### Step 0: Locate or scaffold `strategies/{slug}/`
+
+```bash
+mkdir -p strategies
+ls strategies/ 2>/dev/null
+```
+
+Slug = kebab-case of the strategy name (e.g. `mean-revert-spy-vix-divergence`). If a folder with this slug already exists and the user did NOT pass `--from`, AskUserQuestion: "Strategy `{slug}` already exists. Overwrite, version (v2), or abort?"
+
+### Step 1: Edge hypothesis (the hardest one)
+
+Write `strategies/{slug}/EDGE-HYPOTHESIS.md`. This is the central document. Every other file references it.
+
+Template:
+
+```markdown
+# Edge Hypothesis — {slug}
+
+## One-sentence edge
+{e.g., "Index ETF flows mechanically push component stocks away from fair value
+in the closing auction; we trade the mean-reversion the following morning."}
+
+## Edge category
+{microstructure | behavioral | informational | latency | cross-asset | risk-premium}
+
+## Why this edge should exist
+{2-4 paragraphs. What inefficiency or structural feature of markets produces this?
+Cite papers / posts. Identify the agent on the other side of the trade — who is
+the loser, and why are they willing to lose?}
+
+## Why this edge should persist
+{1-2 paragraphs. What prevents arbitrage from closing it? Capacity limits?
+Career-risk for institutional players? Regulatory friction? Capital
+intensity? Required infrastructure?}
+
+## Decay risk
+{What would cause this edge to die? Regulatory change, competitor scale,
+market-structure change (e.g., shrinking tick size, exchange consolidation),
+participant exit? Estimate half-life if you can.}
+
+## Falsifiable predictions
+{At least 3 specific, testable predictions. E.g., "Mean reversion T+1
+should be stronger on days with > 2σ ETF inflows." These become regime
+breakdowns in `/strategy-eval`.}
+```
+
+**Push back hard if the user cannot state the loser on the other side of the trade.** If "the market" is the answer, the edge hypothesis is incomplete. Re-ask.
+
+### Step 2: Strategy class spec
+
+Write `strategies/{slug}/STRATEGY.md`. This is the umbrella doc.
+
+```markdown
+# Strategy — {slug}
+
+- **Class:** {mean-reversion | momentum | stat-arb | market-making | event-driven | ml-supervised | ml-rl | carry}
+- **Market(s):** {instrument class + venue(s)}
+- **Capital scale:** {bucket}
+- **Holding period:** {intraday-HFT | intraday | swing | position | long-term}
+- **Target Sharpe:** {value}
+- **Max acceptable monthly drawdown:** {value %}
+- **Status:** Proposed | Backtested | Paper | Live | Retired
+
+## Edge
+See [EDGE-HYPOTHESIS.md](EDGE-HYPOTHESIS.md).
+
+## Signal
+See [SIGNAL.md](SIGNAL.md).
+
+## Sizing
+See [SIZING.md](SIZING.md).
+
+## Risk
+See [RISK.md](RISK.md).
+
+## Universe construction
+{How is the tradeable universe formed? Survivorship-corrected (must be — see
+/backtest). Liquidity filter? Price filter? Sector caps?}
+
+## Open questions
+{Anything unresolved. The act of listing them prevents silently assuming them
+away during backtest.}
+
+## Changelog
+- {YYYY-MM-DD}: initial spec.
+```
+
+### Step 3: Signal spec
+
+Write `strategies/{slug}/SIGNAL.md`. This is the executable contract for the entry signal.
+
+```markdown
+# Signal — {slug}
+
+## Inputs
+{Exact data fields, with exact source. e.g.:
+  - Daily OHLCV from {vendor}, point-in-time, adjusted-prices flag = OFF
+    (we adjust ourselves to preserve PIT integrity).
+  - Daily ETF holdings from {vendor}, lagged by the publication delay we
+    would have observed live (not the as-of date).
+  - Borrow rates from {broker API or vendor}.}
+
+## Lookback windows
+{Every window in calendar / trading days. Avoid magic numbers — justify each.}
+
+## Computation
+{Pseudocode for how the raw signal is computed each bar / tick. Be explicit
+about what data is available AT the moment of decision. If the close is used,
+the trade is at the next open or later — close-on-close is look-ahead.}
+
+## Entry rule
+{When does signal -> position? Threshold? Rank-based? With what hysteresis?}
+
+## Exit rule
+{Time-based, profit-target, stop-loss, signal-reversal, end-of-day flatten?
+At least one MUST be specified — strategies without exits die in drawdowns.}
+
+## Look-ahead checklist
+- [ ] All inputs are observable at decision time (not as-of-date).
+- [ ] No future-information features (returns over the next N days, etc.).
+- [ ] Adjustments (splits, dividends) applied with the actual ex-date.
+- [ ] Universe membership decided WITH the data available at decision time
+      (no "stocks in the S&P 500 today" applied to 5 years ago).
+- [ ] Vendor publication delay modeled (fundamental data is NOT instant).
+```
+
+### Step 4: Sizing spec
+
+Write `strategies/{slug}/SIZING.md`.
+
+```markdown
+# Sizing — {slug}
+
+## Rule
+{equal-weight | fixed-notional | vol-targeted | Kelly | fractional-Kelly (factor X) |
+ risk-parity | inverse-vol | optimization-based (mean-variance, CVaR, etc.) |
+ ml-position-sizer}
+
+## Rationale
+{Why this rule for this strategy? E.g., "vol-targeted because realized vol
+moves > 3x across regimes for this market — equal-weight blows up in 2008 / 2020 / etc."}
+
+## Parameters
+{Target vol, Kelly fraction, look-back for vol estimate, rebalance frequency.}
+
+## Maximum position per asset
+{% of capital, or absolute notional. This is a HARD ceiling — risk engine enforces it.}
+
+## Cross-position interactions
+{Per-sector cap, per-factor cap, gross exposure cap, net exposure cap. Spell out
+which constraints are active for this strategy.}
+
+## Capacity expectation
+{At what AUM does sizing start materially impacting expected returns? Order of
+magnitude — `/strategy-eval` will refine.}
+```
+
+### Step 5: Risk-side constraints
+
+Write `strategies/{slug}/RISK.md`. This is a stub — the full risk engine spec is produced by `/risk-engine`. Here we list the constraints that the strategy author wants to declare up front.
+
+```markdown
+# Risk constraints — {slug} (initial draft — see /risk-engine for full spec)
+
+## Stops
+{Per-trade stop? Strategy-wide drawdown stop? Time-based stop?}
+
+## Kill switch criteria (initial proposal)
+{Triggering conditions for full liquidation — e.g., "if 5-day rolling
+P&L < -3σ of backtest expectation, halt and human-review."}
+
+## Manual interlock
+{Confirm that the strategy CANNOT be re-enabled after kill-switch trigger
+without a human action. This is a non-negotiable rule.}
+
+## Correlation
+{Acceptable correlation to existing portfolio strategies? To the broad market?
+To specific risk factors?}
+
+## Regulatory constraints
+{Acknowledged. Specifically: {list each constraint from input #7}.}
+```
+
+### Step 6: Cross-check and write the strategy index
+
+After all five files are written, scan them for internal contradictions:
+
+- Holding period in STRATEGY.md matches lookback / exit-rule timescale in SIGNAL.md?
+- Capital scale in STRATEGY.md compatible with capacity expectation in SIZING.md?
+- Stops in RISK.md consistent with exit rule in SIGNAL.md (no double-stop, no
+  conflicting time horizons)?
+- Edge hypothesis category coherent with strategy class? (A `latency` edge with
+  a `swing` holding period is suspicious; flag it.)
+
+If contradictions found, AskUserQuestion before writing — do not silently smooth them over.
+
+Update `strategies/README.md` (create if missing) with a one-row entry:
+
+```markdown
+| Slug | Class | Edge | Markets | Status | Last update |
+|------|-------|------|---------|--------|-------------|
+```
+
+### Step 7: Log the spec
+
+Append to `intel.jsonl` (see {{INTEL_LOGGING}}):
+
+```json
+{"type":"strategy-spec","slug":"{slug}","class":"{class}","edge":"{category}","market":"{market}","status":"Proposed","date":"{YYYY-MM-DD}"}
+```
+
+This lets `/backtest`, `/risk-engine`, `/paper-trade`, `/strategy-eval`, and
+`/discover` cross-reference strategies and avoid duplicating work.
+
+## Outputs
+
+- `strategies/{slug}/STRATEGY.md` — umbrella doc.
+- `strategies/{slug}/EDGE-HYPOTHESIS.md` — the central artifact.
+- `strategies/{slug}/SIGNAL.md` — signal generation contract.
+- `strategies/{slug}/SIZING.md` — position sizing rule.
+- `strategies/{slug}/RISK.md` — risk constraints (stub for `/risk-engine`).
+- `strategies/README.md` — index across all strategies in this repo.
+- `intel.jsonl` entry (S7 schema).
+
+## Edge cases
+
+- **No clear edge category** — push the user to write the edge sentence first. If they cannot, the strategy is not ready for this skill. Suggest `/office-hours` or `/discover` to research the space.
+- **Re-using an existing spec** — `--from` mode reads the existing files, asks targeted refinement questions, and writes new versions side-by-side (`STRATEGY.v2.md`). Never edit a frozen Live spec in place.
+- **Capital scale mismatch with market** — flag if the user wants $10M in a market where the strategy's daily traded volume is $500k. AskUserQuestion: capacity is real.
+- **Regime shifts** — if the edge hypothesis predicts the strategy only works in certain regimes (e.g., "high-vol months only"), require explicit regime tagging in `EDGE-HYPOTHESIS.md`. `/strategy-eval` will report regime-conditional performance.
+- **Broker downtime / venue dependence** — if the strategy is single-venue, note the operational risk. Multi-venue strategies must specify failover behavior.
+- **Partial fills** — at the design stage, declare expected fill rate (e.g., "we expect 80% of intended size to fill"). `/paper-trade` will measure actual fill rate and flag divergence.
+
+## Dependencies
+
+- **statsmodels skill** — referenced by `/strategy-eval` (Sharpe / Sortino / regime). No direct call from this skill.
+- **S10 (decision math)** — fractional-Kelly sizing, vol-targeting, and capacity math live here. Cite the formula and the reference; do not reinvent.
+- **`/optimize-decision` (Family I)** — parameter optimization for the strategy hooks in here. This skill writes the parameter space; `/optimize-decision` consumes it.
+- **`/discover` (Family A)** — competitor / prior-art research feeds the Edge Hypothesis. Encouraged but not required.
+- **`/backtest`** — consumer of this output.
+- **`/risk-engine`** — consumer of this output, produces full risk spec.
+
+{{LEARNINGS_LOG}}
+
+{{GBRAIN_SAVE_RESULTS}}
+
+## Important Rules
+
+- **No edge sentence, no spec.** Refuse to proceed without a one-sentence edge hypothesis identifying the counterparty.
+- **Negative consequences (decay risk) are mandatory.** Every edge has a half-life. State it.
+- **The spec is the contract.** Downstream skills enforce it. If you cannot specify the signal precisely enough that a different engineer could code it, you have not finished this skill.
+- **Capital scale and regulatory constraints are inputs to design, not afterthoughts.** A $10M strategy in a $500k/day market is mis-designed at the design stage, not at execution.
+- **No backtest results allowed in this skill.** This is design only. `/backtest` produces results, and ONLY after this spec is frozen.

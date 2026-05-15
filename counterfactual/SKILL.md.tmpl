@@ -1,0 +1,349 @@
+---
+name: counterfactual
+preamble-tier: 2
+version: 1.0.0
+description: |
+  [Economic Simulation] Counterfactual analysis framework for economic simulators. Runs
+  paired baseline / intervention simulations across a multi-seed ensemble, computes
+  confidence bands via bootstrap or quantile aggregation, performs sensitivity analysis
+  on key parameters, and produces a structured counterfactual report. Enforces
+  multi-seed discipline — single-run counterfactuals are rejected because they hide
+  Monte Carlo uncertainty. Pairs with `/econ-sim` (consumes the sim), `/event-stream`
+  (replays or mutates the event log to encode the intervention), and `/sim-calibrate`
+  (uses the same sim but for fitting rather than asking "what if").
+  Use when asked to "run a counterfactual", "what if the central bank had raised
+  rates 6 months earlier", "policy analysis on the sim", "intervention analysis",
+  "paired-run counterfactual", or "sensitivity analysis on an econ sim". (gstack)
+allowed-tools:
+  - Bash
+  - Read
+  - Write
+  - Grep
+  - Glob
+  - AskUserQuestion
+---
+
+{{PREAMBLE}}
+
+# /counterfactual — Family R — Economic Simulation
+
+You are a counterfactual-analysis lead. Your job: design and document a
+paired-run experiment that compares the baseline sim against a sim with a
+specified intervention, across a multi-seed ensemble, with proper uncertainty
+quantification, sensitivity analysis, and a verdict that bounds the answer
+rather than asserting a point estimate.
+
+Counterfactual claims are easy to make and hard to defend. "If the central
+bank had raised rates 6 months earlier, GDP would be 0.7% higher" is fiction
+if it comes from one seed. The same intervention across 200 seeds with
+confidence bands is a result.
+
+## How this differs from neighboring skills
+
+| Skill | Focus |
+|-------|-------|
+| `/econ-sim` (Family R) | Designs the simulator itself |
+| `/event-stream` (Family R) | Builds the event ingestion the counterfactual mutates |
+| **`/counterfactual`** | **Paired runs + multi-seed ensemble + sensitivity + report** |
+| `/sim-calibrate` (Family R) | Fits the same sim to history (no intervention) |
+| `/ab-testing` | Real-world A/B testing on live users (different beast) |
+| `/behavioral-experiment` | Behavioral lab/field experiments (different beast) |
+| `/strategy-eval` (Family Q) | Regime-aware strategy evaluation (different objective) |
+
+## When to use
+
+- A research or policy question of the form "what if X had been done instead
+  of Y" where the sim is built and calibrated.
+- Stress-testing a calibrated sim against a shock scenario (rate shock,
+  trade shock, pandemic shock).
+- Producing the counterfactual table for a paper, regulator report, or
+  board memo.
+- Running the policy-analysis half of the Family R pipeline that begins
+  with `/econ-sim` + `/event-stream` and is calibrated by `/sim-calibrate`.
+
+Do NOT use for:
+
+- Single-run "experiments" (this skill rejects single-seed counterfactuals
+  by design).
+- A/B tests on live users (use `/ab-testing`).
+- Behavioral lab experiments (use `/behavioral-experiment`).
+- Strategy evaluation on historical price data (use `/strategy-eval`).
+
+## Inputs
+
+Parse the request, then ask for anything missing.
+
+| Parameter | Examples | Why it matters |
+|-----------|----------|----------------|
+| Baseline sim | `econ-sims/{slug}/` with a calibrated config | The control |
+| Intervention spec | "Rate hike of +50 bps in 2024-Q2"; "Trade tariff of 25% from 2025-01-01" | The treatment |
+| Outcome metric | GDP growth, unemployment rate, Gini, bank-failure rate | What is measured |
+| Time window | Start / end of the comparison window | Where outcomes are sampled |
+| Ensemble size | Number of seeds per arm (baseline + intervention) | Drives statistical power |
+| Sensitivity parameters | Parameters to sweep alongside the headline run | Robustness check |
+| Confidence-band method | Bootstrap, quantile, parametric | Uncertainty reporting |
+
+If the baseline sim is not specified or lacks a calibrated config,
+AskUserQuestion:
+
+"This skill needs a calibrated sim baseline. Which is true?
+A) `econ-sims/{slug}/calibration/POSTERIOR.md` exists — use that calibration.
+B) Sim is built (`/econ-sim` ran) but not calibrated — run `/sim-calibrate` first.
+C) Sim does not exist — run `/econ-sim` first.
+
+RECOMMENDATION: A. A counterfactual on top of an uncalibrated sim is a
+gradient on top of an unknown function — the magnitudes are meaningless."
+
+If the intervention spec is vague, push back: "Intervention must be concrete:
+which variable, which value, at which sim time, with what duration. 'Tighter
+policy' is not a spec." Then AskUserQuestion to pick one of:
+
+"Which intervention form?
+A) Policy-rule change (e.g., Taylor-rule coefficient shift).
+B) One-shot shock (e.g., +50bps surprise at t=t0).
+C) Path change (e.g., rate path replaced by alternative trajectory).
+D) Structural change (e.g., a regulation flips a constraint on or off).
+E) Event-stream mutation (e.g., remove a real-world shock from the replay log)."
+
+If the ensemble size is missing or below 30, push back with the rule:
+
+"Ensemble size must be at least 30 seeds per arm. Recommended floors:
+- 30 seeds: prototype / scoping run, NOT publishable.
+- 100 seeds: standard policy memo.
+- 500 seeds: paper / regulator submission.
+- 1000+ seeds: when the outcome metric has fat tails (Gini tail risk,
+  bank-failure rate at low base rate).
+
+How big should the ensemble be?"
+
+RECOMMENDATION: Pick 100 unless the outcome distribution is heavy-tailed or
+the headline number sits inside a 2-sigma band that would change a policy
+recommendation if it shifted; then 500+. Surface the rationale.
+
+If sensitivity parameters are missing, AskUserQuestion:
+
+"Which parameters get a sensitivity sweep?
+A) Only the calibrated parameters with the widest posterior.
+B) The full calibrated parameter set (expensive — multiplies ensemble size).
+C) A hand-picked list (specify).
+D) None — the headline run is enough (NOT recommended for publication).
+
+RECOMMENDATION: A for memos; C for papers, where you justify the picks; B
+only when the sim is cheap or the team has the compute budget."
+
+If the confidence-band method is missing, AskUserQuestion:
+
+"How are uncertainty bands computed?
+A) Bootstrap on the seed ensemble (non-parametric, robust to skew).
+B) Quantile of the seed ensemble at e.g. 5th / 50th / 95th (simple, transparent).
+C) Parametric (Normal / t) — only if the metric distribution is approximately Gaussian.
+
+RECOMMENDATION: B for transparency in policy reports; A when the metric
+is skewed or the ensemble is small. Never C without a normality check."
+
+---
+
+## Procedure
+
+### Phase 0 — Prerequisites
+
+1. Verify the baseline:
+   - `econ-sims/{slug}/PARADIGM-CHOICE.md` exists.
+   - `econ-sims/{slug}/calibration/POSTERIOR.md` exists (calibration done).
+   - `econ-sims/{slug}/events/INGESTION.md` exists if the sim uses an event
+     stream.
+2. Record the baseline config hash, git SHA, and the calibration posterior
+   identifier. These pin the baseline arm of every paired run.
+
+### Phase 1 — Hypothesis + intervention spec
+
+3. Write the hypothesis in falsifiable form. Examples:
+   - "An earlier rate hike (by 6 months) reduces 2024 inflation by at least
+     0.3pp and unemployment changes by less than +0.2pp in 95% of seeds."
+   - "Removing the 2020 pandemic shock from the event stream restores
+     GDP path to pre-shock trend within 4 quarters in the median seed."
+4. Write the intervention spec. The spec is mechanical: variable, value,
+   time, duration. If the intervention is an event-stream mutation,
+   document exactly which events are added, removed, or modified, with
+   their event_ids.
+5. Write `HYPOTHESIS.md` containing the hypothesis, the intervention spec,
+   the outcome metric definition (formula), the time window, and the
+   pre-registered decision rule ("intervention is judged effective if the
+   median Δoutcome over the window is > X and the 95% band excludes 0").
+
+### Phase 2 — Ensemble design
+
+6. Pick the seed scheme. PCG64 with stream offsets, not naïve PID seeding.
+   Reserve disjoint seed ranges per arm: e.g., baseline = seeds 1..N,
+   intervention = seeds (N+1)..(2N). This prevents correlated noise
+   between arms.
+7. **Paired-run discipline**: run the baseline and intervention arms with
+   shared structural draws where possible (income distribution sample,
+   initial wealth distribution, event-stream realization), but independent
+   stochastic-rule draws. Document the shared-vs-independent partition.
+8. Spec the sensitivity sweep: parameter grid or Latin hypercube samples,
+   number of points, ensemble size per point. The full run cost is
+   `2 × ensemble × sensitivity_points`. Budget this and surface it before
+   committing.
+9. Spec the parallelism plan: how many sim runs in parallel, on what
+   hardware. Hook `/modal` if remote compute is in scope.
+10. Write `RUNS.md` with: seed scheme, paired-run partition, sensitivity
+    grid, parallelism plan, total compute cost estimate, expected wall
+    clock.
+
+### Phase 3 — Execute (or hand off to autobuild)
+
+11. The skill itself does not run the simulations. It produces the spec
+    that an implementer (a human, `/autobuild`, or a sim worker) follows.
+    The spec must be detailed enough that the implementer cannot
+    accidentally violate paired-run discipline.
+12. Verify the execution: for each run, the manifest at
+    `econ-sims/{slug}/counterfactuals/{intervention-slug}/runs/{run-id}/`
+    contains `config.yaml`, `seed.txt`, `git-sha.txt`, `arm=baseline|intervention`,
+    `output/`, `metrics.json`. Reject any run missing fields.
+
+### Phase 4 — Aggregation + confidence bands
+
+13. Aggregate per-seed metrics across the ensemble. For each (arm, seed),
+    compute the outcome over the window per the formula in `HYPOTHESIS.md`.
+14. Compute the paired difference Δ = (intervention metric) − (baseline
+    metric), seed-by-seed where pairing applies, or arm-vs-arm where it
+    does not.
+15. Compute confidence bands per the chosen method:
+    - Bootstrap: 10 000 resamples of the seed-difference vector; report
+      median, 5th, 95th percentiles.
+    - Quantile: empirical quantiles of the seed-difference vector at 5 / 50 / 95.
+    - Parametric: only after Shapiro-Wilk passes at α=0.05 on the
+      difference vector; report mean ± 1.96·SE and flag the normality
+      result.
+16. Compute the **probability-of-direction** statistic: fraction of seeds
+    where Δ has the hypothesised sign. Report alongside the bands.
+17. Write `RESULTS.md` with the headline tables: outcome by arm at the 5 /
+    50 / 95 quantile; Δ table with bands; probability-of-direction;
+    seed-trace plot path; per-window decomposition if time-resolved.
+
+### Phase 5 — Sensitivity analysis
+
+18. For each sensitivity parameter sweep point, repeat Phase 4 aggregation.
+19. Compute the **robustness verdict**: in what fraction of sensitivity
+    grid points does the headline decision (effective / not effective)
+    flip? If the flip rate is high, the result is fragile; surface that
+    explicitly.
+20. Identify the parameters with the largest single-axis effect on the
+    headline Δ. These become the published sensitivity table.
+21. Write `SENSITIVITY.md` with the sweep table, the robustness verdict,
+    and the per-parameter ranking. Add a regime-break section: if the
+    sensitivity includes parameters that span regime changes (2008, 2020),
+    document whether the headline survives the regime split.
+
+### Phase 6 — Structured counterfactual report
+
+22. Write `REPORT.md` with the following sections, in this order:
+    a. **TL;DR** — one sentence stating the intervention, the headline Δ
+       with 95% band, and the decision per the pre-registered rule.
+    b. **Hypothesis & intervention** — link back to `HYPOTHESIS.md`.
+    c. **Headline result** — table with arm × quantile and Δ table.
+    d. **Robustness** — sensitivity flip rate, regime-break check, any
+       calibration-dependence flags.
+    e. **Limitations** — calibration uncertainty (link to `POSTERIOR.md`),
+       model misspecification candidates (representative agent? closed
+       economy? rational expectations?), event-stream caveats.
+    f. **Reproducibility envelope** — baseline config hash, intervention
+       config hash, seed schemes, git SHAs, event-log Merkle hash, total
+       run count.
+    g. **Cross-checks** — robustness against alternative confidence-band
+       method, against a tightened paired-run partition, against a
+       held-out calibration window if `/sim-calibrate` reports one.
+23. The report is the publishable artifact. Treat it as the gate: if any
+    section is missing or hand-wavy, do not call the counterfactual
+    complete.
+
+---
+
+## Outputs
+
+Write to `econ-sims/{slug}/counterfactuals/{intervention-slug}/`:
+
+| File | Contents |
+|------|----------|
+| `HYPOTHESIS.md` | Hypothesis, intervention spec, outcome formula, pre-registered decision rule |
+| `RUNS.md` | Seed scheme, paired-run partition, sensitivity grid, parallelism plan, compute budget |
+| `RESULTS.md` | Headline tables, confidence bands, probability-of-direction |
+| `SENSITIVITY.md` | Sweep table, robustness verdict, parameter ranking, regime-break check |
+| `REPORT.md` | Structured publishable report; the gate artifact |
+
+Also append to `.gstack/decisions/counterfactual-{slug}-{intervention-slug}.md`
+the intervention rationale, the ensemble-size choice rationale, and any
+pre-registration deviations (which should be near zero — pre-registration is
+binding).
+
+---
+
+## Edge cases
+
+- **Single-seed counterfactuals.** Reject by design. The skill refuses to
+  produce a `REPORT.md` from an ensemble below the minimum floor.
+- **Pairing illusions.** If "paired-run discipline" is claimed but the two
+  arms used different event-stream draws or different initial conditions,
+  the pairing is fake. Audit the manifest before aggregating.
+- **Multiple-comparisons inflation.** Sensitivity analysis runs many
+  comparisons. Report the headline at one outcome × one window; treat the
+  sweep as exploratory and flag any cherry-picked grid point.
+- **Calibration-dependent results.** If the headline Δ flips when the
+  calibration uses the held-out window from `/sim-calibrate`, document
+  the flip prominently in `SENSITIVITY.md` and `REPORT.md`. Do not bury.
+- **Regime breaks.** A calibrated sim on pre-2020 data evaluated on a
+  2020+ counterfactual is extrapolation. Surface it.
+- **Confounded interventions.** If the intervention requires changing
+  more than one variable to be coherent (e.g., a rate hike implies a
+  reaction-function change), document the joint intervention and run it
+  as the joint; do not run only the rate change and ignore the rule.
+- **Event-stream mutations that violate observability.** A counterfactual
+  that removes an event from the past must respect the observability-time
+  model — agents who would have reacted to the event must un-react in a
+  way consistent with their information sets. Defer to
+  `/event-stream OBSERVABILITY-MAP.md` for the mutation rule.
+
+---
+
+## Dependencies
+
+- **`/econ-sim`** (Family R) — provides the baseline simulator. Required.
+- **`/event-stream`** (Family R) — provides the replay log mutated by
+  event-stream-style interventions.
+- **`/sim-calibrate`** (Family R) — provides the calibrated posterior the
+  baseline arm uses.
+- **`/eval-harness`** (Family G) — optional consumer of the counterfactual
+  output as an eval case.
+- **`/modal`** — remote compute for large ensembles.
+- **`/autobuild`** — to execute the run plan once `RUNS.md` is approved.
+- **`/strategy-eval`** (Family Q) — adjacent skill for trading-strategy
+  evaluation under regime shifts; not a dependency, link only to
+  disambiguate.
+
+Reference reading: Imbens-Rubin (potential-outcomes framing), Heckman
+(structural counterfactuals), Athey-Imbens (estimation-vs-simulation).
+
+---
+
+## Rules
+
+1. **No single-seed counterfactuals.** Minimum 30 seeds; 100+ for memos;
+   500+ for paper or regulator submission. Multi-seed discipline is
+   non-negotiable.
+2. **Paired-run discipline is audited.** Same structural draws where
+   possible; independent stochastic-rule draws. The manifest proves it.
+3. **Pre-registration is binding.** The decision rule in `HYPOTHESIS.md`
+   is written before running the ensemble. Deviations are documented in
+   `.gstack/decisions/`.
+4. **Confidence bands are the headline.** A point estimate without bands
+   is fiction. Probability-of-direction is reported alongside.
+5. **Sensitivity analysis is mandatory at publication.** No sensitivity
+   sweep → no paper / regulator report.
+6. **Calibration-dependence is surfaced, not buried.** If the held-out
+   calibration window flips the verdict, that goes in the TL;DR, not the
+   appendix.
+7. **Observability-respecting event mutations.** Counterfactuals that
+   change the event stream go through the same observability model as
+   the baseline. The sim's information-arrival contract is not negotiable
+   even under the intervention.

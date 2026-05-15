@@ -3,7 +3,7 @@ name: document-release
 preamble-tier: 2
 version: 1.0.0
 description: |
-  Post-ship documentation update. Reads all project docs, cross-references the
+  [Ship & Release] Post-ship documentation update. Reads all project docs, cross-references the
   diff, builds a Diataxis coverage map (reference/how-to/tutorial/explanation),
   updates README/ARCHITECTURE/CONTRIBUTING/CLAUDE.md to match what shipped,
   detects architecture diagram drift, polishes CHANGELOG voice with a sell-test

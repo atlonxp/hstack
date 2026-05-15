@@ -1,0 +1,336 @@
+---
+name: prompt-engineering
+preamble-tier: 2
+version: 1.0.0
+description: |
+  [AI Engineering / Research] Systematic prompt engineering: from a task spec, generates 6-8
+  prompt variants spanning CoT / few-shot / role-play / structured-output /
+  decomposition / self-critique, runs them through /eval-harness, picks the
+  Pareto winner (quality × cost × latency), documents WHY the winner won.
+  Replaces trial-and-error tuning that breaks at scale.
+  Outputs prompts/{task}/{variants/,winner.md,EVAL.md}.
+  Use when: "improve this prompt", "test prompt variants", "why does my prompt
+  break at scale", "pick the best prompt". (gstack)
+voice-triggers:
+  - "prompt engineering"
+  - "test prompt variants"
+  - "tune the prompt"
+triggers:
+  - prompt engineering
+  - prompt variants
+  - prompt evaluation
+allowed-tools:
+  - Bash
+  - Read
+  - Write
+  - Edit
+  - Glob
+  - Grep
+  - AskUserQuestion
+---
+
+{{PREAMBLE}}
+
+# /prompt-engineering — Family G — AI Engineering / Research
+
+You are running the `/prompt-engineering` skill. The default workflow for
+"improve this prompt" is: read it, tweak it, eyeball 5 samples, ship. The
+result: prompts that look better on 5 samples but degrade on 500 — selection
+bias, missed edge cases, no record of WHY the new version is supposedly better.
+
+This skill replaces the trial-and-error loop with: enumerate the proven prompt
+techniques as variants, run all of them through `/eval-harness`, pick the
+Pareto winner across quality × cost × latency, document the win with a real
+metric delta and a hypothesis for why this technique fits this task.
+
+---
+
+## When to use
+
+Use this skill when:
+
+- You have a working prompt and want to know if it can be better — with
+  evidence, not vibes.
+- A prompt was tuned on small N and you're nervous about scaling.
+- You're choosing between CoT and structured-output (or both) and want the
+  data.
+- You're authoring a paper or blog where "we used prompt X because Y" needs
+  to cite a metric.
+
+Do NOT use this skill for:
+
+- Single-turn prompts with no clear success metric (write a clearer spec
+  first).
+- Multi-tool agent loops (use `/agent-design`).
+- RAG retrieval prompts in isolation (use `/rag-design` — the prompt is
+  one of many decisions there).
+
+---
+
+## Inputs
+
+Required:
+
+1. **Task slug** — `support-classify`, `tsl-gloss-to-text`, `code-bug-extract`.
+2. **Task spec** — one paragraph: input shape, expected output shape,
+   success definition.
+3. **Current prompt** — the baseline; if no baseline, skill generates a
+   minimal one.
+4. **Eval criteria** — what does "better" mean? Pass-rate, rubric score,
+   exact-match, latency, cost — pick at least quality + cost; latency
+   optional.
+5. **Eval dataset** — handed off to `/eval-harness` if not yet built.
+6. **Model(s)** to test. Cross-model evals are supported — `/prompt-engineering`
+   often surfaces that the "best prompt" differs per model.
+
+---
+
+## The proven techniques
+
+This skill generates variants spanning these techniques. Each variant is a
+**single technique** applied cleanly, or a **named combination** (e.g.,
+`cot+structured-output`).
+
+### CoT (Chain of Thought)
+
+- "Think step by step before answering."
+- Variants: zero-shot CoT, one-shot CoT (one worked example), tree-of-thought
+  (multiple candidate chains, pick best).
+- **Best for:** multi-step reasoning, math, planning, fact-chaining.
+- **Worst for:** single-fact extraction (overhead with no gain), short
+  classification (model fakes reasoning for an answer it already knew).
+- **Cost penalty:** +2-5x output tokens.
+
+### Few-shot
+
+- N examples of input → output prepended.
+- Variants: 1-shot, 3-shot, 5-shot, 10-shot. Diminishing returns past ~5.
+- **Best for:** format conformance, style matching, niche tasks where
+  training data lacks examples.
+- **Worst for:** very-long-context tasks where examples push out the actual
+  input.
+- **Cost penalty:** +N × example length in input tokens (cacheable!).
+
+### Role-play / persona
+
+- "You are an expert {role} specialized in {sub-domain}."
+- Variants: minimal role ("You are a Thai linguist"), elaborated role +
+  qualifications, role + audience.
+- **Best for:** domain-specific accuracy, tone control.
+- **Worst for:** general-purpose tasks (model already knows; persona adds
+  prompt-injection surface).
+- **Cost penalty:** negligible.
+
+### Structured output
+
+- JSON / XML / YAML output schema, often enforced via function-calling /
+  tool-use / constrained decoding.
+- Variants: JSON-schema, XML tags, YAML, function-call API.
+- **Best for:** machine-consumed outputs, multi-field extraction.
+- **Worst for:** open-ended generation (rigidity hurts quality).
+- **Cost penalty:** mild structure overhead; sometimes saves tokens vs
+  freeform.
+
+### Decomposition
+
+- Break the task into sub-prompts, run separately, recombine. Distinct
+  from agent loops — this is static decomposition.
+- Variants: 2-step decompose-and-solve, 3-step plan-solve-verify.
+- **Best for:** tasks where one of the sub-problems is much harder than the
+  others (focus the strong model on the hard part, use cheaper model on the
+  easy parts).
+- **Worst for:** tightly coupled sub-tasks where context is needed across
+  steps.
+- **Cost penalty:** N model calls instead of 1, but each call may be
+  smaller/cheaper.
+
+### Self-critique
+
+- Generate → critique own output → revise.
+- Variants: critique-and-revise (1 round), critique-with-rubric, n-best with
+  pairwise self-judge.
+- **Best for:** subjective quality tasks (writing, design feedback),
+  tasks where rubric is clearer than first-draft output.
+- **Worst for:** factual extraction (revision drifts, no anchor).
+- **Cost penalty:** +2-3x calls.
+
+### Other (registered but not generated by default)
+
+- Self-consistency (sample N times, majority-vote): expensive, niche.
+- Tree-of-thoughts: planning-heavy, niche.
+- Retrieval-augmented prompt (RAP): see `/rag-design`.
+- Constitutional AI: alignment-tuning territory, out of scope here.
+
+---
+
+## Procedure
+
+### Step 1 — Read the baseline + spec
+
+If a current prompt exists, read it. Identify which technique it's already
+using (or is a no-technique freeform prompt). Note tokens, model, current
+metric if known.
+
+### Step 2 — Pair eval-harness
+
+If no eval exists for this task yet, invoke `/eval-harness` first. The eval
+needs to exist BEFORE generating variants — otherwise you're tuning blind.
+
+Eval requirements:
+
+- At least 30 examples.
+- Domain matching the task.
+- Failure mode declared (this is the question this skill answers: which
+  technique most reduces that failure mode?).
+
+### Step 3 — Enumerate variants via AskUserQuestion
+
+Surface the technique catalog above. Recommend 6-8 variants based on task
+shape:
+
+| Task shape | Recommended variants |
+|------------|----------------------|
+| Multi-step reasoning | baseline, cot-zero-shot, cot-one-shot, tree-of-thought, decompose-2step, structured-output |
+| Classification / extraction | baseline, few-shot-3, few-shot-5, structured-output-json, role-play+structured |
+| Generation (creative) | baseline, role-play, role-play+structured, self-critique, cot-zero-shot |
+| Format conformance | baseline, few-shot-3, structured-output, few-shot+structured |
+| Domain-specific accuracy | baseline, role-play, few-shot-domain, cot+role-play |
+
+The user confirms or edits the list. Generating more than 8 variants without
+strong reason gets pushback — eval cost scales linearly with variants.
+
+### Step 4 — Generate variants
+
+For each chosen technique, write `prompts/{task}/variants/{technique}.md`
+with:
+
+- The full prompt template (system + user with `<input>` placeholders).
+- Token count.
+- Technique tag(s).
+- A short rationale ("why might this help this task").
+
+### Step 5 — Run the matrix
+
+```bash
+# For each (variant × model) pair, run the eval, record S9 metric.
+for variant in prompts/{task}/variants/*.md; do
+  for model in {models}; do
+    python -m {framework} \
+      --prompt $variant \
+      --model $model \
+      --eval evals/{task}/dataset.jsonl \
+      --record-s9 prompts-{task}/$(basename $variant .md)/$model
+  done
+done
+```
+
+Each run writes an S9 record with task_id
+`prompts-{task}/{variant}/{model}`. Records include quality metric, cost
+(input + output tokens × per-token price), latency (p50, p95).
+
+### Step 6 — Pick the Pareto winner
+
+A variant is Pareto-dominated if another variant is at least as good on
+quality AND at least as good on cost AND at least as good on latency. Drop
+dominated variants.
+
+Among non-dominated variants, the **default winner** is the one that hits
+quality threshold (from inputs) at lowest cost. Surface 2-3 alternatives if
+the user might trade off differently (e.g., "+10% quality for +3x cost"
+might be worth it).
+
+### Step 7 — Write winner.md + EVAL.md
+
+`winner.md` contains:
+
+- The full winning prompt (copy-paste ready).
+- The technique(s) it uses.
+- The metric delta vs baseline (with CI).
+- The cost + latency profile.
+- A hypothesis: "this works because the task has [trait], and [technique]
+  exploits that trait by [mechanism]."
+
+`EVAL.md` is the full bake-off — every variant's quality / cost / latency,
+the Pareto frontier diagram (cost x-axis, quality y-axis, points labeled),
+the failure-mode analysis (which variants help which failure modes).
+
+### Step 8 — Cross-model warning
+
+If the winner differs across models (e.g., CoT wins on Sonnet, structured
+output wins on Haiku), flag it loudly. Production should either pick a
+model-specific prompt path or pick a variant that's robust across models
+(usually one of the structured-output variants).
+
+### Step 9 — Optional: promptfoo wiring
+
+If the project already uses promptfoo, emit a `promptfooconfig.yaml` so the
+matrix lives in CI. Each commit to a variant or to the eval dataset re-runs
+the bake-off.
+
+---
+
+## Outputs
+
+- `prompts/{task}/variants/*.md` — the 6-8 prompt variants (full templates,
+  not snippets).
+- `prompts/{task}/winner.md` — the Pareto winner, copy-paste ready, with
+  technique + rationale + delta.
+- `prompts/{task}/EVAL.md` — the full bake-off + Pareto frontier + failure-
+  mode analysis.
+- S9 records under `prompts-{task}/{variant}/{model}`.
+- Optional `prompts/{task}/promptfooconfig.yaml` for CI.
+
+---
+
+## Edge cases
+
+- **Tiny eval (< 20 examples):** variants will rank within noise. Flag and
+  ask to expand the eval before drawing conclusions.
+- **Cost-blind comparison:** if the user doesn't care about cost (e.g.,
+  one-off batch run), surface that explicitly in EVAL.md so the winner
+  rationale isn't quietly off-target.
+- **Prompt-injection-sensitive task** (user-supplied input → prompt):
+  role-play and CoT variants increase injection surface. Skill flags this
+  and recommends pairing with `/cso` review or a content-security gate.
+- **Long-context input** (>10K tokens): few-shot becomes expensive fast.
+  Skill caps few-shot variants at 3-shot for long-context tasks unless user
+  overrides.
+- **Multi-language task** (Thai, Lao, sign-glosses): generate variants in
+  the target language too — sometimes a translated few-shot beats an
+  English-template-with-foreign-content prompt.
+- **Cross-model winner divergence:** documented in Step 8. Production picks
+  either a per-model prompt router or a "robust enough" middle prompt.
+- **Pareto frontier is one point** (one variant dominates all others):
+  good news, but EVAL.md still records the dominated variants so reviewers
+  can see what was tried.
+
+---
+
+## Dependencies
+
+- **`/eval-harness`** — required. Variants are scored against the eval.
+- **`promptfoo`** — optional. For CI wiring on prompt matrices.
+- **`deepeval`** — optional. For rubric / judge-based variants.
+- **LLM SDKs:** `@anthropic-ai/sdk`, `openai`, or framework wrappers.
+- **S9 eval store** — every variant × model run writes a typed record.
+- **`/codex challenge`** — optional. Pair this skill with `/codex` to
+  adversarially probe the winning prompt (Codex tries to find an input
+  that breaks it).
+- **`/cso`** — optional. For prompt-injection-sensitive tasks.
+
+---
+
+## AskUserQuestion gates
+
+1. **Eval exists?** — if not, defer to `/eval-harness` first.
+2. **Variant list** — show recommendation from Step 3, let user prune /
+   add.
+3. **Models to test** — single model or matrix? Cross-model evals cost N
+   times more.
+4. **Failure mode being protected against** — required for eval design and
+   for the winner's rationale.
+5. **Cost ceiling per eval run** — abort if the matrix would exceed budget;
+   suggest reducing variants or model count.
+6. **Pareto preference** — quality-at-any-cost vs cost-optimal-above-
+   threshold vs latency-bounded. Affects which non-dominated variant is
+   declared winner.

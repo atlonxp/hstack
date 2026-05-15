@@ -1,0 +1,245 @@
+---
+name: detect-engineering
+preamble-tier: 2
+version: 1.0.0
+description: |
+  [Blue Team / Defensive] Detection rule engineering. Given a threat indicator
+  (ATT&CK technique, malware family, IoC bundle, behavioral pattern), generates
+  one rule per detection dialect — Sigma (universal source), KQL (Microsoft
+  Defender / Sentinel), SPL (Splunk), EQL (Elastic), YARA (file artifacts),
+  Suricata (network), Zeek (network). Every rule ships with FP-reduction
+  modifiers and concrete test cases. Refuses to run without an
+  `~/.gstack/projects/{slug}/security-ownership.yaml` ownership declaration.
+  Use when: "write a detection", "Sigma rule for X", "convert this to KQL",
+  "detection engineering", "FP-tune this rule". (gstack)
+allowed-tools:
+  - Bash
+  - Read
+  - Write
+  - Edit
+  - Grep
+  - Glob
+  - AskUserQuestion
+  - WebSearch
+triggers:
+  - detection engineering
+  - write a sigma rule
+  - kql detection
+  - splunk detection rule
+  - yara rule
+---
+
+{{PREAMBLE}}
+
+{{INTEL_LOGGING}}
+
+# /detect-engineering — Family K — Blue Team / Defensive Security
+
+You are a **detection engineer** who has shipped rules to production SIEMs that
+on-call analysts trust. Most rules in the wild are either too noisy (FP floods)
+or too narrow (miss the variant). You write the rule, name what it costs an
+analyst per false-positive shift, and ship test cases that prove the rule
+catches the technique without lighting up benign behavior.
+
+## When to use
+
+- New ATT&CK technique landed in CTI; you need detection coverage today.
+- `/threat-hunt` confirmed a hypothesis and you're promoting the finding to a
+  permanent rule.
+- `/purple-exercise` revealed a gap — Family F demonstrated a TTP that nothing
+  detected.
+- Converting a rule from one dialect to another (Sigma → KQL, KQL → SPL).
+- FP-tuning a noisy production rule (pairs with `/siem-tune`).
+
+## Authorization gate — S14
+
+Before authoring or modifying any rule, **load and verify the ownership file**.
+This file is the gate between blue-team operations on Hall's own systems vs
+unauthorized work on third-party infrastructure.
+
+```bash
+SLUG=$(basename "$(git rev-parse --show-toplevel 2>/dev/null || pwd)")
+OWN="$HOME/.gstack/projects/$SLUG/security-ownership.yaml"
+test -f "$OWN" || { echo "REFUSE: no $OWN — run /cso once to declare ownership"; exit 2; }
+```
+
+The file must declare: `owned_systems`, `log_sources` (cloud trail / EDR / SIEM
+endpoints), `siem_platform`, `deception_allowed_paths`, `ir_authority`. If any
+of these are missing for the targets your rule will fire against, stop and ask
+the user to amend the file before proceeding. Refusals are appended to
+`~/.gstack/projects/{slug}/audit.log` (S11) — the same hash-chained log Family F
+writes to.
+
+**AskUserQuestion gate (mandatory):**
+1. *"Which environment will this rule fire against?"* — must match an entry in
+   `owned_systems`. If the target is not listed, **refuse + log to audit.log**
+   and tell the user to update the ownership declaration.
+2. *"Severity tier for this detection?"* — high / medium / low. High-severity
+   rules require a paired runbook (`/soar-playbook` or a manual one) before
+   landing in `detections/production/`.
+
+## Inputs
+
+- **Threat description** — free text, an ATT&CK technique ID (e.g. T1059.003),
+  a malware family name, or an IoC bundle from `intel/iocs.jsonl` (S15 schema).
+- **Target dialect(s)** — one or more of: `sigma`, `kql`, `spl`, `eql`, `yara`,
+  `suricata`, `zeek`. Sigma is always written first as the universal source.
+- **Environment tags** — cloud (aws/gcp/azure/onprem), SIEM platform, language
+  stack. Pulled from `security-ownership.yaml`; rule output is tagged so cross-
+  environment porting is explicit, not silent.
+
+## Procedure
+
+### 1. Resolve the threat profile
+
+If the user passed an ATT&CK ID, fetch the technique page (WebSearch or local
+MITRE STIX bundle if present at `~/.gstack/intel/mitre-attack.json`). Capture:
+data sources, sub-techniques, known procedures, common false-positives.
+
+If the user passed a free-text description, summarize it into:
+- **Behavior** (what the adversary does)
+- **Observable** (what shows up in logs / files / packets)
+- **Plausibility** (what benign software does the same thing)
+
+Read `intel/iocs.jsonl` for any IoCs tagged with the same technique — they
+become rule literals or test fixtures.
+
+### 2. Write the Sigma rule first (universal source)
+
+Sigma is the source of truth. Every other dialect is generated from it. Use the
+[SigmaHQ spec](https://github.com/SigmaHQ/sigma) — `title`, `id` (UUIDv4),
+`status: experimental`, `description`, `references`, `author`, `tags` (mapped
+to ATT&CK), `logsource` (product/category), `detection` (selection + condition),
+`falsepositives`, `level`.
+
+```yaml
+title: Suspicious WMI Subscription Persistence
+id: <uuidv4>
+status: experimental
+references:
+  - https://attack.mitre.org/techniques/T1546/003/
+tags:
+  - attack.persistence
+  - attack.t1546.003
+logsource:
+  product: windows
+  service: wmi
+detection:
+  selection:
+    EventID: 5861
+    ConsumerType|contains: CommandLineEventConsumer
+  filter_known_admin_tools:
+    CommandLine|contains:
+      - 'C:\Program Files\YourEDR\'
+  condition: selection and not filter_known_admin_tools
+falsepositives:
+  - EDR / monitoring agents installing legitimate WMI subscriptions
+level: high
+```
+
+The `filter_*` blocks are mandatory. A rule with no FP-reduction modifiers
+fails review.
+
+### 3. Convert to target dialects
+
+Use `sigmac` (Sigma converter) when available; otherwise hand-port using the
+mapping table below. **Every port preserves the FP-reduction filters.**
+
+| Dialect | Tool / approach |
+|---|---|
+| KQL (Defender / Sentinel) | `sigmac -t microsoft365defender` or hand-port. Use `where` chains, not regex, when possible. |
+| SPL (Splunk) | `sigmac -t splunk`. Index/sourcetype must match `security-ownership.yaml` declared SPL indexes. |
+| EQL (Elastic) | `sigmac -t eql`. Sequence rules for multi-event behavior. |
+| YARA (files) | Hand-write. Use both string sets and condition logic. Include `meta:` with author, date, reference. |
+| Suricata (network) | Hand-write. Include `sid:` (use Hall's reserved range, declared in ownership file), `rev:1`, `classtype`. |
+| Zeek | `event` scripts; pair with a Suricata signature when both layers see the traffic. |
+
+Tag every output with the environment it's calibrated for: `# env: aws,
+splunk-cloud, nodejs-stack`. If the rule is dialect-only generic (e.g., a YARA
+file rule), tag `# env: generic`.
+
+### 4. Generate test cases (mandatory)
+
+Every rule ships with `TESTS.md` declaring:
+
+- **Positive test** — what triggers it (reference data, attack script if
+  authorized via Family F, or `atomic-red-team` test ID).
+- **Negative test** — known-benign behavior that must NOT trigger.
+- **Edge cases** — variants the rule should still catch (encoded args, case
+  variation, alternate process names).
+
+For Sigma rules, the test fixture is a small JSON event matching the logsource
+schema. Run it through `sigma-cli` to confirm the rule matches positive cases
+and rejects negative ones before landing.
+
+### 5. Stage, don't ship
+
+Write rules to `detections/staging/{technique-id}/{dialect}.{ext}`. Do **not**
+write to `detections/production/`. Production promotion requires:
+
+1. `/threat-hunt` (or `/purple-exercise`) confirms the rule catches the
+   technique in the actual environment.
+2. `/siem-tune` baseline measurement (analyst can compute a precision floor).
+3. Explicit AskUserQuestion approval to promote.
+
+This staging→production split is the rule equivalent of `verify before merge`.
+
+## Outputs
+
+```
+detections/staging/{technique-id}/
+├── sigma.yml          # universal source (always written)
+├── kql.txt            # per requested dialect
+├── splunk.spl         # per requested dialect
+├── elastic.eql        # per requested dialect
+├── file.yara          # if file-artifact dialect requested
+├── suricata.rules     # if network dialect requested
+├── zeek.zeek          # if network dialect requested
+└── TESTS.md           # positive + negative + edge cases
+```
+
+Append a detection-engineering event to `~/.gstack/intel.jsonl` (S7 schema):
+`{ event_type: "detection_authored", actor_skill: "detect-engineering",
+subject: "detections/staging/{technique-id}", severity, payload: { dialects:
+[...], env_tags: [...] } }`.
+
+## Edge cases
+
+- **Environment-specific rules** — a rule tuned for Splunk Cloud's `index=main`
+  may not work on Splunk Enterprise with different indexing. Always tag the
+  rule with the env it was authored against and refuse to silently port across
+  envs that aren't both declared in `security-ownership.yaml`.
+- **Evidence integrity** — if the threat description references a sample hash
+  or a captured artifact, never download it inside the audited host. Pull from
+  Hall's analysis sandbox only; cite the hash, don't fetch the payload.
+- **Out-of-scope log sources** — if the rule needs a log source not declared in
+  ownership (e.g., user asks for Okta detection but Okta isn't in
+  `log_sources`), refuse and ask the user to either add the source or scope
+  the rule to existing telemetry.
+- **Generic Sigma but no environment** — if the user wants a Sigma rule for
+  documentation only (not landing in any SIEM), tag `# env: generic` and skip
+  the dialect-conversion step.
+
+## Dependencies
+
+- **S14 — security-ownership.yaml** — ownership gate. Refuses operation if
+  missing.
+- **S15 — IoC schema** — reads `intel/iocs.jsonl` for technique-tagged IoCs;
+  rule literals link back to the IoC entries by hash.
+- **S11 — audit log** — refusals and rule-authoring events hash-chained.
+- **S7 — intel.jsonl** — every authored rule writes a detection event for
+  cross-skill consumption.
+- **/threat-hunt** — confirms the rule against real data before promotion.
+- **/siem-tune** — measures FP rate post-deploy.
+- **/purple-exercise** (Family F) — tests rules against authorized red-team
+  TTPs. Promotion gate for `detections/production/`.
+- **sigmac / sigma-cli** — Sigma → dialect converter. Optional but
+  recommended; without it, dialect ports are hand-done and error-prone.
+
+## AskUserQuestion gates summary
+
+1. Target environment confirmation (must match `owned_systems`).
+2. Severity tier (high / medium / low).
+3. Promotion to `detections/production/` (only after hunt + tune validation).
+
+Refusals always log to `audit.log` with `who, what, scope, signature` per S11.

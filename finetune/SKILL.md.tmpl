@@ -1,0 +1,346 @@
+---
+name: finetune
+preamble-tier: 2
+version: 1.0.0
+description: |
+  [AI Engineering / Research] Generates a fine-tuning project — data prep, format conversion
+  (sharegpt/alpaca/dpo), recipe config (LoRA / QLoRA / full / DPO / ORPO),
+  eval baseline before+after, deployment plan. Supports --domain {nlp, cv,
+  speech-tts, speech-asr, multimodal, sign}. Framework-agnostic: names Axolotl,
+  TRL, Unsloth, HuggingFace, Diffusers as CHOICES per task type.
+  Outputs finetune/{model-slug}/{prepare.py,config.yaml,evals/,RECIPE.md}.
+  Use when: "fine-tune this model", "LoRA for X", "DPO recipe", "train an
+  adapter". (gstack)
+voice-triggers:
+  - "fine tune"
+  - "finetune"
+  - "train an adapter"
+triggers:
+  - finetune
+  - lora qlora
+  - dpo orpo training
+allowed-tools:
+  - Bash
+  - Read
+  - Write
+  - Edit
+  - Glob
+  - Grep
+  - AskUserQuestion
+---
+
+{{PREAMBLE}}
+
+# /finetune — Family G — AI Engineering / Research
+
+You are running the `/finetune` skill. Fine-tuning is straightforward once
+you've done it ten times; the first time costs a week to learn that
+`packing=True` matters, that gradient-accumulation interacts with batch size,
+that DPO needs preference pairs not single-best responses, and that LoRA rank
+4 vs 64 changes nothing for a small dataset.
+
+This skill emits a complete fine-tune project: cleaned data, format-converted
+dataset, config file with sane defaults per task and framework, baseline eval
+before training, post-train eval, deployment notes. Domain-aware so a vision
+fine-tune doesn't get NLP defaults.
+
+---
+
+## When to use
+
+Use this skill when:
+
+- You're fine-tuning a base model and don't want to learn each framework's
+  yaml quirks from scratch.
+- You need a recipe Hall (or a hire) can re-run in 6 months.
+- A paper / blog needs a reproducible training appendix.
+- You want before/after eval numbers without setting up two harnesses.
+
+Do NOT use this skill for:
+
+- Prompt engineering only (use `/prompt-engineering`).
+- Reinforcement-learning-from-human-feedback at scale (RLHF requires a reward
+  model + PPO infra; this skill covers DPO/ORPO/KTO as cheaper alternatives
+  and points to dedicated stacks for full RLHF).
+
+---
+
+## Inputs
+
+Required:
+
+1. **Model slug** — `{base-model}-{your-suffix}` (e.g., `llama-3-8b-tsl-v1`,
+   `whisper-small-thai-medical`).
+2. **Base model** — HuggingFace ID or local path. Skill probes for license
+   compatibility.
+3. **Task type** — `chat`, `classification`, `extraction`, `code`,
+   `instruction-following`, `preference` (DPO/ORPO), `embedding`, `asr`,
+   `tts`, `vision-classification`, `vision-generation`, `sign-translation`.
+4. **Domain** — see `--domain` modes.
+5. **Method** — `full`, `lora`, `qlora`, `dpo`, `orpo`, `kto`, `simpo`. Skill
+   recommends per task type if unspecified.
+6. **Data source** — JSONL, parquet, HuggingFace dataset ID, or directory.
+7. **Compute budget** — GPU type, count, hours budget. Affects QLoRA vs LoRA
+   vs full.
+8. **Eval criteria** — hands off to `/eval-harness`.
+
+---
+
+## --domain modes
+
+### `--domain nlp` (default)
+
+- **Frameworks:** Axolotl (config-first, opinionated), TRL (Python-first,
+  flexible), Unsloth (2-4x faster, narrower model support).
+- **Formats:** sharegpt, alpaca, completion, chatml, dpo
+  (chosen/rejected pairs).
+- **Methods:** LoRA (rank 8-64), QLoRA (4-bit + LoRA), DPO/ORPO/KTO/SimPO
+  for preference.
+- **Sane defaults:** seq_len 4096, packing on, gradient_accumulation 4,
+  LoRA target_modules = all-linear, learning_rate 2e-4 for LoRA / 5e-7 for
+  DPO.
+- **Datasets:** HumanEval (code), MMLU (instruction), Alpaca, ShareGPT-V3,
+  Anthropic HH-RLHF (preference).
+
+### `--domain cv`
+
+- **Frameworks:** HuggingFace `transformers` + `peft` for ViT/SAM/DiNO,
+  `diffusers` + DreamBooth/LoRA for diffusion, MMDetection for detection.
+- **Formats:** ImageFolder, COCO JSON, WebDataset for large-scale.
+- **Methods:** LoRA on attention projection layers, DreamBooth for
+  subject-driven diffusion, ControlNet adapters.
+- **Sane defaults:** resolution 512/1024 per base model, mixed_precision bf16,
+  gradient_checkpointing on.
+- **Datasets:** COCO, ImageNet-1k, OpenImages, custom subject sets (5-20
+  images for DreamBooth).
+
+### `--domain speech-tts`
+
+- **Frameworks:** XTTS-v2 fine-tuning, F5-TTS, StyleTTS-2, supertonic-v3
+  (Hall's recipe — cross-references `/recipe` for that project).
+- **Formats:** LJ-Speech style (audio + transcript JSONL), VCTK multi-speaker.
+- **Methods:** full speaker-adaptation, voice-clone via reference embedding
+  (no weight update), LoRA on text-encoder.
+- **Sane defaults:** sample rate 24000 / 16000 per base model,
+  hop_length matches base, speaker_embedding from ECAPA-TDNN.
+- **Datasets:** LJ-Speech, VCTK, LibriTTS, custom voice corpora (30-300
+  minutes of clean speech).
+
+### `--domain speech-asr`
+
+- **Frameworks:** HuggingFace `transformers` Whisper fine-tune, `nemo` for
+  Conformer, `espnet` for low-resource.
+- **Formats:** Common Voice JSONL, custom `{audio_path, transcript, lang}`.
+- **Methods:** LoRA on attention, full fine-tune for low-resource languages.
+- **Sane defaults:** sample rate 16000, log-mel features, gradient
+  checkpointing on, learning_rate 1e-5.
+- **Datasets:** Common Voice, LibriSpeech, Hall's custom Thai-medical
+  splits.
+
+### `--domain multimodal`
+
+- **Frameworks:** LLaVA / IDEFICS / Qwen-VL fine-tune via `transformers` +
+  `peft`, BLIP-2 task adaptation.
+- **Formats:** `{image, conversations[]}` JSONL.
+- **Methods:** LoRA on language-side attention, freeze vision encoder by
+  default.
+- **Datasets:** LLaVA-Instruct-150K, ShareGPT4V, custom VQA sets.
+
+### `--domain sign`
+
+- **Frameworks:** custom — sign-language fine-tuning is research territory.
+  Common stack: motion-encoder (skeleton CNN/Transformer) + text-encoder
+  (mBART / NLLB) + cross-modal alignment.
+- **Formats:** `{video_path, gloss_sequence, translation, phoneme_seq}`
+  JSONL (Hall's TSL convention).
+- **Methods:** LoRA on cross-modal attention, full fine-tune on small
+  encoder.
+- **Datasets:** Hall's TSL corpora (declare via `--data-root`), WLASL,
+  How2Sign.
+- **Sane defaults:** frame rate 25fps, skeleton-only or RGB+skeleton fusion
+  per model.
+
+---
+
+## Procedure
+
+### Step 1 — Probe base model + license
+
+```bash
+# Check license + size + compatibility
+huggingface-cli download {base_model} --dry-run 2>&1 | head -20
+# Or via Python:
+python -c "from huggingface_hub import model_info; m = model_info('{base_model}'); print(m.cardData.get('license'), m.safetensors.parameters)"
+```
+
+Refuse to proceed on non-commercial licenses without explicit user
+acknowledgement. Surface model size — affects QLoRA vs LoRA vs full choice.
+
+### Step 2 — Baseline eval BEFORE training
+
+Hand off to `/eval-harness` with `--domain` matching and feature slug
+`finetune-{model-slug}`. Record baseline metric for the BASE model. This is
+the "before" number.
+
+### Step 3 — Recommend method based on compute + dataset
+
+| Dataset size | Compute (single GPU hours) | Method |
+|--------------|----------------------------|--------|
+| < 1K examples | 1-5 | QLoRA r=16 |
+| 1K - 10K | 5-50 | LoRA r=32 |
+| 10K - 100K | 50-500 | LoRA r=64 or full small model |
+| > 100K | 500+ | full or LoRA r=128 |
+| preference pairs | any | DPO/ORPO (ORPO if no SFT done) |
+
+AskUserQuestion to confirm or override.
+
+### Step 4 — Generate `prepare.py`
+
+Data cleaning + format conversion. Includes:
+
+- Deduplication (MinHash for >10K examples, exact-match otherwise).
+- Length filter (drop > seq_len, drop < min_tokens=20 for chat).
+- Language detection + filter (drop non-target-language for low-resource
+  fine-tunes).
+- Format conversion to the framework's expected schema (sharegpt for
+  Axolotl, custom for Diffusers, etc.).
+- Train/val/test split (default 90/5/5; preserve any explicit split in
+  source).
+- Output: `data/train.jsonl`, `data/val.jsonl`, `data/test.jsonl` with a
+  `data/SHA256SUMS` for reproducibility.
+
+### Step 5 — Generate `config.yaml`
+
+Framework-specific (Axolotl example):
+
+```yaml
+base_model: {base_model}
+model_type: AutoModelForCausalLM
+tokenizer_type: AutoTokenizer
+load_in_4bit: true   # QLoRA
+adapter: lora
+lora_r: 32
+lora_alpha: 64
+lora_dropout: 0.05
+lora_target_modules: [q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj]
+sequence_len: 4096
+sample_packing: true
+pad_to_sequence_len: true
+datasets:
+  - path: ./data/train.jsonl
+    type: sharegpt
+val_set_size: 0.05
+output_dir: ./out/{model-slug}
+gradient_accumulation_steps: 4
+micro_batch_size: 2
+num_epochs: 3
+optimizer: adamw_torch
+learning_rate: 0.0002
+lr_scheduler: cosine
+warmup_steps: 50
+bf16: auto
+gradient_checkpointing: true
+flash_attention: true
+save_strategy: epoch
+save_total_limit: 2
+```
+
+Generate the equivalent for whichever framework was chosen. State the
+framework choice + why in RECIPE.md.
+
+### Step 6 — Train
+
+The skill does not run training itself (cost + machine constraints). It
+emits the exact command:
+
+```bash
+# Axolotl
+accelerate launch -m axolotl.cli.train finetune/{model-slug}/config.yaml
+
+# TRL
+python finetune/{model-slug}/train.py
+
+# Unsloth
+python finetune/{model-slug}/train_unsloth.py
+```
+
+And the expected wall-clock estimate based on Step 3.
+
+### Step 7 — Post-train eval
+
+Re-run `/eval-harness` with the fine-tuned model. Record S9 task_id
+`finetune-{model-slug}/post-train`. Show before/after delta + CI.
+
+Decision rule:
+- Delta < 1 standard error: training is noise. Don't ship.
+- Delta positive, CI excludes baseline: ship.
+- Delta negative: regression. Inspect data, learning rate, epochs.
+
+### Step 8 — Write RECIPE.md
+
+Captures: base model + license, dataset provenance + cleaning steps + SHA,
+method choice + why, config decisions, before/after metrics, deployment
+notes (merge LoRA? quantize? serving framework?).
+
+This is also consumable by `/recipe` (Family J) for the `--for paper` mode.
+
+---
+
+## Outputs
+
+- `finetune/{model-slug}/prepare.py` — data prep + format conversion.
+- `finetune/{model-slug}/config.yaml` (or `train.py`) — recipe.
+- `finetune/{model-slug}/data/{train,val,test}.jsonl` + `SHA256SUMS`.
+- `finetune/{model-slug}/evals/` — paired before+after eval via
+  `/eval-harness`.
+- `finetune/{model-slug}/RECIPE.md` — full recipe.
+
+---
+
+## Edge cases
+
+- **Catastrophic forgetting:** small-data fine-tunes drop general capability.
+  Add a regularization eval (subset of MMLU or HumanEval) that catches
+  drift. Flag in RECIPE.md.
+- **Mode collapse on DPO:** DPO with `beta` too high produces repetitive
+  outputs. Default `beta=0.1`, eval includes a diversity metric (distinct-n).
+- **Quantization loss after merge:** LoRA-merged models lose some quality
+  on 4-bit serving. Recommend GPTQ / AWQ over naive bnb-4bit for
+  production.
+- **Multi-node training:** out of scope. Skill flags and points to
+  DeepSpeed Zero-3 / FSDP docs.
+- **Closed-source base model:** OpenAI / Anthropic fine-tuning APIs use a
+  different shape. Skill detects and emits the API-specific recipe instead.
+- **License-incompatible base model:** refuse to scaffold a commercial
+  project unless user acknowledges with `--license-ack`.
+
+---
+
+## Dependencies
+
+- **`/eval-harness`** — required for before+after baselines.
+- **Frameworks (one of):** `axolotl-ai-cloud/axolotl`,
+  `huggingface/trl`, `unsloth`, `huggingface/diffusers`, `nvidia/nemo`.
+  Names as CHOICES, not mandates.
+- **`huggingface-skills:hugging-face-model-trainer`** — optional
+  orchestration on HF infra.
+- **`huggingface-skills:hf-cli`** — for model download, upload, license
+  probe.
+- **Compute:** local CUDA, runpod, modal, lambda labs, HF endpoints.
+  Skill emits the command; does not provision.
+- **Cross-family:** `/recipe` (Family J) consumes RECIPE.md when
+  formalizing a project as a reproducible paper supplement.
+
+---
+
+## AskUserQuestion gates
+
+1. **Domain** — `nlp / cv / speech-tts / speech-asr / multimodal / sign`.
+   Wrong domain → wrong defaults for everything else.
+2. **Task type** — chat / classification / extraction / preference / etc.
+3. **Method** — confirm recommendation from Step 3 or override.
+4. **Framework** — Axolotl / TRL / Unsloth / Diffusers / NeMo / custom.
+5. **License acknowledgement** — required if base model is non-commercial.
+6. **Failure mode being protected against** — for the eval. "Catastrophic
+   forgetting", "DPO mode-collapse", "speaker identity drift after voice
+   clone", etc.

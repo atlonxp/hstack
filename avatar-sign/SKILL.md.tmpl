@@ -1,0 +1,413 @@
+---
+name: avatar-sign
+preamble-tier: 2
+version: 1.0.0
+description: |
+  [Avatar & Embodiment] Sign-language-performing avatar pipeline. Ingests gloss
+  (via /sign-text) or text, maps to sign parameters (via /sign-linguistics) —
+  handshape + location + movement + non-manual features + prosody — and
+  animates the avatar with linguistic fidelity, not keyframe stiffness. Native-
+  deaf-reviewer loop is built in. Bridges Family P (Avatar) + Family L (Speech) +
+  Family O (Accessibility) + Family G (CV). Outputs PARAM-MAPPER + ANIMATION-
+  PIPELINE + FLUENCY-EVAL docs and a rendered video.
+  Use when: "sign-performing avatar", "sign-language avatar", "TSL/ASL avatar",
+  "gloss-to-animation", or "deaf-accessible avatar". (gstack)
+voice-triggers:
+  - "sign performing avatar"
+  - "sign language avatar"
+  - "tsl avatar"
+  - "asl avatar"
+  - "gloss to animation"
+triggers:
+  - sign-performing avatar
+  - sign-language avatar
+  - gloss to animation
+  - deaf accessible avatar
+allowed-tools:
+  - Bash
+  - Read
+  - Write
+  - Glob
+  - Grep
+  - AskUserQuestion
+---
+
+{{PREAMBLE}}
+
+# /avatar-sign — Family P × Family O Bridge — Sign-Performing Avatar
+
+You are running the `/avatar-sign` skill. This is the **bridge** between Family P
+(Avatar) and Family O (Accessibility). A sign-performing avatar needs everything
+`/avatar-design` covers (face, body, hands, voice optional) PLUS linguistically
+accurate signs: handshape + location + movement + non-manual features + prosody —
+all driven by gloss (from `/sign-text`) and parameter-mapped via `/sign-linguistics`.
+
+Most sign avatars look robotic because they treat signs as KEYFRAME ANIMATIONS.
+Sign languages are not keyframe sequences. They are phonologically parameterized
+gestures. This skill rejects the keyframe approach and designs a parametric
+pipeline.
+
+You are NOT a sign-avatar builder. You design the parameter mapper, animation
+pipeline, native-deaf-reviewer loop, and hand off. Do not train. Do not download
+checkpoints. Do not render video here — the pipeline you design will render later.
+
+Sign-avatar fluency is a HARD problem and the SOTA is still well below native
+quality. Always include the deaf-reviewer loop. No automated metric replaces it.
+
+---
+
+## When to use
+
+- Avatar must perform a sign language (TSL, ASL, BSL, JSL, etc.).
+- Existing sign avatar feels robotic / "keyframed" / non-native — re-design with
+  parameter mapping.
+- Adding a new sign language to an existing sign-performing avatar.
+- Translating spoken/written content to sign-performing avatar (full pipeline:
+  text → gloss → parameters → animation).
+
+Do NOT use for:
+- Whole avatar architecture → use `/avatar-design` first (this skill depends on it).
+- Co-speech gestures on a spoken-language avatar → use `/gesture-synth`.
+- Sign-recognition (sign → text) → use `/sign-text` in the other direction.
+- Sign linguistics resource design → use `/sign-linguistics`.
+- Adding sign as captions only → use `/accessibility-audit` and skip avatar entirely.
+
+---
+
+## Inputs
+
+| Input | Required? | Format |
+|---|---|---|
+| Avatar rig | yes | MUST have FLAME face + SMPL-X body + MANO hands (or equivalent w/ articulated fingers). From `/avatar-design` |
+| Source sign language | yes | BCP-47 + ISO 639-3 (e.g., `tsl` for Thai Sign, `ase` for ASL, `bfi` for BSL) |
+| Source input format | yes | "text (will route through `/sign-text`)" / "gloss directly" / "audio (will route through ASR + `/sign-text`)" |
+| Sign-linguistics resource | yes | From `/sign-linguistics` for target language: phoneme inventory + lexicon + grammar rules |
+| Output mode | yes | "real-time streaming (live sign performance)" / "offline rendered video" / "interactive (user controls speed)" |
+| Native-deaf-reviewer access | yes | "yes — have at least one native-deaf reviewer of target language" / "no — research-only, will not ship" |
+| Quality tier | yes | "production deaf-accessible" / "research demo" / "internal test" |
+| Hardware envelope | yes | "cloud GPU" / "consumer GPU" / "edge (rare for sign)" |
+| Mouthing strategy | yes | "include borrowed mouth-shapes (MM, OO, FISH, TH, etc.)" / "no mouthing" / "mouthing + voice-over (bilingual)" |
+| Existing baseline | optional | If iterating, current pipeline + native-reviewer feedback |
+
+Spec mode: `--spec avatar-sign-spec.yaml`. Interactive: AskUserQuestion in order.
+
+---
+
+## Procedure
+
+### Step 0: Locate plan root + slug
+
+```bash
+PLAN_ROOT="${CLAUDE_PLANS_DIR:-$HOME/.gstack/projects/$(basename "$PWD")}/avatars"
+mkdir -p "$PLAN_ROOT"
+echo "PLAN_ROOT: $PLAN_ROOT"
+```
+
+Use the avatar slug from `/avatar-design`. Outputs land at
+`$PLAN_ROOT/{slug}/sign/`.
+
+### Step 1: Confirm intent + check upstreams + the keyframe trap
+
+AskUserQuestion (preamble format):
+- **Re-ground:** project + branch + avatar slug + target sign language.
+- **Simplify:** "Sign avatars usually look robotic for one reason: they treat
+  signs as keyframe animations. They are not. Signs are parameterized gestures —
+  handshape, location, movement, palm orientation, non-manual features, prosody.
+  This skill rejects the keyframe approach. We design a parametric pipeline. We
+  also require a native-deaf reviewer — no automated metric can replace one."
+- **RECOMMENDATION:** A — confirm the parametric approach + reviewer access
+  before designing anything.
+- **Options:**
+  - A) Yes — parametric pipeline + native-deaf-reviewer loop. Completeness: 10/10.
+  - B) I want keyframes only (constrained scenario). Completeness: 4/10 — this
+    skill is the wrong tool; recommend a generic animation pipeline instead.
+  - C) I don't have reviewer access yet. Completeness: 5/10 — research-mode only;
+    refuse to mark as production-ready until access is secured.
+
+If B: stop, redirect.
+If C: continue but bake in "research-mode" markers; refuse to write FLUENCY-EVAL.md
+without a path to reviewer access.
+
+Check upstreams:
+- `/avatar-design` ARCHITECTURE.md exists at `$PLAN_ROOT/{slug}/`?
+- Avatar rig includes FLAME face + SMPL-X body + MANO hands? If not, refuse and
+  route back to `/avatar-design` with the rig constraint.
+- `/sign-linguistics` resource exists for target language? If not, route to
+  `/sign-linguistics` first.
+- `/sign-text` pipeline available for text → gloss (if input is text)?
+
+### Step 2: Gather the spec (interactive or `--spec`)
+
+For each input row, AskUserQuestion. Gloss the tricky fields:
+
+- **source input format**: "text-to-sign avatar = full pipeline (ASR if audio,
+  text normalization, gloss generation via `/sign-text`, parameter map via
+  `/sign-linguistics`, animation here). Gloss-direct = skip text→gloss step;
+  faster but assumes upstream provides clean gloss."
+- **output mode**: "real-time streaming pushes hard on latency; some
+  linguistically-correct movements (prosodic holds, repetition for emphasis,
+  classifier constructions) need lookahead. Offline rendering is more native-like."
+- **native-deaf-reviewer access**: "non-negotiable for production. The 'looks
+  fluent' bar is one only a native signer of the target language can set.
+  Automated metrics correlate weakly with fluency."
+- **mouthing strategy**: "mouthing in ASL/TSL includes borrowed English/Thai mouth
+  shapes that mark specific signs or carry grammatical info (MM, OO, FISH, TH).
+  Skipping mouthing makes the avatar look non-native. Voice-over is a separate
+  decision — bilingual mode plays spoken language alongside; voice-over-only with
+  no mouthing is signed-language-as-translation, not signed-language-as-primary."
+
+### Step 3: Sign-parameter mapper
+
+Apply the parameterization model below, then write
+`$PLAN_ROOT/{slug}/sign/PARAM-MAPPER.md`.
+
+**Sign parameters (universal across sign languages; values vary):**
+
+A sign is a tuple `(HANDSHAPE, LOCATION, MOVEMENT, PALM_ORIENTATION, NON_MANUAL_FEATURES, PROSODY)`.
+
+1. **HANDSHAPE** — finger configuration. Each sign language has a small
+   inventory (~50-100 distinct handshapes). MANO hand parameters map to
+   handshape — define the lookup table per language. (E.g., ASL "1-handshape"
+   = index extended, others curled.)
+
+2. **LOCATION** — where on/near the body the sign occurs. Defined as a position
+   in body-relative coordinates: forehead, eye, cheek, chin, neck, chest,
+   ipsilateral / contralateral, neutral space, etc. Map to SMPL-X end-effector
+   IK targets.
+
+3. **MOVEMENT** — path of the hand(s) through the location. Categories: linear,
+   arcing, circular, repetitive (with frequency / amplitude), contacting
+   (touching the body), simultaneous bimanual, alternating bimanual. Map to
+   spline-based IK animations.
+
+4. **PALM_ORIENTATION** — palm-up / palm-down / palm-toward-signer /
+   palm-toward-addressee / etc. Wrist rotation parameter.
+
+5. **NON_MANUAL_FEATURES (NMFs)** — face / head / shoulder behavior that carries
+   GRAMMATICAL meaning (NOT emotional). Examples:
+   - Brow raise = yes/no question marker (ASL, TSL).
+   - Brow furrow = wh-question or topic marker.
+   - Head shake = negation.
+   - Mouth shape (MM, OO, FISH, TH, CHA) = adverbial modifiers.
+   - Eye gaze = referent location / role-shift marker.
+   These OVERRIDE `/expression-synth` outputs during signs.
+
+6. **PROSODY** — intensity, repetition, duration. Used for emphasis (signing
+   "VERY-fast" by extending repetition + amplitude on "fast"), questions
+   (sustained NMFs), turn-final lengthening.
+
+Write PARAM-MAPPER.md describing:
+- The 6-tuple representation.
+- Per-parameter mapping to avatar rig (MANO for handshape, SMPL-X IK for
+  location/movement, FLAME for NMFs, custom for prosody scaling).
+- Composition rules: NMFs override face / mouth from other layers; bimanual
+  coordination rules (e.g., dominant hand active, non-dominant passive base).
+- Where the gloss → parameter lookup lives (a per-language lexicon file from
+  `/sign-linguistics`).
+- Classifier constructions (depicting verbs): sign parameters compose dynamically
+  to depict referent shape / movement. Handle separately from lexical signs.
+- Fingerspelling: per-letter handshape sequence with smooth transitions; mark
+  start/end with shoulder/eye-gaze shift.
+
+### Step 4: Animation pipeline
+
+Write `$PLAN_ROOT/{slug}/sign/ANIMATION-PIPELINE.md`:
+
+- **Pipeline stages:**
+  1. Input (text / audio / gloss).
+  2. Text → gloss (via `/sign-text` if text input).
+  3. Gloss → sign parameters (lookup in language lexicon + linguistic rules
+     from `/sign-linguistics`).
+  4. Parameters → IK targets (MANO handshape, SMPL-X body IK, FLAME NMFs).
+  5. IK solve + temporal smoothing (B-spline interpolation between sign
+     boundaries; prosodic hold = extended dwell).
+  6. Render via avatar's face/body renderer (from `/avatar-design`).
+
+- **Bimanual coordination rule:** dominant hand drives the sign; non-dominant
+  follows symmetry rules (mirror, parallel, or anchored static). Pull from
+  `/sign-linguistics` symmetry constraints.
+
+- **NMF override surface:** during a sign, NMF parameters from this pipeline
+  override `/expression-synth` outputs. Specify the override priority and the
+  blend at sign boundaries (NMFs decay over 100ms after the sign ends; emotion
+  layer takes back over).
+
+- **Prosody:** speed control (intensity multiplier), repetition (N-fold
+  sequential), holds (sustained final pose at utterance end). Per-language
+  defaults from `/sign-linguistics`.
+
+- **Classifier constructions:** depicting verbs build sign parameters from
+  the referent's CV shape (e.g., "the dog walked across" — handshape depicts
+  dog, movement depicts walking). Source the shape from `/sign-linguistics`
+  classifier inventory; movement from depicting rules.
+
+- **Real-time vs offline mode:**
+  - Real-time: 200ms+ lookahead buffer for prosodic-hold decisions;
+    pre-compute next-sign parameters during current-sign movement.
+  - Offline: full document → parameter sequence → render in one pass; can plan
+    discourse-level prosody (topic shift = body lean shift, etc.).
+
+- **Fingerspelling pipeline:** distinct sub-pipeline. Per-letter handshape +
+  shoulder-anchor + eye-gaze-down marker. Slow at first letter, accelerate
+  through, slow at last. Hold final letter ~200ms.
+
+- **Mouthing pipeline:** parallel to handshape pipeline. Borrowed mouth shapes
+  from lexicon (per `/sign-linguistics` mouthing inventory). Compose with
+  spoken-language voice-over if bilingual mode.
+
+### Step 5: Fluency-eval doc (native-deaf-reviewer loop)
+
+Write `$PLAN_ROOT/{slug}/sign/FLUENCY-EVAL.md`:
+
+- **Automated metrics (necessary, not sufficient):**
+  - Handshape accuracy: vs reference handshape inventory.
+  - Location accuracy: vs reference body-coordinate map.
+  - Movement-path RMSE: vs reference animation library (when available).
+  - NMF presence: % of sentences where required NMFs (question marker, negation)
+    fire.
+  - Mouthing presence: % of sentences where expected mouthing fires.
+
+- **Native-deaf-reviewer protocol (PRIMARY):**
+  - **Reviewer recruitment:** at least 3 native signers of target language
+    (NOT hearing learners). Disclose stimulus is AI-generated. Compensate.
+  - **Evaluation stimuli:** 30+ utterances spanning: declarative, yes/no
+    question, wh-question, negation, topicalization, classifier construction,
+    fingerspelling, prosodic emphasis.
+  - **Reviewer questions per clip:**
+    - Comprehensibility (1-5): "could you understand this?"
+    - Native-likeness (1-5): "does this look like a native signer?"
+    - Specific errors (open-ended): "what's wrong?"
+  - **Reviewer-disagreement protocol:** if reviewers disagree, both opinions
+    log into eval; do not average.
+
+- **Gate thresholds:**
+  - Production deaf-accessible tier: comprehensibility >= 4.5 mean AND
+    native-likeness >= 3.5 mean. Native-likeness above 4.0 is research-grade
+    rare; flag if achieved.
+  - Research demo: comprehensibility >= 3.5 mean; native-likeness threshold not
+    enforced but logged.
+
+- **Iteration loop:** reviewer flags errors → log per-parameter (handshape
+  wrong on sign X, location wrong on Y, NMF missing on Z) → fix lexicon
+  entries / animation rules → re-test on same stimulus set + held-out new set.
+
+- **Cross-reference Family L `/voice-eval`** for bilingual mode (voice + sign
+  + mouthing): A/V/sign sync measurement is cross-modal.
+
+### Step 6: Hand-off
+
+Print the three file paths (PARAM-MAPPER.md, ANIMATION-PIPELINE.md,
+FLUENCY-EVAL.md). AskUserQuestion:
+- **Simplify:** "Sign-performing avatar plan is on disk. Next is `/autoplan-full`
+  to expand into build, OR start the native-deaf-reviewer recruitment immediately
+  (this is the long-pole task; start early)."
+- **RECOMMENDATION:** B — recruitment is the bottleneck. Run it in parallel
+  with build.
+- **Options:**
+  - A) Run /autoplan-full first. Completeness: 10/10.
+  - B) Kick off reviewer recruitment in parallel with /autoplan-full.
+    Completeness: 10/10 + parallel critical-path.
+  - C) Stop — review the docs first. Completeness: 9/10.
+
+---
+
+## Outputs
+
+```
+$PLAN_ROOT/{slug}/sign/
+├── PARAM-MAPPER.md       # 6-tuple representation, per-parameter rig mapping, composition rules
+├── ANIMATION-PIPELINE.md # Pipeline stages, bimanual coordination, NMF override, prosody, classifiers, fingerspelling, mouthing
+└── FLUENCY-EVAL.md       # Automated metrics + native-deaf-reviewer protocol + gate thresholds + iteration loop
+```
+
+Plus, when the pipeline executes downstream: rendered video samples per stimulus
+set, logged in eval-store with cross-references to `/sign-text` and
+`/sign-linguistics` outputs.
+
+YAML frontmatter on every file with `target`, `version`, `derived_from`.
+
+---
+
+## Edge cases
+
+- **Avatar rig missing MANO hands:** STOP. Sign performance is impossible without
+  articulated fingers. Refuse the doc; route back to `/avatar-design` to upgrade
+  the rig.
+- **`/sign-linguistics` resource missing for target language:** STOP. The
+  parameter lookup needs a lexicon + grammar. Route to `/sign-linguistics` first.
+- **No native-deaf reviewer access:** mark research-mode; refuse production gate.
+  Document the access plan in the plan or mark `production: blocked`.
+- **Keyframe-style requested:** stop, redirect to a generic animation tool. This
+  skill is the wrong shape.
+- **Bilingual mode + lip-sync conflict:** if voice-over plays alongside the sign,
+  the mouth must do BOTH borrowed sign mouth-shapes AND phonetic lip-sync.
+  Resolution: sign mouthing has priority on signs that REQUIRE mouthing (MM, OO,
+  FISH, TH) — those override phonetic lip-sync; elsewhere, lip-sync runs. Document
+  the priority table explicitly.
+- **Classifier constructions on novel referents:** the system doesn't know
+  every possible shape. Have a fallback to verbal (fingerspelled or lexical)
+  description.
+- **Real-time + prosodic-hold conflict:** real-time streaming can't always wait
+  for an utterance-final hold decision. Either accept worse prosody, or buffer.
+  Document the tradeoff.
+- **Mixed sign languages (e.g., TSL + ASL signing the same content):** out of
+  scope — different lexicons. One language per pipeline; switch pipelines for
+  mixed content.
+- **NMF / expression-synth conflict (e.g., happy emotion + brow-raise question
+  marker simultaneously):** NMFs from this skill OVERRIDE `/expression-synth`
+  emotion brow during signs. Emotion takes over at sign boundaries (100ms blend).
+  No averaging — grammar wins, not emotion, during the sign.
+- **Hall's TSL teaching avatar:** target language TSL (Thai Sign Language).
+  Use full pipeline: `/sign-text` for TSL gloss, `/sign-linguistics` for TSL
+  phonology + lexicon, MANO hands + FLAME NMFs on Hall's avatar rig.
+  Bilingual mode = TSL primary + Thai voice-over secondary. Recruit native-deaf
+  TSL reviewers via Thai deaf community organizations. Cite this case in the
+  plan.
+
+---
+
+## Dependencies
+
+- **Family P upstream:** `/avatar-design` ARCHITECTURE.md (rig MUST have MANO
+  hands + FLAME face).
+- **Family P related:** `/lip-sync` (mouthing strategy coordination),
+  `/gesture-synth` (DO NOT use for sign — only co-speech context),
+  `/expression-synth` (NMFs override emotion during signs).
+- **Family O (Accessibility — CRITICAL):**
+  - `/sign-text` — text → gloss pipeline for target language.
+  - `/sign-linguistics` — phonology + lexicon + grammar rules + classifier
+    inventory + mouthing inventory.
+  - `/accessibility-audit` — overall deaf-accessibility review.
+  - `/multi-sign` — when scoping across multiple sign languages.
+- **Family L:** `/tts-design` (only if bilingual mode), `/voice-eval` (cross-modal
+  sync if bilingual).
+- **Family G:** pose / hand-pose detection for handshape ground-truth
+  comparisons; MediaPipe Holistic / Sapiens for any video-reference workflow.
+- **S9 / S12:** eval-store task_ids (`avatar-sign-{slug}-{metric}`) +
+  frontmatter.
+- **`/discover --domain sign-avatar`:** refresh SOTA before recommending.
+- **`/autoplan-full`:** expands plan into build pipeline.
+
+---
+
+## Important Rules
+
+- **Never train.** Plan-on-disk ends this skill (rendered video comes from
+  downstream pipeline execution).
+- **Never download a checkpoint.** Downstream does that.
+- **MANO hands are non-negotiable.** No hand articulation = no sign performance.
+  Refuse.
+- **Native-deaf-reviewer loop is non-negotiable for production tier.** No
+  automated metric replaces it. Refuse production gate without it.
+- **NMFs are grammatical, not emotional.** They override `/expression-synth`
+  during signs. Do not average emotion + grammar.
+- **Signs are parameterized, not keyframed.** Refuse keyframe-only requests.
+- **Sign mouthing is linguistic, not phonetic.** It overrides `/lip-sync`
+  during required-mouthing signs.
+- **One sign language per pipeline.** Mixed-language content requires multiple
+  pipelines.
+- **Cite specific versions / resources.** "ASL phonology" alone is not enough —
+  reference the `/sign-linguistics` artifact + version.
+- **Cross-reference Family L `/voice-eval` for bilingual mode A/V/sign sync.**
+- **This is a HARD problem.** SOTA is below native quality. Always communicate
+  the gap to users and ship with the reviewer loop on.

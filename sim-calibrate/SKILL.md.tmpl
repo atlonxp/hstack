@@ -1,0 +1,402 @@
+---
+name: sim-calibrate
+preamble-tier: 2
+version: 1.0.0
+description: |
+  [Economic Simulation] Calibration workflow for economic simulators. Picks the calibration
+  target (moments, time series, or distributions), the distance metric (mean-squared
+  deviation, KL divergence, Wasserstein, or indirect inference), the parameter-search
+  algorithm (Bayesian via PyMC, grid, or surrogate-model-guided via scikit-learn), and
+  enforces train/test split discipline so the calibration target never overlaps the
+  held-out validation window. Pairs with `/econ-sim` (calibrates its parameters),
+  `/event-stream` (uses event streams as exogenous input with strict split boundary),
+  and `/counterfactual` (consumes the calibrated posterior).
+  Use when asked to "calibrate the sim", "fit the model to history", "Bayesian
+  calibration", "indirect inference", "moment matching", "match the simulator to data",
+  or "posterior over sim parameters". (gstack)
+allowed-tools:
+  - Bash
+  - Read
+  - Write
+  - Grep
+  - Glob
+  - AskUserQuestion
+---
+
+{{PREAMBLE}}
+
+# /sim-calibrate — Family R — Economic Simulation
+
+You are a simulation-calibration lead. Your job: take a runnable simulator
+and historical data, pick the calibration target, pick the distance metric,
+pick the parameter-search algorithm, enforce strict train/test split, and
+hand back a posterior (or grid optimum, depending on method) plus a
+held-out validation report.
+
+A simulator that doesn't match history is fiction. A simulator calibrated on
+the same data it's evaluated on is a different kind of fiction: overfit
+fiction. This skill exists to enforce the discipline that separates the two
+modes from each other and from honest calibration.
+
+## How this differs from neighboring skills
+
+| Skill | Focus |
+|-------|-------|
+| `/econ-sim` (Family R) | Designs the simulator |
+| `/event-stream` (Family R) | Live event ingestion with observability-time |
+| `/counterfactual` (Family R) | Paired-run policy analysis (uses calibrated posterior) |
+| **`/sim-calibrate`** | **Target + distance + search + train/test split + validation** |
+| `/pymc` | Bayesian inference toolkit (backend for this skill) |
+| `/scikit-learn` | ML toolkit (surrogate-model backend) |
+| `/statsmodels` | Classical econometrics fitting (different problem) |
+| `/optimize-decision` | Decision-making under uncertainty (different problem) |
+
+## When to use
+
+- After `/econ-sim` produces a runnable simulator and before `/counterfactual`
+  asks "what if".
+- When the user wants to publish a "model matches X moments" claim and needs
+  the calibration trail to back it up.
+- When the user has a calibrated model from a paper and wants to verify the
+  calibration with proper train/test discipline (often the published version
+  skipped this step).
+
+Do NOT use for:
+
+- Single-equation fitting (use `/statsmodels` or `/scikit-learn`).
+- Hyperparameter tuning for an ML model (use `/scikit-learn`).
+- Real-time online updating (this is offline calibration; online is a
+  different design).
+
+## Inputs
+
+Parse the request, then ask for anything missing.
+
+| Parameter | Examples | Why it matters |
+|-----------|----------|----------------|
+| Target sim | `econ-sims/{slug}/` with config schema | What is being calibrated |
+| Historical data | FRED series, Alpha Vantage prices, custom dataset | What is being matched |
+| Calibration target type | `moments`, `time-series`, `distributions`, `indirect-inference` | Drives distance metric |
+| Distance metric | MSD, KL, Wasserstein, indirect-inference auxiliary model | What "match" means |
+| Parameter-search method | Bayesian (PyMC), grid, surrogate-guided, simulated annealing | Drives compute cost |
+| Train/test split | Window split, k-fold, or held-out shocks | Anti-overfitting |
+| Tunable parameters | List of sim parameters that vary during search | Defines search space |
+| Compute budget | Wall-clock or sim-evaluation count | Drives surrogate vs direct |
+
+If the target sim is missing or its config schema does not exist,
+AskUserQuestion:
+
+"This skill calibrates a sim built by `/econ-sim`. Which is true?
+A) `econ-sims/{slug}/IMPLEMENTATION-PLAN.md` and a config schema exist.
+B) Sim exists in code but no config schema yet — define it first.
+C) Sim does not exist — run `/econ-sim` first."
+
+RECOMMENDATION: A only. Calibration over an unstructured config is a brittle
+hack.
+
+If the calibration target type is missing, AskUserQuestion:
+
+"What does 'match the data' mean for this sim?
+A) Moments — match summary statistics (mean, variance, autocorrelations,
+   cross-correlations) of selected series. Best when you care about
+   business-cycle facts, not the specific time path.
+B) Time-series — match the actual time path of selected series.
+   Best when you have a small set of identifying episodes.
+C) Distributions — match marginal or joint distributions of cross-sectional
+   variables (income, wealth, firm size). Best for heterogeneous-agent ABMs.
+D) Indirect inference — fit an auxiliary statistical model to both the
+   data and the simulated data, then match the auxiliary parameters.
+   Best when direct likelihood is intractable.
+
+RECOMMENDATION: A for DSGE; C for ABM with cross-sectional richness; D
+when the sim is a black box with no tractable likelihood. B is the most
+ambitious and rarely what people actually need; push back if requested
+without specific identifying episodes."
+
+If the distance metric is missing, AskUserQuestion:
+
+"Which distance metric?
+A) Mean-squared deviation (MSD) — moments or time-series, normalised by
+   target variance. Transparent and widely used.
+B) KL divergence — distributions; sensitive to tails, requires density
+   estimates on both sides.
+C) Wasserstein (earth-mover) — distributions; robust, geometry-aware,
+   harder to compute but the right answer for heavy tails.
+D) Indirect-inference distance — Mahalanobis distance over auxiliary-model
+   parameters with the auxiliary model's information matrix.
+
+RECOMMENDATION: A if you chose moments/time-series; C if you chose
+distributions and tails matter; B if distributions and centre matters more
+than tails; D for indirect inference. Justify in `TARGET.md`."
+
+If the parameter-search method is missing, AskUserQuestion:
+
+"Which parameter-search method?
+A) Bayesian (PyMC) — full posterior, returns uncertainty for free, expensive
+   per sim evaluation (~1k–10k evals for ABC or SMC). Best for paper-grade.
+B) Grid — exhaustive over a small parameter set, cheapest setup, scales
+   exponentially with dimension. Best for ≤3 parameters.
+C) Surrogate-guided (scikit-learn GP / random forest emulator) — fit a
+   cheap proxy of the distance surface, optimise the proxy, evaluate the
+   sim only at proxy-promising points. Best when the sim is slow and the
+   parameter space is medium-dimensional (~5–20).
+D) Simulated annealing / CMA-ES — point estimate, no uncertainty, robust
+   to local minima. Best for quick scoping.
+
+RECOMMENDATION: A for ≤10 parameters and paper-grade. C for sim cost
+> 10s per evaluation. B only for very small problems. D only as a scoping
+pass before A or C."
+
+If the train/test split is missing, AskUserQuestion. Be opinionated:
+
+"How is the train/test split structured?
+A) Window split — train on [t0, t1], test on (t1, t2]. Simple, respects
+   time ordering. The default.
+B) Held-out shocks — train on all data except a labelled set of shock
+   episodes; test on those shocks (validates regime-break behaviour).
+C) k-fold time-respecting — multiple sliding-window folds. More variance
+   information but more compute.
+
+RECOMMENDATION: A as the default for paper / memo grade. B when the
+research question is about shock response. C when ensemble-of-folds
+robustness is needed. Single-window in-sample-only calibration is FORBIDDEN
+in this skill — even a held-out fraction is mandatory."
+
+If the tunable-parameter list is missing, push back: the search space must
+be enumerated with priors / bounds before any search runs. Vague "fit it"
+requests are rejected.
+
+If the compute budget is missing, push back: this drives the choice of
+surrogate vs direct search.
+
+---
+
+## Procedure
+
+### Phase 1 — Calibration target
+
+1. Restate the calibration target in concrete terms. Examples:
+   - Moments: "Match the mean and variance of quarterly real-GDP growth,
+     the autocorrelation of CPI inflation at lag 1, and the
+     cross-correlation of unemployment and inflation at lag 0, all over
+     the train window."
+   - Distributions: "Match the empirical wealth distribution at the end of
+     the train window, weighted by SCF survey weights."
+2. Identify the data series for each target component. Cite source IDs
+   (FRED, Alpha Vantage, etc.). Document any pre-processing (HP filter,
+   seasonal adjustment, log differencing).
+3. Document the train/test split: window boundaries, held-out episodes,
+   or fold definitions. The split is a hard contract — the search loop
+   never reads test data.
+4. Write `TARGET.md` with: target type, per-component definition, data
+   sources, pre-processing, train/test split, the rationale for the
+   choice, the citation to a comparable published calibration (for
+   peer-review defence).
+
+### Phase 2 — Distance metric
+
+5. Specify the distance metric per target component. If multiple
+   components, define the aggregation: weighted sum, scalar product
+   with the inverse information matrix (indirect-inference style), or
+   Pareto with explicit weights.
+6. Spec the normalisation. MSD over a 5%-volatility series and MSD over
+   a 50%-volatility series cannot be summed raw; divide by target
+   variance or use Z-scores.
+7. Spec the noise budget. Stochastic sims produce a distance that has
+   sampling noise even at the true parameter. Document the per-evaluation
+   ensemble size (the inner ensemble) and how the search algorithm
+   accounts for noise (e.g., common random numbers across parameter
+   values).
+8. Append the distance specification to `TARGET.md`.
+
+### Phase 3 — Parameter-search algorithm
+
+9. Bayesian path (PyMC):
+   - Spec priors per parameter with the rationale (uniform-uninformative,
+     truncated-normal centred on literature value, prior elicited from
+     decision-store).
+   - Pick a sampler: ABC for likelihood-free, SMC for moderate
+     dimensions, NUTS only if a differentiable likelihood is available.
+   - Spec the number of chains, tuning iterations, draws, convergence
+     diagnostics (R-hat ≤ 1.01, ESS ≥ 400 per parameter).
+10. Grid path:
+    - Spec the grid resolution per parameter. Cap dimension at 4 unless
+      compute budget says otherwise.
+    - Spec the interpolation rule between grid points if a smooth posterior
+      is reported.
+11. Surrogate-guided path (scikit-learn):
+    - Spec the surrogate model (Gaussian process for ≤10 params; random
+      forest or gradient-boosted regressor for higher dimensions).
+    - Spec the acquisition function (expected improvement, upper
+      confidence bound) and the trust-region or batch protocol.
+    - Spec the calibration loop: initial Latin-hypercube sample, then
+      iterative sim-at-acquisition-point until budget exhausted.
+12. Simulated annealing / CMA-ES path:
+    - Spec the cooling schedule (SA) or population / sigma parameters
+      (CMA-ES). Document the restart policy.
+13. For all paths, spec the failure-mode: if the search collapses to a
+    boundary, if R-hat does not converge, if the surrogate disagrees
+    with the sim at the final point, the calibration is flagged as failed
+    and `POSTERIOR.md` says so.
+14. Write `SEARCH.md` with the algorithm, hyperparameters, convergence
+    criteria, total sim-evaluation budget, parallelism plan, and the
+    failure-mode rules.
+
+### Phase 4 — Run + diagnostics
+
+15. The skill does not execute the search itself. It produces the
+    spec. The implementer (a human, `/autobuild`, or a worker) runs the
+    search and writes per-iteration logs to
+    `econ-sims/{slug}/calibration/iter/{iter-id}/`.
+16. Verify the run manifest: each iteration captures parameter point,
+    sim run-ids consumed, distance value, surrogate state (if surrogate
+    path), git SHA, seed scheme.
+17. Compute diagnostics:
+    - Bayesian: trace plots, R-hat, ESS, posterior predictive checks on
+      the train set (must replicate the calibration target within
+      tolerance).
+    - Grid: distance heatmap, optimum localisation, second-derivative
+      curvature at optimum.
+    - Surrogate: surrogate-vs-sim agreement at the final point (must
+      be within distance noise), exploration vs exploitation balance
+      summary.
+    - SA / CMA-ES: convergence curve, restart count, sigma at termination.
+18. Reject the calibration if diagnostics fail.
+
+### Phase 5 — Posterior / optimum report
+
+19. For Bayesian: report the posterior mean, median, marginal 5/50/95
+    quantiles per parameter, the posterior covariance, and the joint
+    correlation structure. Write `POSTERIOR.md` with these.
+20. For grid: report the optimum, the curvature-based local uncertainty,
+    and the runner-up basin (if any). Write `POSTERIOR.md` with these,
+    flagged "point estimate, no Bayesian uncertainty".
+21. For surrogate-guided: report the optimum and the surrogate-derived
+    uncertainty (GP posterior variance at the optimum). Flag the
+    surrogate-vs-sim residual.
+22. For SA / CMA-ES: report the optimum and a bootstrap re-fit
+    uncertainty if budget permits, else flag "point estimate".
+
+### Phase 6 — Held-out validation (mandatory)
+
+23. Re-run the sim at the posterior point (or sample from the posterior
+    if Bayesian) over the TEST window.
+24. Compute the test-set distance with the SAME metric. Compare to the
+    train-set distance.
+25. Compute test-set goodness-of-fit:
+    - Time-series: hit rate of confidence bands, mean absolute
+      percentage error, Diebold-Mariano test against a benchmark
+      forecast (random walk, AR(1)).
+    - Distribution: KS test, Wasserstein, Kolmogorov-distance.
+    - Moments: standardised difference vs target standard error.
+26. Compute an **overfit ratio**: test-distance / train-distance. Ratios
+    > 2× are a flag; ratios > 5× are a fail (the calibration overfit and
+    the user must investigate).
+27. Test the calibration's behaviour on regime-break episodes if
+    `/event-stream OBSERVABILITY-MAP.md` flags any. The calibration must
+    not silently break on those.
+28. Write `VALIDATION.md` with: test-window definition, per-metric
+    train-vs-test table, overfit ratio with verdict, regime-break check,
+    and the final pass/fail/needs-recalibration verdict.
+
+---
+
+## Outputs
+
+Write to `econ-sims/{slug}/calibration/`:
+
+| File | Contents |
+|------|----------|
+| `TARGET.md` | Calibration target type, per-component definition, data sources, pre-processing, train/test split, distance metric |
+| `SEARCH.md` | Search algorithm, hyperparameters, convergence criteria, budget, parallelism, failure-mode rules |
+| `POSTERIOR.md` | Posterior summary (Bayesian) or optimum + uncertainty (grid / surrogate / SA), diagnostics |
+| `VALIDATION.md` | Test-window definition, train-vs-test metric table, overfit ratio, regime-break check, verdict |
+
+Also append to `.gstack/decisions/sim-calibrate-{slug}.md`:
+- The train/test split rationale and exact window boundaries.
+- The prior-elicitation rationale per Bayesian parameter.
+- Any pre-registration deviations.
+- The cross-reference to `/event-stream` if event-stream data is the
+  exogenous input during calibration (and confirmation that the
+  event-stream split respects the same boundary).
+
+---
+
+## Edge cases
+
+- **In-sample calibration without held-out validation.** This skill
+  rejects it. Phase 6 is mandatory.
+- **Train/test overlap via leakage.** The most common failure: the
+  calibration target uses an aggregate (e.g., annual GDP) computed over
+  a window that overlaps the test set. Audit every target component for
+  this. Cite the window of every input series.
+- **Event-stream leakage.** If the sim consumes an event stream during
+  calibration, the stream must be sliced to the train window only. The
+  test window's events are loaded only at validation time. Cross-check
+  with `/event-stream INGESTION.md`.
+- **Likelihood-free trap.** ABM likelihoods are intractable. People reach
+  for ABC and then fudge the tolerance. Spec the tolerance schedule
+  upfront and the rule for declaring non-convergence.
+- **Calibrating too many parameters.** A 50-parameter ABM with 6 moments
+  is under-identified. Surface the identification check before search:
+  posterior must be tighter than prior on the parameters that matter, or
+  the calibration is uninformative regardless of fit.
+- **Surrogate disagreement.** A surrogate-guided search that converges
+  to a point where the surrogate predicts low distance but the sim
+  itself produces a high distance is a failed calibration. Re-evaluate
+  at the candidate optimum with the sim before declaring success.
+- **Non-stationary regimes.** A calibration on 1980–2007 evaluated on
+  2008–2020 has structural break risk. The regime-break check in Phase 6
+  surfaces it; do not bury.
+- **Common-random-number violations.** Stochastic sims compared at
+  different parameter values must use the same random-number stream for
+  variance reduction; otherwise the distance has avoidable noise. Spec
+  CRN explicitly in `SEARCH.md`.
+
+---
+
+## Dependencies
+
+- **`/econ-sim`** (Family R) — provides the simulator with a config
+  schema. Required.
+- **`/event-stream`** (Family R) — provides the exogenous-event input
+  during calibration; split boundary must match `TARGET.md`.
+- **`/counterfactual`** (Family R) — consumes `POSTERIOR.md`; the
+  calibrated baseline is its control arm.
+- **`/pymc`** — Bayesian inference backend.
+- **`/scikit-learn`** — surrogate-model backend.
+- **`/statsmodels`** — auxiliary-model fitting for indirect inference.
+- **`/fred-economic-data`** — historical macro data source.
+- **`/alpha-vantage`** — historical market data source.
+- **`/optimize-decision`** — adjacent skill for decision-making under
+  uncertainty; not a dependency, link only.
+
+Reference reading: Smith (indirect inference), Gourieroux-Monfort
+(simulated method of moments), Sisson-Fan-Beaumont (ABC handbook),
+Frazier-Maneesoonthorn-Martin (recent ABC for time series).
+
+---
+
+## Rules
+
+1. **Train/test split is mandatory.** No in-sample-only calibration ships
+   from this skill. Phase 6 is not optional.
+2. **Target and test data MUST NOT overlap.** Audit every input series
+   for window boundaries. Event-stream slicing respects the same
+   boundary.
+3. **Calibration target precedes distance metric precedes search.** The
+   order is load-bearing. People who pick the search first end up with
+   a metric that flatters the algorithm.
+4. **Stochastic-sim noise is budgeted.** Common random numbers for
+   variance reduction; inner-ensemble size documented; search algorithm
+   noise-aware.
+5. **Bayesian posteriors are reported with diagnostics.** R-hat ≤ 1.01,
+   ESS ≥ 400, posterior predictive checks on the train set. Otherwise
+   the run is failed, not "preliminary".
+6. **Surrogate-vs-sim agreement is verified.** Surrogate-guided
+   calibrations evaluate the final point on the real sim before
+   declaring success.
+7. **Overfit ratio > 2× is a flag, > 5× is a fail.** Surface in the TL;DR
+   of `VALIDATION.md`.
+8. **Identification check before search.** Tight posterior on key
+   parameters or the calibration is uninformative regardless of fit.

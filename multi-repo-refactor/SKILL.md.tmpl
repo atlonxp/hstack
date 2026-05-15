@@ -1,0 +1,230 @@
+---
+name: multi-repo-refactor
+preamble-tier: 3
+version: 1.0.0
+description: |
+  [Multi-Repo] Coordinated refactor across N repos. Given a refactor intent (e.g. "rename
+  User.email to User.primaryEmail") and a list of consumer repos, opens linked PRs with
+  the same change, polls each repo's CI until green, and merges in dependency order so
+  consumers never see a broken base.
+  Use when asked to "refactor across repos", "rename across services", "coordinated rename",
+  "multi-repo refactor", or "land this change in all consumers". (gstack)
+allowed-tools:
+  - Bash
+  - Read
+  - Write
+  - Edit
+  - Grep
+  - Glob
+  - AskUserQuestion
+sensitive: true
+---
+
+{{PREAMBLE}}
+
+# /multi-repo-refactor — Family E4 — Multi-Repo / Monorepo
+
+Coordinated refactor across N repos: one intent, N PRs, merged in dependency order so
+no consumer ever pulls a base commit where its upstream API is broken.
+
+---
+
+## When to use
+
+- "Rename `User.email` to `User.primaryEmail` everywhere" — one library + many services.
+- "Swap the logger import" or "migrate to v2 of `@org/shared`" — same edit, N repos.
+- Any change where landing in the wrong order breaks downstream builds.
+
+Do NOT use when the change is genuinely different per repo (use `/feature-build` per
+repo) or when only one repo is affected.
+
+---
+
+## Inputs
+
+1. **Refactor intent** — a short, precise description. The agent will quote this verbatim
+   in every PR body. Example: `rename User.email -> User.primaryEmail (keep legacy alias 1 release)`.
+2. **Repo list** — `owner/repo` slugs. Either typed by the user, read from
+   `refactors/<slug>/repos.txt`, or queried from `/dep-graph` if installed.
+3. **Dependency order** — provider repos before consumers. If unknown, ask.
+4. **Base branch per repo** — usually `main` but detect via `gh repo view <repo> --json defaultBranchRef`.
+
+---
+
+## Pre-flight
+
+Before doing anything destructive, verify `gh` and token scope.
+
+```bash
+gh auth status
+gh auth status --show-token 2>&1 | grep -i "Token scopes" || true
+```
+
+Required scopes: `repo` (write) on every target repo and `workflow` (if any repo's CI
+runs on PR open). If scopes are missing, abort with the exact `gh auth refresh -s repo,workflow`
+command for the user to run.
+
+For each repo in the list, also verify:
+
+```bash
+gh repo view <owner/repo> --json viewerPermission,defaultBranchRef
+```
+
+`viewerPermission` must be `WRITE`, `MAINTAIN`, or `ADMIN`. If any repo is `READ` or
+`TRIAGE`, list every failing repo and abort — don't open partial trains.
+
+**AskUserQuestion gate (repo list confirmation):**
+
+> "I'm about to open coordinated PRs across these N repos in this order:
+> [list]. Confirm the list and order, or amend before I start."
+
+Options: `confirm` | `amend list` | `amend order` | `abort`.
+
+---
+
+## Procedure
+
+### Step 1: Materialize the plan
+
+Create `refactors/<slug>.md`:
+
+```markdown
+# Refactor: <intent>
+- Slug: <slug>
+- Started: <ISO date>
+- Intent: <verbatim>
+- Repos (merge order):
+  1. owner/repo-a (provider)
+  2. owner/repo-b (consumer)
+  3. owner/repo-c (consumer)
+- Branch name: refactor/<slug>
+- Status table: see below
+```
+
+Status table columns: `repo | branch | PR | CI | review | merged | notes`.
+Re-render this table after every step — it's the single source of truth.
+
+### Step 2: Clone or fetch each repo into a scratch dir
+
+```bash
+WORK=$(mktemp -d -t multi-repo-<slug>-XXXX)
+for repo in $REPOS; do
+  gh repo clone "$repo" "$WORK/$(basename "$repo")" -- --depth 50
+done
+```
+
+Keep the worktree shallow — full history isn't needed for a single PR.
+
+### Step 3: Apply the change per repo
+
+Per-repo edit strategy (user picks at AskUserQuestion gate):
+
+- **Same patch everywhere** — write the patch once, apply with `git apply` per repo.
+- **Codemod** — run an `ast-grep`, `jscodeshift`, or `comby` script per repo.
+- **Manual per-repo edits** — agent edits each repo, you review the diff before push.
+
+For each repo:
+1. `git checkout -b refactor/<slug>`
+2. Apply the change.
+3. Run the repo's test command (read from its `CLAUDE.md`, `package.json` scripts, or
+   ask). Skip the repo and mark `notes: tests fail locally` if it fails — do NOT push
+   broken changes.
+4. Commit with a precise message. The user's CLAUDE.md attribution rules apply per repo.
+
+### Step 4: Push branches and open PRs
+
+```bash
+git push -u origin refactor/<slug>
+gh pr create \
+  --title "refactor: <intent>" \
+  --body "$(cat <<'EOF'
+Part of multi-repo refactor <slug>.
+
+## Intent
+<verbatim intent>
+
+## Linked PRs
+<list of sibling PRs as they get created>
+
+## Merge order
+This PR is #N of M in the train.
+EOF
+)"
+```
+
+After every PR opens, edit every prior PR body to backfill the new PR's URL in the
+"Linked PRs" section. Each PR should list all siblings.
+
+### Step 5: Poll CI until green
+
+For each PR:
+
+```bash
+gh pr checks <pr-number> --watch --required
+```
+
+Run polling sequentially in dependency order, not all at once — if the provider PR
+fails CI, you don't want consumer PRs racing ahead.
+
+If a repo's CI fails: stop polling further repos, print the failing job's log via
+`gh run view <run-id> --log-failed`, and **AskUserQuestion**:
+
+> "<repo> CI failed. Options:"
+> - `fix in this branch` (push another commit)
+> - `mark this repo blocked and continue with others` (note in status table)
+> - `abort the whole train` (close all PRs)
+
+### Step 6: Merge in dependency order
+
+Only after ALL repos are green and all PRs have at least 1 approval:
+
+```bash
+for pr in $PRS_IN_ORDER; do
+  gh pr merge "$pr" --squash --auto
+done
+```
+
+Use `--auto` so each merge waits on its own branch protection rules. Watch the queue —
+if a later repo's PR drifts (rebase needed because its base moved), GitHub will block
+auto-merge and the agent must `gh pr update-branch <pr>` and re-poll Step 5.
+
+### Step 7: Post-merge verification
+
+After the last merge, for each repo, fetch the merge commit SHA and store it in the
+status table. If any repo has a post-merge smoke check (canary deploy, integration
+suite triggered on `push: main`), poll those too — Step 6 isn't "done" until the green
+post-merge signals come back.
+
+---
+
+## Outputs
+
+- `refactors/<slug>.md` — plan + live status table + final SHAs.
+- N PRs, all cross-linked.
+- One summary comment posted on every PR with the merge order + final SHAs.
+
+---
+
+## Edge cases
+
+- **Partial GH token scope** — abort before any push. Don't open half the train.
+- **Repo has required reviewers we can't satisfy** — mark the repo blocked; the rest
+  of the train still merges if the user okays a partial land (rare; usually abort).
+- **Merge conflicts on a consumer because provider's merge moved its lockfile** — agent
+  runs `gh pr update-branch` and re-applies the edit; if conflict is logical (not
+  trivial), AskUserQuestion.
+- **CI flaky** — retry once via `gh run rerun --failed`. Two consecutive failures =
+  treat as real failure.
+- **One repo's `main` moved during the train** — `gh pr update-branch` and re-poll CI
+  for that one repo. Don't restart the whole train.
+- **User aborts mid-train** — close every open PR with a comment linking to the plan
+  file explaining the abort reason. Don't leave orphan branches.
+
+---
+
+## Dependencies
+
+- `gh` CLI (authenticated, with write access to every target repo).
+- `git` (standard).
+- Optional: `/dep-graph` (cross-repo mode) for auto-detecting dependency order.
+- Optional: codemod tool of choice (`ast-grep`, `jscodeshift`, `comby`).

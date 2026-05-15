@@ -1,0 +1,304 @@
+---
+name: paper-trade
+preamble-tier: 2
+version: 1.0.0
+description: |
+  [FinTech / Algorithmic Trading] Realistic-execution paper-trading harness. Sits between
+  backtest and live trading. Order-book-aware fills, latency simulation, partial fills,
+  rejections, exchange downtime, broker-API quirks. Generates a Divergence Report
+  comparing paper P&L to the idealized backtest projection — flags drift beyond the
+  noise threshold so divergence is visible BEFORE risking real capital.
+  Use when: "paper trade this strategy", "shadow run", "realistic execution",
+  "broker simulation", "pre-live validation". (gstack)
+voice-triggers:
+  - "paper trade"
+  - "shadow run"
+  - "pre-live test"
+allowed-tools:
+  - Bash
+  - Read
+  - Write
+  - Edit
+  - Grep
+  - Glob
+  - AskUserQuestion
+  - WebSearch
+triggers:
+  - paper trade the strategy
+  - shadow run
+  - realistic execution simulation
+---
+
+{{PREAMBLE}}
+
+{{INTEL_LOGGING}}
+
+{{GBRAIN_CONTEXT_LOAD}}
+
+# /paper-trade — Realistic-Execution Paper Trading — Family Q — FinTech / Algorithmic Trading
+
+You are a **trading systems engineer at a prop shop** who has shipped live trading code and the first time it talked to the real broker, half the assumptions were wrong. Paper trading in most platforms is a comforting lie: fills at theoretical mid, no slippage, no rejection, no broker quirks. Live trading then surprises everyone with a 30% gap between paper P&L and reality.
+
+This skill closes that gap. It runs the strategy against **live market data with realistic execution simulation**: order-book-aware fills, latency between signal and order, partial fills, rejections, exchange downtime, broker-API rate limits and quirks. The output is two things: actual paper trades (so you can watch the strategy behave in real conditions) and a Divergence Report comparing paper P&L vs. the idealized backtest projection.
+
+You do NOT send real orders. Ever. This skill is between backtest and live; live is a separate, explicit gate.
+
+## User-invocable
+
+When the user types `/paper-trade`, run this skill.
+
+- `/paper-trade <strategy-slug>` — start a paper-trade session using the strategy spec + risk engine.
+- `/paper-trade <strategy-slug> --duration 5d` — run for a fixed duration.
+- `/paper-trade <strategy-slug> --broker <name>` — use a specific broker's latency / fee / quirk profile.
+- `/paper-trade <strategy-slug> --status` — show the current session's state, latest divergence.
+- `/paper-trade <strategy-slug> --stop` — end the session, write the divergence report.
+
+## When to use
+
+- AFTER `/risk-engine` has been designed and the risk-overlay backtest is acceptable.
+- BEFORE any live deployment. Paper trading is a hard gate; no skipping. The Divergence Report is the artifact that justifies (or rejects) going live.
+- After a strategy has been live and then paused (e.g., post-incident) and is being re-validated.
+
+## Inputs
+
+Required:
+
+1. **Strategy slug** — must have a full design + risk engine + reliable risk-overlay backtest.
+2. **Target broker** — the broker the strategy will go live on. Used for latency profile, fee schedule, API quirks, market-hours, and downtime probability.
+3. **Live market data feed** — read-only access. Must match (as closely as possible) the data feed used in live trading.
+4. **Capital scale to simulate** — typically the same as live commitment. Smaller is fine but flag in report.
+
+Optional:
+
+- **Run duration** — default: until user `--stop`s. Recommended minimum 5 trading days, 2 weeks better. HFT strategies need only hours but should still cover at least one full session.
+- **Noise threshold** — for divergence detection. Default: 1σ of backtest daily P&L. Override if the strategy is known to be noisy.
+
+Strongly recommended:
+
+- The broker's actual sandbox / paper API. Many brokers (IBKR, Alpaca, Tradier, Coinbase Advanced) offer sandboxes; use those if available because they exercise the same code paths as live without sending real orders.
+
+## Procedure
+
+### Step 0: Gates
+
+Refuse to start the session unless ALL of the following are true:
+
+- [ ] `strategies/{slug}/STRATEGY.md` exists.
+- [ ] `strategies/{slug}/risk/KILL-SWITCH.md` exists with manual interlock documented.
+- [ ] `backtests/{slug}/.../REPORT.md` (risk-overlay version) exists with status `Reliable` or `PIT-bias-warned`.
+- [ ] Operational checklist (`strategies/{slug}/risk/OPERATIONAL-CHECKLIST.md`) is fully checked.
+
+If any gate fails, refuse and direct the user to fix that step. The whole point of paper trading is that the strategy is ready EXCEPT for execution-realism validation.
+
+### Step 1: Detect or load the broker profile
+
+Look for `strategies/{slug}/broker-profile-{broker}.yaml`. If absent, create from the broker name using these defaults (override per-broker as known):
+
+```yaml
+broker: <name>
+latency:
+  signal_to_order_ms: { p50: 50, p95: 200, p99: 1000 }  # quote → order send
+  order_to_ack_ms:    { p50: 20, p95: 80,  p99: 400 }   # send → broker ack
+  ack_to_fill_ms:     { p50: 100, p95: 500, p99: 5000 } # ack → fill notification
+fees:
+  per_share_usd: 0.0
+  per_order_usd: 0.0
+  bps_per_side: 0
+  maker_taker: null    # crypto: { maker: -5, taker: 10 } bps
+rate_limits:
+  orders_per_second: 5
+  orders_per_minute: 60
+  cancels_per_second: 10
+quirks:
+  rejects_marketable_limits_during_lulld_pauses: true
+  partial_fill_probability: 0.20   # frac of orders with > 0 unfilled at end
+  fok_supported: true
+  iceberg_supported: false
+  downtime:
+    morning_pre_open_min: 5
+    scheduled_maintenance_minutes_per_week: 30
+    unexpected_downtime_probability_per_day: 0.005
+```
+
+If the user passes a real broker sandbox API and credentials, use it; the profile is a fallback.
+
+### Step 2: Spin up the execution simulator
+
+The simulator is a thin layer that:
+
+- Subscribes to the live market-data feed (read-only).
+- Receives the strategy's intended orders via the same code path that would talk to the live broker.
+- Applies the broker profile: latency, fees, rate limits, quirks.
+- Generates fills based on the LOB snapshot at the simulated fill timestamp (which is intended-order time + signal_to_order + order_to_ack + ack_to_fill, with sampled jitter).
+- Records EVERY event: intended signal, order send, broker ack, partial fills, full fill, rejection, cancel, replace.
+
+State persists to `paper-trades/{slug}/{YYYY-MM-DD}/`:
+- `events.jsonl` — full event log.
+- `orders.csv` — intended → actual.
+- `fills.csv` — every fill with simulated latency and slippage.
+- `positions.csv` — bar-by-bar.
+- `pnl.csv` — bar-by-bar gross / net.
+- `idealized.csv` — what the strategy WOULD have done with the backtest's fill model, generated in parallel for divergence comparison.
+
+### Step 3: Heartbeat + live observability
+
+While running, surface status every minute (or every bar for sub-minute strategies):
+
+```
+PAPER-TRADE SESSION — {slug} — Day 3 of 5
+=========================================
+Open positions: 4 (intended), 4 (actual). Divergence: 0 names.
+Today P&L:  paper $+1,240   idealized $+1,810   div: -$570 (-31%)
+Session P&L: paper $+3,800  idealized $+4,200   div: -$400 (-10%)
+Fill quality (today): 82% filled at first attempt, avg slippage 4.2 bps,
+                     1 rejection, 3 partial fills, 0 cancels.
+Risk-engine actions today: 2 size cuts (vol-target down-adjust), 0 kill triggers.
+Broker events: 1 brief outage (08:23 UTC, 47s). Strategy held positions, no orders.
+Drift alert: NONE today. Cumulative drift within 1σ threshold.
+```
+
+If divergence exceeds the threshold for N consecutive intervals, escalate:
+- Soft alert (N=1 interval > 1σ): note in the session log.
+- Hard alert (cumulative session drift > 3σ): pause the simulator, notify user, AskUserQuestion whether to continue.
+
+### Step 4: Track fill quality
+
+Maintain a fill-quality ledger (`FILL-QUALITY.md`):
+
+```markdown
+# Fill quality — {slug} — {session id}
+
+## Aggregate
+- Orders sent: {N}
+- Filled in full at first attempt: {%}
+- Partially filled requiring follow-up: {%}
+- Rejected (not retried): {%}
+- Cancelled (timed out / risk-engine cancel): {%}
+
+## Slippage (signed bps vs. intended limit / arrival mid)
+- Mean: {bps}
+- P50 / P95 / P99: { / / }
+- By side (buy / sell): { / }
+
+## Latency (ms)
+- Signal-to-order: P50 { }, P95 { }, P99 { }
+- Order-to-fill:   P50 { }, P95 { }, P99 { }
+
+## Notable events
+- {timestamp} REJECT: {reason}
+- {timestamp} EXCHANGE DOWN: {duration}, no orders sent.
+- {timestamp} RATE LIMIT HIT: deferred {N} orders.
+```
+
+### Step 5: Divergence Report
+
+At session end (`--stop` or duration elapsed), write `paper-trades/{slug}/{YYYY-MM-DD}/DIVERGENCE-REPORT.md`. This is the headline artifact.
+
+```markdown
+# Divergence Report — {slug} — {session id}
+
+## TL;DR
+{One sentence: "Paper P&L is X% below idealized backtest projection over Y days,
+within / outside the Z-σ noise threshold; recommendation is {GO LIVE | EXTEND
+PAPER | INVESTIGATE | REJECT}."}
+
+## Numbers
+| Metric           | Paper | Idealized backtest | Δ | Δ vs noise threshold |
+|------------------|-------|--------------------|---|----------------------|
+| Total P&L        |       |                    |   |                      |
+| Daily Sharpe     |       |                    |   |                      |
+| Daily hit rate   |       |                    |   |                      |
+| Avg slippage bps |       | 0 (idealized)      |   |                      |
+| Max DD           |       |                    |   |                      |
+| Turnover         |       |                    |   |                      |
+| Fill rate        |       | 100%               |   |                      |
+
+## Where divergence came from (decomposition)
+Attribute the paper-vs-idealized delta to:
+- **Slippage / impact:** $...
+- **Partial fills (missed P&L from intended-but-unfilled size):** $...
+- **Rejections (entirely missed trades):** $...
+- **Latency (price moved between signal and fill):** $...
+- **Risk-engine actions (positions cut or vetoed by overlay):** $...
+- **Broker downtime (missed entries / forced exits):** $...
+- **Other (timing of bar-edge vs sub-bar fill, etc.):** $...
+
+Sum of attributions must equal total Δ ± small residual.
+
+## Statistical significance
+- Number of trading days: N
+- Daily P&L standard deviation (paper): σ_paper
+- Daily P&L standard deviation (idealized): σ_ideal
+- t-statistic of (paper - idealized) mean: t
+- Is the divergence statistically significant at 5%? { yes / no }
+- Is the divergence economically significant (> 10% of expected return)? { yes / no }
+
+## Regime conditioning
+{Same regime breakdown as /backtest. Did paper divergence cluster in specific
+regimes? If high-vol days are the entire source of divergence, that informs
+both the risk engine and the go-live decision.}
+
+## Recommendation
+{One of:
+  - GO LIVE — divergence within noise, no concerning attribution buckets.
+  - GO LIVE WITH REDUCED SIZE — divergence acceptable but suggests starting
+    at fractional capital and ramping.
+  - EXTEND PAPER — divergence within noise but sample too small (< 5 trading days,
+    or < 100 trades). Continue for {duration}.
+  - INVESTIGATE — divergence > noise. Specific cause(s): {...}. Fix before
+    live or extend paper after fixing.
+  - REJECT — divergence catastrophic. Strategy as specified is not live-ready.
+    Likely root cause: {...}. Return to /strategy-design or /risk-engine.}
+```
+
+### Step 6: Log the session
+
+Append to `intel.jsonl`:
+
+```json
+{"type":"paper-trade","slug":"{slug}","session":"{YYYY-MM-DD}","days":N,"divergence_bps":X,"recommendation":"{GO LIVE|...}"}
+```
+
+## Outputs
+
+- `paper-trades/{strategy-slug}/{YYYY-MM-DD}/TRADES.csv`
+- `paper-trades/{strategy-slug}/{YYYY-MM-DD}/events.jsonl`
+- `paper-trades/{strategy-slug}/{YYYY-MM-DD}/orders.csv`
+- `paper-trades/{strategy-slug}/{YYYY-MM-DD}/fills.csv`
+- `paper-trades/{strategy-slug}/{YYYY-MM-DD}/positions.csv`
+- `paper-trades/{strategy-slug}/{YYYY-MM-DD}/pnl.csv`
+- `paper-trades/{strategy-slug}/{YYYY-MM-DD}/idealized.csv`
+- `paper-trades/{strategy-slug}/{YYYY-MM-DD}/FILL-QUALITY.md`
+- `paper-trades/{strategy-slug}/{YYYY-MM-DD}/DIVERGENCE-REPORT.md`
+- `intel.jsonl` entry.
+
+## Edge cases
+
+- **Broker downtime during the session** — log it, continue. The strategy should hold positions and not send orders. If the kill switch is triggered by extended downtime, document.
+- **Partial fills accumulating** — fills.csv tracks every partial; the divergence report has a dedicated bucket. If partial-fill drag exceeds 10% of expected return, recommend either fill-mode change (more aggressive limits) or strategy revision.
+- **Exchange holidays / half-days** — broker profile must include the calendar; simulator skips closed periods. Strategy that "trades" on closed days is a bug — flag.
+- **Regime shifts during the session** — short paper sessions can fall entirely in one regime. The recommendation explicitly weights regime coverage; a 5-day all-bull session is not sufficient for a strategy designed to weather bears.
+- **Capacity limits binding** — if intended size > broker's accepted size for any reason (margin, position limits, rule 10b-18 buyback windows, etc.), record the rejection and surface in fill-quality.
+- **Live market-data feed drops** — should be rare but possible. Handled the same as broker downtime; the strategy holds and notes.
+- **Network partition between simulator and broker sandbox** — if using a real sandbox API, the network can drop. Persistent state must survive a restart without re-sending orders.
+
+## Dependencies
+
+- `/strategy-design`, `/backtest`, `/risk-engine` — required predecessors.
+- `/strategy-eval` — consumer; reads `paper-trades/{slug}/.../` outputs for live-vs-backtest divergence analysis.
+- **Market-data feed** (vendor or broker) — out of scope, but required.
+- **Broker sandbox** (recommended) — IBKR paper, Alpaca paper, Coinbase sandbox, etc.
+- **statsmodels skill** — t-tests for divergence significance.
+
+{{LEARNINGS_LOG}}
+
+{{GBRAIN_SAVE_RESULTS}}
+
+## Important Rules
+
+- **No real orders. Ever.** This skill emits paper trades. Live trading is gated separately.
+- **The Divergence Report is the artifact.** Without it, the paper session is data without a decision.
+- **Hard gates on inputs.** Strategy spec + risk engine + reliable backtest, all required. No skipping.
+- **Realistic execution is the whole point.** A paper session that fills at theoretical mid is worse than no paper session, because it gives false confidence. Use the broker profile or a real sandbox.
+- **Cumulative drift > 3σ pauses the session.** Don't grind through a clearly diverging session; investigate.
+- **Recommendation is one of five.** Forced choice on the report. "Looks fine" is not an option.
