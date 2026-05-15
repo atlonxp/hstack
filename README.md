@@ -200,7 +200,7 @@ The feature-build family uses a **5-signal completeness rubric** (route, form, h
 
 Open Claude Code and paste this. Claude does the rest.
 
-> Install hstack: run **`git clone --single-branch --depth 1 https://github.com/atlonxp/hstack.git ~/.claude/skills/hstack && cd ~/.claude/skills/hstack && ./setup`** then add an "hstack" section to CLAUDE.md that says to use the /browse skill from hstack for all web browsing, never use mcp\_\_claude-in-chrome\_\_\* tools, and lists the available skills: /office-hours, /discover, /plan-ceo-review, /plan-eng-review, /plan-design-review, /plan-ux-review, /plan-devex-review, /plan-tune, /design-consultation, /design-shotgun, /design-html, /review, /ship, /land-and-deploy, /canary, /benchmark, /benchmark-models, /browse, /connect-chrome, /open-gstack-browser, /pair-agent, /make-pdf, /qa, /qa-only, /design-review, /devex-review, /scrape, /skillify, /setup-browser-cookies, /setup-deploy, /setup-gbrain, /retro, /investigate, /investigate-workflow, /document-release, /codex, /cso, /autoplan, /autoplan-full, /autobuild, /autoaudit, /verify-loop, /intel, /check-ci, /check-deps, /check-issues, /learn, /ux-audit, /auto-ux-audit, /auto-ux-audit-full, /feature-build, /auto-feature-build, /auto-feature-build-full, /discover-personas, /define-workflows, /gap-analysis, /context-save, /context-restore, /health, /careful, /freeze, /guard, /unfreeze, /gstack-upgrade. Then ask the user if they also want to add hstack to the current project so teammates get it.
+> Install hstack: run **`git clone --single-branch --depth 1 https://github.com/atlonxp/hstack.git ~/.claude/skills/hstack && cd ~/.claude/skills/hstack && ./setup`** then add an "hstack" section to CLAUDE.md that says to use the /browse skill from hstack for all web browsing, never use mcp\_\_claude-in-chrome\_\_\* tools, and lists the available skills: /office-hours, /discover, /plan-ceo-review, /plan-eng-review, /plan-design-review, /plan-ux-review, /plan-devex-review, /plan-tune, /design-consultation, /design-shotgun, /design-html, /review, /ship, /land-and-deploy, /canary, /benchmark, /benchmark-models, /browse, /connect-chrome, /open-gstack-browser, /pair-agent, /make-pdf, /qa, /qa-only, /design-review, /devex-review, /scrape, /skillify, /setup-browser-cookies, /setup-deploy, /setup-gbrain, /retro, /investigate, /investigate-workflow, /document-release, /document-generate, /codex, /cso, /autoplan, /autoplan-full, /autobuild, /autoaudit, /verify-loop, /intel, /check-ci, /check-deps, /check-issues, /learn, /ux-audit, /auto-ux-audit, /auto-ux-audit-full, /feature-build, /auto-feature-build, /auto-feature-build-full, /discover-personas, /define-workflows, /gap-analysis, /context-save, /context-restore, /health, /careful, /freeze, /guard, /unfreeze, /gstack-upgrade. Then ask the user if they also want to add hstack to the current project so teammates get it.
 
 ### Step 2: Add to your repo so teammates get it (optional)
 
@@ -582,7 +582,8 @@ Feature-build (opposite direction from UX audit — build what's missing, not fi
 | `/ship` | **Release Engineer** | Sync main, run tests, audit coverage, push, open PR. Bootstraps test frameworks if you don't have one. |
 | `/land-and-deploy` | **Release Engineer** | Merge the PR, wait for CI and deploy, verify production health. One command from "approved" to "verified in production." |
 | `/canary` | **SRE** | Post-deploy monitoring loop. Watches for console errors, performance regressions, and page failures. |
-| `/document-release` | **Technical Writer** | Update all project docs to match what you just shipped. Catches stale READMEs automatically. |
+| `/document-release` | **Technical Writer** | Update all project docs to match what you just shipped. Catches stale READMEs automatically. Builds a Diataxis coverage map (reference / how-to / tutorial / explanation) so gaps are visible in the PR body. |
+| `/document-generate` | **Documentation Author** | Generate missing docs from scratch using the Diataxis framework. Researches the codebase first, then writes reference / how-to / tutorial / explanation docs that actually match the code. Invokable standalone or chained from `/document-release` when the coverage map finds gaps. Learn more: [tutorial](docs/tutorial-document-generate.md) • [how-to](docs/howto-document-a-shipped-feature.md) • [why Diataxis](docs/explanation-diataxis-in-gstack.md). |
 | `/retro` | **Eng Manager** | Team-aware weekly retro. Per-person breakdowns, shipping streaks, test health trends, growth opportunities. `/retro global` runs across all your projects and AI tools (Claude Code, Codex, Gemini). |
 | `/browse` | **QA Engineer** | Give the agent eyes. Real Chromium browser, real clicks, real screenshots. ~100ms per command. `$B connect` launches your real Chrome as a headed window — watch every action live. |
 | `/setup-browser-cookies` | **Session Manager** | Import cookies from your real browser (Chrome, Arc, Brave, Edge) into the headless session. Test authenticated pages. |
@@ -667,13 +668,81 @@ hstack is powerful with one sprint. It is transformative with ten running at onc
 
 The sprint structure is what makes parallelism work. Without a process, ten agents is ten sources of chaos. With a process — think, plan, build, review, test, ship — each agent knows exactly what to do and when to stop. You manage them the way a CEO manages a team: check in on the decisions that matter, let the rest run.
 
+### Voice input (AquaVoice, Whisper, etc.)
+
+gstack skills have voice-friendly trigger phrases. Say what you want naturally —
+"run a security check", "test the website", "do an engineering review" — and the
+right skill activates. You don't need to remember slash command names or acronyms.
+
+## Uninstall
+
+### Option 1: Run the uninstall script
+
+If gstack is installed on your machine:
+
+```bash
+~/.claude/skills/gstack/bin/gstack-uninstall
+```
+
+This handles skills, symlinks, global state (`~/.gstack/`), project-local state, browse daemons, and temp files. Use `--keep-state` to preserve config and analytics. Use `--force` to skip confirmation.
+
+### Option 2: Manual removal (no local repo)
+
+If you don't have the repo cloned (e.g. you installed via a Claude Code paste and later deleted the clone):
+
+```bash
+# 1. Stop browse daemons
+pkill -f "gstack.*browse" 2>/dev/null || true
+
+# 2. Remove per-skill directories whose SKILL.md points into gstack/
+find ~/.claude/skills -mindepth 1 -maxdepth 1 -type d ! -name gstack 2>/dev/null |
+while IFS= read -r dir; do
+  link="$dir/SKILL.md"
+  [ -L "$link" ] || continue
+  target=$(readlink "$link" 2>/dev/null) || continue
+  case "$target" in
+    gstack/*|*/gstack/*)
+      rm -f "$link"
+      rmdir "$dir" 2>/dev/null || true
+      ;;
+  esac
+done
+
+# 3. Remove gstack
+rm -rf ~/.claude/skills/gstack
+
+# 4. Remove global state
+rm -rf ~/.gstack
+
+# 5. Remove integrations (skip any you never installed)
+rm -rf ~/.codex/skills/gstack* 2>/dev/null
+rm -rf ~/.factory/skills/gstack* 2>/dev/null
+rm -rf ~/.kiro/skills/gstack* 2>/dev/null
+rm -rf ~/.openclaw/skills/gstack* 2>/dev/null
+
+# 6. Remove temp files
+rm -f /tmp/gstack-* 2>/dev/null
+
+# 7. Per-project cleanup (run from each project root)
+rm -rf .gstack .gstack-worktrees .claude/skills/gstack 2>/dev/null
+rm -rf .agents/skills/gstack* .factory/skills/gstack* 2>/dev/null
+```
+
+### Clean up CLAUDE.md
+
+The uninstall script does not edit CLAUDE.md. In each project where gstack was added, remove the `## gstack` and `## Skill routing` sections.
+
+### Playwright
+
+`~/Library/Caches/ms-playwright/` (macOS) is left in place because other tools may share it. Remove it if nothing else needs it.
+
 ---
 
 Free, MIT licensed, open source. No premium tier, no waitlist.
 
 I open sourced how I build software. You can fork it and make it your own.
 
-> **Upstream:** hstack is derived from [garrytan/gstack](https://github.com/garrytan/gstack) (tracking **v1.5.2.0**) with `/plan-ux-review`, `/discover`, `/autoplan-full`, `/autobuild`, `/autoaudit`, `/verify-loop`, `/investigate-workflow`, `/intel`, `/check-ci`, `/check-deps`, `/check-issues`, `/ux-audit`, `/auto-ux-audit`, `/auto-ux-audit-full`, `/feature-build`, `/auto-feature-build`, `/auto-feature-build-full`, `/discover-personas`, `/define-workflows`, and `/gap-analysis` added.
+> **Upstream:** hstack is derived from [garrytan/gstack](https://github.com/garrytan/gstack) (tracking **v1.39.1.0**) with `/plan-ux-review`, `/discover`, `/autoplan-full`, `/autobuild`, `/autoaudit`, `/verify-loop`, `/investigate-workflow`, `/intel`, `/check-ci`, `/check-deps`, `/check-issues`, `/ux-audit`, `/auto-ux-audit`, `/auto-ux-audit-full`, `/feature-build`, `/auto-feature-build`, `/auto-feature-build-full`, `/discover-personas`, `/define-workflows`, and `/gap-analysis` added.
 > Pull from upstream regularly to stay current. Contributions welcome.
 >
 > **What's current from upstream v1.5.2.0:** `/make-pdf` (markdown → publication-quality PDFs), `/benchmark-models` (cross-model quality benchmark), `/context-save` + `/context-restore` (rename of old `/checkpoint` with WIP-commit recovery), `/plan-tune`, `/devex-review` + `/plan-devex-review`, `/pair-agent` (remote agent ↔ browser pairing), ML-based prompt injection defense for the sidebar, Puppeteer-parity `browse` commands, UX behavioral foundations, GBrain + Hermes agent runtime hosts.
@@ -757,6 +826,8 @@ Data is stored in [Supabase](https://supabase.com) (open source Firebase alterna
 
 **Windows users:** hstack works on Windows 11 via Git Bash or WSL. Node.js is required in addition to Bun — Bun has a known bug with Playwright's pipe transport on Windows ([bun#4253](https://github.com/oven-sh/bun/issues/4253)). The browse server automatically falls back to Node.js. Make sure both `bun` and `node` are on your PATH.
 
+On Windows without Developer Mode (MSYS2 / Git Bash), `setup` falls back to file copies instead of symlinks because `ln -snf` produces frozen copies that don't refresh on `git pull`. **Re-run `cd ~/.claude/skills/hstack && ./setup` after every `git pull`** so your skill files match the repo. `setup` prints a one-line note reminding you. Unix and WSL keep symlinks and don't need the re-run.
+
 **Claude says it can't see the skills?** Make sure your project's `CLAUDE.md` has an hstack section. Add this:
 
 ```
@@ -767,7 +838,7 @@ Available skills: /office-hours, /discover, /plan-ceo-review, /plan-eng-review,
 /review, /ship, /land-and-deploy, /canary, /benchmark, /browse, /connect-chrome,
 /open-gstack-browser, /pair-agent, /qa, /qa-only, /design-review, /scrape, /skillify,
 /setup-browser-cookies, /setup-deploy, /setup-gbrain, /sync-gbrain, /retro, /investigate,
-/document-release, /codex, /cso, /autoplan, /autoplan-full, /autobuild, /autoaudit,
+/document-release, /document-generate, /codex, /cso, /autoplan, /autoplan-full, /autobuild, /autoaudit,
 /verify-loop, /intel, /check-ci, /check-deps, /check-issues, /learn, /ux-audit,
 /auto-ux-audit, /auto-ux-audit-full, /context-save, /context-restore, /health,
 /careful, /freeze, /guard, /unfreeze, /gstack-upgrade.
