@@ -1,0 +1,390 @@
+---
+name: ux-pipeline
+preamble-tier: 3
+version: 1.0.0
+description: |
+  [UX Pipeline] End-to-end stakeholder-validated UX/UI pipeline. Runs /office-hours →
+  /discover-personas → /product-ci → /ux-workflows → /design-consultation → /mockup →
+  /interactive-mockup with gap detection between every step and an iteration loop until
+  all invariants pass + no stakeholder feedback remains open. Detects warm-start state
+  (skips already-produced artifacts). Drift-propagates downstream when upstream tokens
+  change. Hands stakeholder a clickable mockup URL. Hard cap of 5 loops.
+  Use when asked to "ux pipeline", "auto ux pipeline", "full ux mockup", "stakeholder
+  mockup", "design and mockup everything", or "run the ux pipeline".
+  Proactively suggest when starting a new project's UI/UX or after major scope expansion. (gstack)
+benefits-from: [office-hours, discover-personas]
+allowed-tools:
+  - Read
+  - Write
+  - Edit
+  - Grep
+  - Glob
+  - Bash
+  - AskUserQuestion
+---
+
+{{PREAMBLE}}
+
+# /ux-pipeline: End-to-End Stakeholder Mockup Pipeline
+
+You are the orchestrator. You do not generate design tokens, workflows, screens, or
+interactions yourself — you SEQUENCE the skills that do, detect gaps between their
+outputs, and loop until the pipeline closes.
+
+The deliverable is a clickable, role-based, multi-screen mockup that a stakeholder
+opens in a browser and clicks through before any production code is written. Layer
+boundaries are in `MOCKUP-ARCHITECTURE.md`; the pipeline shape is in
+`PLAN-v3.1-ux-pipeline.md`. Read both before running.
+
+## Pipeline stages
+
+```
+1. /office-hours        — product intel (cold start only)
+2. /discover-personas   — docs/PERSONAS.md
+3. /product-ci          — Layer 1 tokens + docs/PRODUCT_CI.md
+4. /ux-workflows        — docs/WORKFLOWS.md
+5. /design-consultation — Layer 2 utilities + DESIGN.md
+6. /mockup              — Layers 3-5 screens/pages/index
+7. /interactive-mockup  — Layer 6 interactions.js
+8. Validate             — /plan-design-review --mockup, /plan-ux-review --mockup (optional)
+9. Build + serve        — bun run mockup:build then mockup:serve
+```
+
+## Hard rules
+
+1. NEVER bypass a sub-skill. Always invoke via the `Skill` tool. Never duplicate its
+   logic inline. Missing sub-skill = HARD STOP, surface to user.
+2. NEVER run without the Phase 0 state scan first.
+3. Loop cap is **5 iterations** per run. Beyond the cap, ask for explicit override.
+4. Resume-safe: every loop iteration re-reads disk state. If interrupted, re-running
+   `/ux-pipeline` picks up where it left off.
+5. Drift propagation requires explicit user approval. Never silently re-run
+   downstream stages when an upstream artifact changes.
+6. Validation pass (Phase 3) is optional but recommended. Default offering is "Both".
+7. Stakeholder feedback is the loop's primary exit condition.
+8. Every run writes an orchestration log to `.gstack/ux-pipeline/run-{timestamp}.md`.
+9. The mockup URL must come from `bun run mockup:serve` — never hand-served.
+10. Sub-skill output failure is a HARD STOP. Surface the error; do not auto-retry.
+
+---
+
+## Setup
+
+Initialize the run log and working directory.
+
+```bash
+mkdir -p .gstack/ux-pipeline
+RUN_ID=$(date +%Y-%m-%dT%H-%M-%S)
+RUN_LOG=".gstack/ux-pipeline/run-${RUN_ID}.md"
+FEEDBACK_LOG=".gstack/ux-pipeline/feedback.jsonl"
+touch "$FEEDBACK_LOG"
+{
+  echo "# /ux-pipeline run ${RUN_ID}"
+  echo ""
+  echo "Started: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  echo "Branch: $(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo 'unknown')"
+  echo "Commit: $(git rev-parse --short HEAD 2>/dev/null || echo 'unknown')"
+  echo ""
+} > "$RUN_LOG"
+echo "RUN_LOG=$RUN_LOG"
+```
+
+Track the loop counter in prose ("the loop counter, starting at 0"). Do not depend
+on a shell variable surviving between bash blocks. Append a one-line entry to the
+run log at every meaningful transition (stage dispatched, gap surfaced, gap closed,
+drift detected, iteration completed).
+
+---
+
+## Phase 0: Entry-state scan (MANDATORY)
+
+Scan disk for each artifact the pipeline produces. Do this BEFORE invoking any
+sub-skill.
+
+Check the following paths and capture presence + last-modified timestamp
+(`stat -f '%m' <path>` on macOS, `stat -c '%Y' <path>` on Linux):
+
+- `.gstack/office-hours/*.md` — product intel
+- `docs/PERSONAS.md` — persona registry
+- `docs/PRODUCT_CI.md` — values → tokens rationale
+- `mockup/styles.css` — Layer 1 tokens (`:root` block) AND Layer 2 utilities
+- `docs/WORKFLOWS.md` — per-persona workflows
+- `DESIGN.md` — engineer-facing design reference
+- `mockup/screens/` — Layer 3 per-screen partials
+- `mockup/pages/` — Layer 4 per-persona tour pages
+- `mockup/index.html` — Layer 5 gallery navigator
+- `mockup/interactions.js` — Layer 6 interactivity
+- `mockup/data/*.json` — per-persona mock data
+
+Present a state matrix to the user (one row per artifact, columns: Stage, Artifact,
+Status, Last modified). Then AskUserQuestion:
+
+- **A) Resume.** Skip stages whose primary artifact is present; run only what's missing.
+- **B) Force re-run from a specific stage.** User names the stage number (1-7); every
+  stage at or after that point re-runs.
+- **C) Fresh run.** Archives `mockup/`, `docs/PERSONAS.md`, `docs/WORKFLOWS.md`,
+  `docs/PRODUCT_CI.md`, and `DESIGN.md` to `.gstack/ux-pipeline/archive-${RUN_ID}/`,
+  then runs every stage from scratch. **NEVER delete without explicit confirmation
+  via this question.** Use `mv` to the archive path, not `rm`.
+
+Record the chosen entry strategy in the run log. If C, perform the archive moves now.
+
+---
+
+## Phase 1: Stage dispatch loop
+
+For each stage 1 through 7, in strict order, run:
+
+### 1A. Stage entry check
+
+If the stage's primary artifact is **missing** OR **force re-run was selected**:
+
+1. Invoke the sub-skill via the `Skill` tool. Mapping:
+   stage 1 → `office-hours`, 2 → `discover-personas`, 3 → `product-ci`,
+   4 → `ux-workflows`, 5 → `design-consultation`, 6 → `mockup`,
+   7 → `interactive-mockup`.
+2. Wait for the sub-skill to complete. Do not begin the next stage until it returns.
+3. Verify the artifact now exists. If not, HARD STOP — log the failure and exit.
+
+If the artifact is **present** and not forced: skip. Append
+`Stage N skipped — already present` to the run log.
+
+### 1B. Gap check (after every stage, run OR skipped)
+
+Run invariant checks specific to the stage's output. These are listed in
+`PLAN-v3.1-ux-pipeline.md` "Iterative gap-loop semantics". A failed invariant is a
+"gap" that must be surfaced.
+
+**Stages 1-2 (intel + personas):**
+- Every persona has at least one entry-point hypothesis (or is explicitly marked
+  `entry: to-be-discovered`).
+- No duplicate persona IDs.
+- Every persona has `name`, `goals`, and `frequency` populated.
+
+**Stage 3 (product-ci):**
+- Every `--c-*` token in `mockup/styles.css :root` has a valid hex/hsl/rgb value
+  (no empty values, no placeholders like `TBD`).
+- Every value mapping in `docs/PRODUCT_CI.md` references a token name that exists
+  in `:root`. No orphan rationale entries.
+
+**Stage 4 (workflows):**
+- Every persona in `docs/PERSONAS.md` has at least one workflow section in
+  `docs/WORKFLOWS.md`.
+- Every workflow has 3+ steps.
+- Every workflow names exactly one owning persona.
+
+**Stage 5 (design-consultation):**
+- Every Layer 2 class in `mockup/styles.css` that references `var(--c-*)` refers
+  to a token that exists in Layer 1's `:root`. No orphan token refs.
+- `DESIGN.md` documents at least one component primitive (button, card, input).
+
+**Stage 6 (mockup):**
+- Every screen referenced in `docs/WORKFLOWS.md` has a file under
+  `mockup/screens/{persona}/{screen}.html`.
+- No screen file contains `<html>`, `<head>`, or `<body>` tags (fragments only,
+  per `MOCKUP-ARCHITECTURE.md`).
+- Every utility class used inside a screen file is defined in `mockup/styles.css`
+  Layer 2.
+- `mockup/pages/{persona}.html` exists for every persona.
+- `mockup/index.html` exists and links to every per-persona page.
+
+**Stage 7 (interactive-mockup):**
+- Every `data-action="..."` attribute in any screen file has a matching handler
+  in `mockup/interactions.js`.
+- Every `data-bind="..."` references a JSON path that exists in the corresponding
+  `mockup/data/persona-{slug}.json`.
+- Every multi-step workflow in `docs/WORKFLOWS.md` has a corresponding flow state
+  machine in `interactions.js`.
+
+For each invariant: use Grep/Read against the relevant files, then produce a
+concrete gap list (`{ stage, invariant, detail, suggested_fix }`).
+
+### 1C. Gap response
+
+If gaps are found, present each one (not batched) to the user via AskUserQuestion:
+
+- **A) Fix automatically.** Re-run the producing sub-skill in patch mode, passing
+  the gap detail as context. After the patch, re-check that specific invariant only.
+- **B) Mark as accepted.** Log the gap as accepted-by-user in the run log. Pipeline
+  proceeds.
+- **C) Park for v2.** Append to `.gstack/ux-pipeline/parked.md` with timestamp and
+  rationale. Pipeline proceeds.
+
+If no gaps: append `Stage N gap check passed` to the run log and continue.
+
+---
+
+## Phase 2: Drift propagation
+
+After all 7 stages have completed at least once in this iteration, check for drift
+by comparing last-modified timestamps:
+
+| Upstream | Downstream | Drift if upstream > downstream |
+|---|---|---|
+| `mockup/styles.css` (`:root`) | `mockup/screens/` files | screens may be stale |
+| `docs/WORKFLOWS.md` | `mockup/screens/` files | screen list may be stale |
+| `mockup/screens/` files | `mockup/interactions.js` | interactions may be stale |
+| `docs/PRODUCT_CI.md` | `mockup/styles.css` Layer 2 | utility classes may be stale |
+| `docs/PERSONAS.md` | `docs/WORKFLOWS.md` | workflows may be missing a persona |
+| `docs/PERSONAS.md` | `mockup/pages/` | a persona page may be missing |
+
+For each drift detected, AskUserQuestion:
+
+- **A) Refresh downstream.** Re-run the affected stage in patch mode. Mark
+  further-downstream stages as also stale and prompt recursively in dependency order.
+- **B) Accept current state and move on.** Log the drift as accepted in the run log.
+
+Drift propagation NEVER runs silently. Every refresh requires explicit user approval.
+One question per drift item, not per stage.
+
+If no drift: append `Phase 2: no drift detected` to the run log.
+
+---
+
+## Phase 3: Validation pass (optional, recommended)
+
+Before serving the URL, offer the mockup-mode reviews.
+
+AskUserQuestion: "Run validation reviews before serving the mockup URL?"
+
+- **A) `/plan-design-review --mockup`** — 7-dimension visual craft review.
+- **B) `/plan-ux-review --mockup`** — persona workflow walkthrough on the mockup.
+- **C) Both (recommended).** Run A then B sequentially.
+- **D) Skip.** Proceed to Phase 4.
+
+If A, B, or C: invoke the review skill(s) via the `Skill` tool with the `--mockup`
+flag. Append each finding to `.gstack/ux-pipeline/feedback.jsonl` as
+`{ source: "plan-design-review" | "plan-ux-review", screen, severity, detail }`.
+Treat findings as gaps for the next iteration; they will surface at Phase 1C on the
+next loop.
+
+If D: log `Phase 3 skipped by user` and continue.
+
+---
+
+## Phase 4: Build + stakeholder loop
+
+### 4A. Build
+
+```bash
+bun run mockup:build
+```
+
+If the build fails: HARD STOP. Surface the error, log it, exit. The user fixes the
+underlying issue and re-runs `/ux-pipeline`.
+
+### 4B. Serve
+
+AskUserQuestion: "How should the stakeholder receive the mockup?"
+
+- **A) Print local-serve instructions only.** Output the command
+  (`bun run mockup:serve`) and the expected localhost URL.
+- **B) Start `bun run mockup:serve` in background; print the localhost URL.**
+- **C) Start `bun run mockup:serve --share` (ngrok tunnel); print the public URL.**
+  Warn the user that the mockup may contain unreleased product info — only share
+  if intentional.
+
+Print the URL prominently in the run log. The URL is the deliverable.
+
+### 4C. Stakeholder feedback
+
+AskUserQuestion: "Stakeholder feedback to feed back into the loop?"
+
+- **A) Yes — collect now.** Loop: ask which screen, then ask for the comment.
+  Append each entry to `.gstack/ux-pipeline/feedback.jsonl` as
+  `{ source: "stakeholder", screen, comment, timestamp }`. Stop when the user
+  says "done."
+- **B) No — exit clean.** Pipeline is closed.
+- **C) Pause — re-run later.** Pipeline exits; feedback log is preserved.
+
+If A and at least one entry added: increment the loop counter, return to Phase 0
+(re-scan state; the feedback entries surface as gaps in Phase 1C of the next
+iteration). If the loop counter equals 5, jump to Phase 5 instead.
+
+If B or C: proceed to Phase 5.
+
+---
+
+## Phase 5: Exit
+
+Exit when ALL of:
+
+1. Every Phase 1 stage is "present" or "skipped" (no missing artifacts).
+2. Every Phase 1B/1C gap is closed, accepted, or parked.
+3. Every Phase 2 drift item is resolved (refreshed or accepted).
+4. Phase 4C feedback is empty (option B or C chosen).
+
+OR exit when the loop counter equals 5 (hard cap).
+
+### 5A. Hard-cap handling
+
+If exit is triggered by the cap, AskUserQuestion:
+
+- **A) Force exit with current state.** Log all unresolved gaps and feedback as
+  parked.
+- **B) Bump cap to 8 and continue.** Reset the counter at 5; allow 3 more
+  iterations. Only one bump per run.
+- **C) Park unresolved feedback as backlog.** Write a one-line summary per item
+  to `TODOS.md`, exit cleanly.
+
+### 5B. Clean-exit summary
+
+Write to the run log AND print to the user:
+
+```markdown
+## Run summary
+
+- Stages run this session: [N of 7]
+- Stages skipped (already present): [list]
+- Gaps closed: [N]
+- Gaps accepted: [N]
+- Gaps parked: [N — see .gstack/ux-pipeline/parked.md]
+- Drift refreshes: [N]
+- Loops taken: [N of 5]
+- Final mockup URL: [URL]
+- Feedback parked: [N — see .gstack/ux-pipeline/feedback.jsonl]
+
+## Next steps
+
+- Open the URL above to review the mockup.
+- Re-run /ux-pipeline anytime to feed stakeholder feedback back into the loop.
+- When the mockup is approved, /ship publishes it to a stable URL (Wave 4).
+```
+
+End your message with the mockup URL on its own line so it's easy to copy.
+
+---
+
+## Edge cases
+
+- **Sub-skill not installed.** HARD STOP. Tell the user which skill is missing and
+  how to install it. Do not inline the skill's logic.
+- **Empty PERSONAS.md after /discover-personas.** Treat as a gap (Phase 1B). Offer
+  to re-run /discover-personas with more context.
+- **`docs/WORKFLOWS.md` exists but is hand-edited.** Honor it; run invariants
+  against it. If invariants fail, surface as gaps and let the user decide.
+- **User interrupts mid-stage.** Pipeline is resume-safe; re-running re-reads disk
+  state in Phase 0.
+- **Feedback log has entries from a prior session.** Surface them as gaps in
+  Phase 1C of the first iteration.
+- **Loop counter at 0 at Phase 5 (single-pass run, no feedback).** Normal exit.
+  Most warm-start scenarios complete in one iteration.
+
+---
+
+## What this skill does NOT do
+
+- Does NOT generate tokens, utilities, screens, pages, or interactions itself —
+  those belong to the sub-skills.
+- Does NOT decide design questions. Taste decisions belong to the sub-skill that
+  owns the layer.
+- Does NOT publish the mockup to a permanent URL. `--share` is ephemeral (ngrok).
+  Wave 4's `/ship` integration handles stable URLs.
+- Does NOT modify production code. Mockup files live under `mockup/`; production
+  rebuilds against `DESIGN.md` separately.
+- Does NOT replace `/ux-audit`. /ux-audit runs on the live implementation;
+  /ux-pipeline runs before implementation, on the mockup.
+
+If a stakeholder asks for something this pipeline cannot deliver (real auth, real
+data persistence, real network requests), the mockup has done its job and the next
+step is implementation, not deeper mockup work.

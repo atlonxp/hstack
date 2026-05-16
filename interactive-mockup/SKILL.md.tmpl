@@ -1,0 +1,434 @@
+---
+name: interactive-mockup
+preamble-tier: 3
+version: 1.0.0
+description: |
+  [UX Pipeline] Wire the static mockup into a clickable interactive prototype.
+  Reads docs/WORKFLOWS.md and mockup/screens/. Adds data-action attributes to relevant
+  buttons/links/forms; writes mockup/interactions.js with handlers for navigation,
+  fake form success, modals, dropdowns, multi-step flow state machines, and mock-data
+  binding from mockup/data/*.json. Pure vanilla JS, zero npm deps. Layer 6 of
+  MOCKUP-ARCHITECTURE.md. Stakeholders get a clickable Figma-alike preview, not a slideshow.
+  Use when asked to "make the mockup interactive", "wire the clicks", "interactive mockup",
+  "add behavior", or "the mockup should respond".
+  Proactively suggest after /mockup completes, before stakeholder review. (gstack)
+benefits-from: [mockup, ux-workflows]
+allowed-tools:
+  - Read
+  - Write
+  - Edit
+  - Grep
+  - Glob
+  - Bash
+  - AskUserQuestion
+---
+
+{{PREAMBLE}}
+
+# /interactive-mockup: Make the Mockup Clickable
+
+Wire the static mockup into a clickable interactive prototype. This skill owns
+**Layer 6** of `MOCKUP-ARCHITECTURE.md`: a single `mockup/interactions.js` file
+plus minimal `data-action` / `data-bind` / `data-target` attribute additions to
+existing screen partials. No framework. No npm deps. Pure vanilla DOM.
+
+The output should pass for a Figma high-fidelity prototype to a stakeholder
+clicking through — nav works, forms accept input and flip to success, modals
+open and close, multi-step flows advance, mock data fills the screens. Real
+network requests, real auth, real persistence: none of it. This is a contract,
+not a product.
+
+## Setup
+
+```bash
+test -d mockup/screens || { echo "mockup/screens/ missing — run /mockup first"; exit 1; }
+test -f docs/WORKFLOWS.md || { echo "docs/WORKFLOWS.md missing — run /ux-workflows first"; exit 1; }
+ls mockup/data/*.json >/dev/null 2>&1 || { echo "mockup/data/*.json missing — run /mockup first"; exit 1; }
+test -f mockup/interactions.js && echo "EXISTING interactions.js detected — iteration mode" || echo "FRESH — first-time generation"
+```
+
+If `mockup/interactions.js` already exists, treat its contents as state. You will
+diff against it later (Iteration mode below). If any of `mockup/screens/`,
+`docs/WORKFLOWS.md`, or `mockup/data/*.json` is missing, stop and tell the user
+which upstream skill must run first.
+
+## Phase 1: Inventory interactive surfaces
+
+Read `docs/WORKFLOWS.md` end-to-end. For each workflow step (action, screen,
+outcome), classify the action into exactly one of:
+
+- **Navigation** — links between screens within a persona, or between personas.
+  Example: patient dashboard to quotation detail.
+- **Form submission** — text input, select, radio, checkbox sequences that
+  submit. Fake success only.
+- **Modal / dialog trigger** — buttons that open confirmation, detail, or
+  full-screen modals via native `<dialog>`.
+- **Dropdown / tab / accordion** — UI state toggle without screen change.
+- **Multi-step flow** — wizard-style sequences with state across steps
+  (booking, onboarding, checkout, verification).
+- **Data display** — elements that should be populated from
+  `mockup/data/persona-*.json` on load.
+
+Walk `mockup/screens/{persona}/*.html` and `mockup/screens/_components/*.html`
+to find candidate elements. Build an inventory table:
+
+| Action ID | Type | Screen file | Element selector | Workflow step |
+|---|---|---|---|---|
+| `patient.submit-quotation` | Form submission | `screens/patient/quotation-new.html` | `form.quotation-form` | "Patient requests quotation" |
+| `admin.approve-verification` | Modal trigger | `screens/admin/verification-queue.html` | `button.btn-approve` | "Admin reviews provider" |
+| `patient.book-appointment` | Multi-step flow | `screens/patient/booking-*.html` | various | "Patient books appointment" |
+
+Show the inventory. Use AskUserQuestion to confirm classification before writing
+anything. If any row looks wrong, fix the inventory before continuing.
+
+## Phase 2: Add data hooks to screens
+
+For every row in the confirmed inventory, edit the screen partial to add the
+appropriate attribute. **Edits are attribute-only — no HTML structure changes.**
+
+Naming convention: `data-action="{persona}.{verb}-{noun}"`. Lowercase, hyphens.
+
+- Navigation: `<a href="..." data-action="navigate" data-href="../provider.html#clinic-profile">`
+  - Use `data-target="screen-id"` when switching screens within the same page
+    (instead of `data-href`).
+- Form submission: `<form data-action="submit-form" data-success-key="quotation.submitted">`
+  - The `data-success-key` is a dotted path into the persona JSON for the
+    success-state copy.
+- Modal trigger: `<button data-action="open-modal" data-modal="confirm-approve">`
+  - The matching `<dialog id="confirm-approve">` must exist somewhere on the
+    page (often as a shared partial under `screens/_components/`).
+- Modal close: `<button data-action="close-modal">` — handler walks up to the
+  enclosing `<dialog>`.
+- Dropdown / tab: `<button data-action="switch-tab" data-tabgroup="filters" data-tab="active">`.
+- Multi-step flow: `<button data-action="flow-next" data-flow="patient.booking">`
+  and `data-action="flow-prev"`.
+- Data binding: `<span data-bind="patient.stats.upcoming"></span>` — the
+  textContent gets filled on load from `data/persona-patient.json`.
+
+Each screen that has a form must include a designated success container so the
+handler never replaces arbitrary markup:
+
+```html
+<form data-action="submit-form" data-success-key="quotation.submitted">
+  ...fields...
+  <div data-success-slot hidden>
+    <strong data-success-message></strong>
+  </div>
+</form>
+```
+
+Cross-persona navigation must use a valid relative path to another assembled
+page:
+
+```html
+<a href="../provider.html#clinic-profile" data-action="navigate" data-cross-persona="provider">
+  View provider profile
+</a>
+```
+
+Make each edit with the Edit tool, one attribute addition at a time. Never
+rewrite HTML structure to fit a handler — if a handler needs structure that
+isn't there, AskUserQuestion before adding the missing element.
+
+## Phase 3: Write interactions.js
+
+Write a single file at `mockup/interactions.js`. Structure:
+
+```js
+// ============================================================
+// mockup/interactions.js — Layer 6 of MOCKUP-ARCHITECTURE.md
+// Generated by /interactive-mockup. Hand-edits are detected
+// on re-run; targeted edits preferred over regeneration.
+// ============================================================
+
+// --- Mock data loader (per-persona JSON, fetched once) ---
+const personaData = {};
+async function loadPersona(name) {
+  if (personaData[name]) return personaData[name];
+  try {
+    const r = await fetch(`./data/persona-${name}.json`);
+    if (!r.ok) throw new Error(`persona-${name}.json: ${r.status}`);
+    personaData[name] = await r.json();
+    return personaData[name];
+  } catch (err) {
+    console.warn(`[mockup] persona data not loaded for ${name}:`, err.message);
+    return {};
+  }
+}
+
+// --- data-bind population (textContent only — no markup injection) ---
+function bindData(root, data) {
+  root.querySelectorAll('[data-bind]').forEach(el => {
+    const path = el.getAttribute('data-bind').split('.');
+    const value = path.reduce((acc, k) => (acc == null ? acc : acc[k]), data);
+    if (value !== undefined && value !== null) el.textContent = value;
+  });
+}
+
+// --- Action dispatch table ---
+const actions = {
+  'navigate': (el) => {
+    const href = el.dataset.href || el.getAttribute('href');
+    if (href) window.location.href = href;
+  },
+  'switch-screen': (el) => {
+    const target = el.dataset.target;
+    if (!target) return;
+    document.querySelectorAll('[data-screen]').forEach(s => {
+      s.hidden = s.dataset.screen !== target;
+    });
+  },
+  'submit-form': (form, e) => {
+    e?.preventDefault?.();
+    if (form.dataset.submitted === '1') return; // idempotent
+    form.dataset.submitted = '1';
+    showSuccess(form);
+  },
+  'open-modal': (el) => {
+    const id = el.dataset.modal;
+    const dlg = id && document.getElementById(id);
+    if (dlg && typeof dlg.showModal === 'function') dlg.showModal();
+  },
+  'close-modal': (el) => {
+    el.closest('dialog')?.close();
+  },
+  'switch-tab': (el) => {
+    const group = el.dataset.tabgroup;
+    const tab = el.dataset.tab;
+    if (!group || !tab) return;
+    document.querySelectorAll(`[data-tabgroup="${group}"]`).forEach(t => {
+      t.classList.toggle('is-active', t.dataset.tab === tab);
+    });
+    document.querySelectorAll(`[data-tabpanel-group="${group}"]`).forEach(p => {
+      p.hidden = p.dataset.tabpanel !== tab;
+    });
+  },
+  'flow-next': (el) => advance(el.dataset.flow, +1),
+  'flow-prev': (el) => advance(el.dataset.flow, -1),
+  // Workflow-specific handlers appended below per Phase 4.
+};
+
+// --- Form success state (DOM-safe: textContent, no markup injection) ---
+function showSuccess(form) {
+  const key = form.dataset.successKey;
+  const persona = document.documentElement.dataset.mode;
+  const msg = key
+    ? key.split('.').reduce((acc, k) => acc?.[k], personaData[persona]) || 'Submitted.'
+    : 'Submitted.';
+  const slot = form.querySelector('[data-success-slot]');
+  if (!slot) return;
+  // Hide the form's fields, reveal the prepared success container.
+  form.querySelectorAll('input, select, textarea, button[type="submit"]').forEach(el => {
+    el.disabled = true;
+  });
+  const msgEl = slot.querySelector('[data-success-message]') || slot;
+  msgEl.textContent = msg;
+  slot.hidden = false;
+}
+
+// --- Multi-step flow state machines (populated per Phase 4) ---
+const flows = {};
+function advance(flowName, delta) {
+  const flow = flows[flowName];
+  if (!flow) return;
+  const idx = flow.steps.indexOf(flow.current);
+  const nextIdx = Math.max(0, Math.min(flow.steps.length - 1, idx + delta));
+  flow.current = flow.steps[nextIdx];
+  renderFlow(flowName);
+}
+function renderFlow(flowName) {
+  const flow = flows[flowName];
+  if (!flow) return;
+  document.querySelectorAll(`[data-flow="${flowName}"][data-step]`).forEach(el => {
+    el.hidden = el.dataset.step !== flow.current;
+  });
+}
+
+// --- Boot ---
+document.addEventListener('DOMContentLoaded', async () => {
+  const persona = document.documentElement.dataset.mode;
+  if (persona && persona !== 'marketing') {
+    const data = await loadPersona(persona);
+    bindData(document, data);
+  }
+  // Initial render for any active flows
+  Object.keys(flows).forEach(renderFlow);
+
+  document.body.addEventListener('click', (e) => {
+    const el = e.target.closest('[data-action]');
+    if (!el || el.tagName === 'FORM') return;
+    const fn = actions[el.dataset.action];
+    if (fn) fn(el, e);
+  });
+  document.body.addEventListener('submit', (e) => {
+    const form = e.target.closest('form[data-action="submit-form"]');
+    if (form) actions['submit-form'](form, e);
+  });
+});
+```
+
+**Per-workflow handler generation.** After the scaffold above, append one
+handler per workflow-specific action discovered in Phase 2 that does not fit a
+generic handler. Each handler:
+
+- Reads the workflow's intended outcome from `docs/WORKFLOWS.md` (e.g.,
+  "approving a verification flips the badge to green and removes the row from
+  the queue").
+- Implements the visual outcome via DOM mutation only — `textContent`,
+  `classList`, `hidden`, `aria-*`. No raw markup injection. No fetch. No
+  persistence.
+- Is idempotent — clicking twice does not double-submit, double-advance, or
+  duplicate UI elements.
+
+Target file size: **300–600 lines**. Above 800 lines, split by surface
+(`interactions-nav.js`, `interactions-forms.js`, `interactions-flows.js`) and
+include both `<script>` tags in `pages/{persona}.html` via the build pipeline.
+
+## Phase 4: Multi-step flow state machines
+
+For each "multi-step flow" classified in Phase 1, declare a flow definition in
+the `flows` object near the bottom of `interactions.js`:
+
+```js
+flows['patient.booking'] = {
+  steps: ['select-clinic', 'select-time', 'confirm', 'paid'],
+  current: 'select-clinic',
+};
+```
+
+The screen partials for the flow must already use:
+
+```html
+<section data-flow="patient.booking" data-step="select-clinic"> ... </section>
+<section data-flow="patient.booking" data-step="select-time" hidden> ... </section>
+```
+
+The generic `flow-next` / `flow-prev` handlers in `actions{}` move between
+steps. If a step has a terminal "end" action (e.g., "Confirm and pay"),
+generate a workflow-specific handler that flips state to `'paid'` and reveals
+the confirmation panel.
+
+Use AskUserQuestion if the workflow definition is ambiguous about end-state
+behavior. Do not invent. Confirm before writing.
+
+## Phase 5: Cross-persona navigation
+
+For workflow steps that explicitly hand off between personas (per the
+hand-offs section of `docs/WORKFLOWS.md`), wire links to the appropriate
+assembled page:
+
+```html
+<a href="../provider.html#clinic-profile"
+   data-action="navigate"
+   data-cross-persona="provider">
+  View provider profile
+</a>
+```
+
+AskUserQuestion: enable a "switching persona" overlay before navigation, or
+skip overlay (snappier, but stakeholders may not realize they jumped roles)?
+If enabled, extend the `navigate` handler to briefly reveal a banner element
+(pre-rendered in the persona page footer with `hidden`) before the location
+change. If the answer is "skip overlay," omit the branch entirely.
+
+## Phase 6: Verify, build, announce
+
+Spot-test 2–3 flows by tracing the click path manually:
+
+1. Pick one navigation, one form, one multi-step flow from the inventory.
+2. Read the relevant screen partial and confirm the `data-action` attribute is
+   present and well-formed.
+3. Read `interactions.js` and confirm the matching handler exists and the DOM
+   selectors it queries match what the screen partial actually renders.
+4. If any trace breaks, fix the gap before announcing.
+
+Rebuild:
+
+```bash
+bun run mockup:build
+```
+
+If the user wants to preview live:
+
+```bash
+bun run mockup:serve
+```
+
+Announce in the chat (do not write a report file):
+
+> `interactions.js` written. {N} actions wired, {M} flow state machines, {K}
+> data-bound elements across {P} personas. Preview with `bun run mockup:serve`.
+> If you spot a missing interaction, tell me the screen + element and I'll
+> wire it without regenerating the whole file.
+
+## Iteration mode
+
+On re-run with an existing `mockup/interactions.js`:
+
+1. Parse the existing file. Build a set of handler keys present in `actions{}`
+   and `flows{}`.
+2. Re-run Phase 1 inventory. Diff against the existing handler set:
+   - **New actions** — handlers and `data-action` attributes that need adding.
+   - **Stale handlers** — handlers whose `data-action` no longer appears in any
+     screen partial (the screen was deleted or the attribute was renamed).
+   - **Mismatched handlers** — same `data-action` ID but different intended
+     behavior per the latest `docs/WORKFLOWS.md`.
+3. AskUserQuestion:
+   - **Targeted edit** (default) — add new handlers, leave existing intact.
+   - **Targeted edit + cleanup** — also remove stale handlers.
+   - **Regenerate from scratch** — only when the user explicitly asks. Backs up
+     existing file to `mockup/interactions.js.bak` first.
+
+Prefer additive edits via the Edit tool over `Write`. A `/interactive-mockup`
+re-run for "the admin needs a confirmation modal before approving" should
+touch one screen file (~5 lines) and append ~30 lines to `interactions.js`.
+Anything larger means the iteration is mis-scoped.
+
+## Rules
+
+1. **No npm dependencies.** Vanilla DOM only — `<dialog>`, `<details>`,
+   `fetch`, `addEventListener`. No imports.
+2. **No framework.** No React, Vue, Svelte, Alpine, or htmx — unless the user
+   explicitly opts in for a specific surface where declarative server-fetched
+   fragments materially improve the demo.
+3. **Forms are always fake.** Every submit handler calls `e.preventDefault()`
+   and flips the form to a success state defined in `data/persona-*.json`.
+   No real network requests, ever.
+4. **Mock data lives in JSON.** `interactions.js` never hardcodes user-facing
+   copy beyond fallback strings ("Submitted."). All dynamic content reads from
+   `mockup/data/persona-*.json` via `data-bind` or `data-success-key`.
+5. **Screen edits are attribute-only.** Adding `data-action`, `data-bind`,
+   `data-target`, `data-flow`, `data-step`, and `data-success-slot` containers
+   to existing elements is allowed. Adding new HTML elements (a missing
+   `<dialog>`, a missing success slot) is allowed only after AskUserQuestion
+   approval.
+6. **Cross-persona links must resolve.** Every `href` to another persona's
+   page must be a valid relative path that exists in `mockup/pages/`.
+7. **No persistence.** No `localStorage`, no `sessionStorage`, no IndexedDB.
+   In-memory state only. Refreshing the demo resets everything — this is the
+   contract.
+8. **Idempotent handlers.** Submitting a form twice does not double-render the
+   success state. Opening an already-open modal is a no-op. Advancing past the
+   last step of a flow stays on the last step. Set guard flags
+   (`form.dataset.submitted = '1'`) where needed.
+9. **DOM mutation, not markup injection.** Handlers toggle `hidden`,
+   `aria-expanded`, classes, and `textContent`. They must not replace entire
+   sections with raw strings. Use pre-rendered `[data-success-slot]`
+   containers and reveal them via the `hidden` attribute.
+
+## When this skill is done
+
+- Every `data-action` attribute in `mockup/screens/` has a matching handler in
+  `mockup/interactions.js` (or a generic dispatch entry that covers it).
+- Every handler in `mockup/interactions.js` is reachable from at least one
+  screen partial.
+- Every multi-step workflow in `docs/WORKFLOWS.md` has a corresponding entry
+  in `flows{}`.
+- The rebuilt `mockup-dist/{persona}.html` opens cleanly in a browser, no
+  console errors on load, no broken hrefs in spot-checks.
+- The user has clicked through one persona end-to-end and confirmed the demo
+  feels like a product, not a slideshow.
+
+Do not commit anything. Do not start a server in the background unless the
+user explicitly asks. Hand the rebuild + preview commands back to the user
+in the announcement.

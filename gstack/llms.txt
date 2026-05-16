@@ -99,6 +99,7 @@ Conventions:
 - [/incident-response](incident-response/SKILL.md): [CISO Compliance + IR] Generates an incident response runbook tuned to Hall's stack (web / mobile / API), and runs in live war-room mode during an actual incident.
 - [/indoor-nav](indoor-nav/SKILL.md): [Accessibility AI] Indoor positioning + accessibility-aware routing design.
 - [/intel](intel/SKILL.md): [Intelligence & Memory] Project intelligence briefing — reads cross-session memory from intelligence.jsonl, compacts stale entries, and presents a briefing of recurring patterns, recent findings, and known hotspots.
+- [/interactive-mockup](interactive-mockup/SKILL.md): [UX Pipeline] Wire the static mockup into a clickable interactive prototype.
 - [/investigate](investigate/SKILL.md): [Investigate & Security] Systematic debugging with root cause investigation.
 - [/investigate-workflow](investigate-workflow/SKILL.md): [Investigate & Security] Post-implementation workflow completeness investigator for gstack.
 - [/investor-update](investor-update/SKILL.md): [CEO Cockpit] Monthly investor update generator.
@@ -116,6 +117,7 @@ Conventions:
 - [/mobile-perf](mobile-perf/SKILL.md): [Mobile] Mobile performance profiling: cold-start time, time-to-interactive, FPS during scrolling, jank rate, memory under load.
 - [/mobile-qa](mobile-qa/SKILL.md): [Mobile] Mobile QA flow generation + execution across Maestro, Detox, XCUITest, and Espresso.
 - [/mobile-release](mobile-release/SKILL.md): [Mobile] End-to-end TestFlight / Play Internal release pipeline.
+- [/mockup](mockup/SKILL.md): [UX Pipeline] Generate role-based, multi-screen, clickable mockup pages from docs/WORKFLOWS.md.
 - [/monorepo-graph](monorepo-graph/SKILL.md): [Multi-Repo] Unified projection of a monorepo's project graph.
 - [/multi-repo-refactor](multi-repo-refactor/SKILL.md): [Multi-Repo] Coordinated refactor across N repos.
 - [/multi-sign](multi-sign/SKILL.md): [Accessibility AI] Multi-sign-language platform architecture.
@@ -134,6 +136,7 @@ Conventions:
 - [/plan-ux-review](plan-ux-review/SKILL.md): [Planning & Review] UX researcher-mode plan review for gstack.
 - [/postmortem](postmortem/SKILL.md): [CISO Compliance + IR] Blameless postmortem facilitator.
 - [/pricing-experiment](pricing-experiment/SKILL.md): [CEO Cockpit] Pricing experiment designer.
+- [/product-ci](product-ci/SKILL.md): [UX Pipeline] Derive brand values from the product and map them to design tokens (colors, typography, motion, spacing).
 - [/prompt-engineering](prompt-engineering/SKILL.md): [AI Engineering / Research] Systematic prompt engineering: from a task spec, generates 6-8 prompt variants spanning CoT / few-shot / role-play / structured-output / decomposition / self-critique, runs them through /eval-harness, picks the Pareto winner (quality × cost × latency), documents WHY the winner won.
 - [/prosody-control](prosody-control/SKILL.md): [Speech & Voice AI] Expression / tone / accent / cadence control surface for a TTS system.
 - [/purple-exercise](purple-exercise/SKILL.md): [Red Team / RE] Purple-team exercise orchestrator.
@@ -177,6 +180,8 @@ Conventions:
 - [/tts-design](tts-design/SKILL.md): [Speech & Voice AI] TTS architecture + training plan.
 - [/unfreeze](unfreeze/SKILL.md): [Build & Autonomy] Clear the freeze boundary set by /freeze, allowing edits to all directories again.
 - [/ux-audit](ux-audit/SKILL.md): [UX Audit] Persona-driven UX workflow audit on a live site.
+- [/ux-pipeline](ux-pipeline/SKILL.md): [UX Pipeline] End-to-end stakeholder-validated UX/UI pipeline.
+- [/ux-workflows](ux-workflows/SKILL.md): [UX Pipeline] Produce docs/WORKFLOWS.md — one section per persona, each with entry points, 3-7 core end-to-end workflows (action→screen→outcome tuples), cross-persona hand-offs, edge/error workflows, and an explicit out-of-scope statement.
 - [/vendor-risk](vendor-risk/SKILL.md): [CISO Compliance + IR] Third-party risk inventory + scoring.
 - [/vendor-score](vendor-score/SKILL.md): [CTO Strategy] Deep single-vendor evaluation across 12 dimensions: security posture, SLA, pricing, API quality, DX, data portability, support, ecosystem, financial health, compliance, roadmap signal, and lock-in.
 - [/verify-loop](verify-loop/SKILL.md): [Build & Autonomy] Self-healing verification loop for gstack.

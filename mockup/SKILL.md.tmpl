@@ -1,0 +1,330 @@
+---
+name: mockup
+preamble-tier: 3
+version: 1.0.0
+description: |
+  [UX Pipeline] Generate role-based, multi-screen, clickable mockup pages from
+  docs/WORKFLOWS.md. Produces Layers 3-5 of MOCKUP-ARCHITECTURE.md: per-screen partials,
+  per-persona tour pages, and the gallery navigator. Realistic mock data per persona,
+  no lorem ipsum. Iteration-friendly: each screen lives in its own ~300-line file so
+  stakeholder feedback ("the dashboard feels cramped") touches one file, not 6000 lines.
+  Build step bundles to mockup-dist/ via bun run mockup:build.
+  Use when asked to "mockup", "create mockup", "build the mockup", "generate screens",
+  "stakeholder mockup", "clickable preview", or "show me what the product looks like".
+  Proactively suggest after /design-consultation has produced styles.css, when docs/WORKFLOWS.md exists. (gstack)
+benefits-from: [product-ci, design-consultation, ux-workflows, discover-personas]
+allowed-tools:
+  - Read
+  - Write
+  - Edit
+  - Grep
+  - Glob
+  - Bash
+  - AskUserQuestion
+---
+
+{{PREAMBLE}}
+
+# /mockup: Role-Based Clickable Mockup Generator
+
+Read `docs/WORKFLOWS.md`, `docs/PERSONAS.md`, and `mockup/styles.css` (Layers 1 + 2 — tokens and utility classes). Produce a navigable, multi-screen, role-based mockup that stakeholders can click through before any production code is written.
+
+You own **Layers 3, 4, 5** of `MOCKUP-ARCHITECTURE.md`:
+- **Layer 3** — per-screen HTML partials under `mockup/screens/{persona}/{screen}.html` (200-400 lines each, fragments only).
+- **Layer 4** — per-persona tour pages under `mockup/pages/{persona}.html` (~100 lines, assembly only).
+- **Layer 5** — `mockup/index.html` gallery navigator with section cards + token preview.
+
+You do **not** edit `mockup/styles.css` (that is `/design-consultation`'s file) and you do **not** write `mockup/interactions.js` (that is `/interactive-mockup`'s file). You never read or write anything under `mockup-dist/` — that is build output.
+
+---
+
+## Setup
+
+```bash
+mkdir -p mockup/pages mockup/screens/_components mockup/data
+```
+
+Then verify upstream artifacts exist:
+
+1. `mockup/styles.css` with `:root` Layer-1 tokens and Layer-2 utility classes.
+2. `docs/WORKFLOWS.md` with one section per persona, each listing entry points + workflow steps that reference Screen names.
+3. `docs/PERSONAS.md` with persona slugs that match `WORKFLOWS.md` sections.
+
+If any upstream is missing or stale, use AskUserQuestion:
+
+> Upstream artifact `<name>` is missing. How do you want to proceed?
+>
+> **A) Run the upstream skill first** — recommended. I'll dispatch `/product-ci`, `/design-consultation`, or `/ux-workflows` as appropriate and resume.
+> **B) Use fallback inputs I describe here** — I'll collect persona names, screen lists, and brand tokens via follow-up questions. Skill exits without persisted upstream docs.
+> **C) Abort** — fix the upstream by hand and re-run `/mockup`.
+
+Do not proceed past Setup until upstream is satisfied.
+
+---
+
+## Phase 1: Plan the screen inventory
+
+Parse `docs/WORKFLOWS.md`. For each persona, enumerate every unique `Screen` reference across all workflows. Deduplicate within persona. Track:
+
+- Entry-point screens (where the persona arrives).
+- Core workflow screens (in narrative order).
+- Edge/error screens (empty states, permission denials, 404, 503).
+
+Build a flat inventory table:
+
+| Persona | Screen slug | Source workflow | Layout family |
+|---|---|---|---|
+| patient | dashboard | "View account" | app/dashboard |
+| patient | quotations | "Compare quotes" | app/list |
+| provider | inbox | "Reply to inquiries" | app/inbox |
+
+Layout families guide Phase 3 — pick from `marketing/public`, `app/dashboard`, `app/list`, `app/detail`, `app/form`, `modal/dialog`, `mobile`, `state` (empty / error / loading).
+
+Present the inventory and AskUserQuestion:
+
+> Confirm screen inventory for this mockup pass?
+>
+> **A) Generate all listed screens** — recommended for first pass.
+> **B) Trim list** — I'll show the inventory and you pick which to skip (e.g., "skip mobile for v1").
+> **C) Add screens I missed** — describe additional screens to include.
+
+Lock the inventory before continuing.
+
+---
+
+## Phase 2: Generate shared components
+
+Before writing per-screen partials, lay down the components every screen will reuse. Write each as a fragment (no `<html>`, `<head>`, `<body>` tags) under `mockup/screens/_components/`.
+
+Default component set:
+
+| File | Purpose |
+|---|---|
+| `topnav.html` | Main top navigation. Persona-aware variants if signed-in vs. public flows diverge. |
+| `footer.html` | Marketing footer (public-facing pages only). |
+| `app-shell.html` | Wrapper for authenticated app pages (side rail + content well). |
+| `empty-state.html` | Generic empty-list state. |
+| `kpi-card.html` | Dashboard stat card. |
+| `tag.html` | Small label / badge. |
+| `watermark.html` | "Mockup — not implemented" banner, positioned top-right. Required on every persona page. |
+
+Rules:
+1. Components use **only** utility class names that exist in `mockup/styles.css`. No inline `style="..."`.
+2. No `<html>`, `<head>`, or `<body>` tags — these are fragments.
+3. Each component should be self-contained — including a component twice must not produce broken markup.
+
+Example `mockup/screens/_components/watermark.html`:
+
+```html
+<div class="watermark" role="note" aria-label="This is a mockup, not implemented">
+  Mockup — not implemented
+</div>
+```
+
+If you encounter a block (kpi row, breadcrumb, tab strip) that you will use in **3 or more screens** during Phase 3, stop and extract it to `_components/` before continuing.
+
+---
+
+## Phase 3: Generate per-screen partials
+
+For each screen in the locked inventory:
+
+1. **Pick the layout family** from the Phase-1 table.
+2. **Reference shared components** via `{{include screens/_components/<name>.html}}`.
+3. **Style only with utility classes** from `mockup/styles.css`. Never inline `style="..."`.
+4. **Bind mock content** with `data-bind="{persona}.{path}"` attributes. Do not hardcode realistic data into the screen HTML — the data lives in `mockup/data/persona-{slug}.json` (Phase 6) and gets bound by `interactions.js` (a later skill writes that).
+5. **Size budget:** 200-400 lines per file. If a screen would exceed 500 lines, split it into sub-partials in the same folder (e.g., `dashboard.html` + `dashboard-kpi-row.html` + `dashboard-recent-activity.html`) and have the parent include the sub-partials via the build directive.
+6. **No `<html>`, `<head>`, or `<body>`** — fragments only. The persona page wraps the document shell.
+
+Write each to `mockup/screens/{persona}/{screen-slug}.html`.
+
+Example minimal screen `mockup/screens/patient/dashboard.html`:
+
+```html
+<section id="patient-dashboard" class="surface" aria-labelledby="patient-dashboard-h">
+  <header class="stack gap-sm mb-lg">
+    <h1 id="patient-dashboard-h" class="display-md">Welcome back, <span data-bind="patient.name">…</span></h1>
+    <p class="text-meta">Your upcoming care and open quotes.</p>
+  </header>
+
+  <div class="row gap-md">
+    {{include screens/_components/kpi-card.html}}
+    {{include screens/_components/kpi-card.html}}
+    {{include screens/_components/kpi-card.html}}
+  </div>
+
+  <section class="card mt-lg">
+    <h2 class="title-sm mb-sm">Recent activity</h2>
+    <ul class="stack gap-xs" data-bind="patient.recentActivity">
+      <!-- populated by interactions.js -->
+    </ul>
+  </section>
+</section>
+```
+
+**Cross-persona consistency:** if patient/dashboard, provider/dashboard, and admin/dashboard all want a KPI row, all three use `{{include screens/_components/kpi-card.html}}` — do not hand-code three slightly different versions.
+
+---
+
+## Phase 4: Generate per-persona tour pages
+
+For each persona, write `mockup/pages/{persona}.html` as a thin assembly. Hard cap: **200 lines**. The page is `<html>` shell + include directives, nothing else.
+
+Template:
+
+```html
+<!doctype html>
+<html lang="en" data-mode="{persona}" data-theme="light">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{Product} — {Persona} tour</title>
+  <link rel="stylesheet" href="../styles.css" />
+</head>
+<body>
+  {{include screens/_components/watermark.html}}
+  {{include screens/_components/topnav.html}}
+
+  {{include screens/{persona}/{entry-screen}.html}}
+  {{include screens/{persona}/{core-screen-1}.html}}
+  {{include screens/{persona}/{core-screen-2}.html}}
+  <!-- ...remaining core screens in workflow order... -->
+  {{include screens/{persona}/{edge-screen}.html}}
+
+  {{include screens/_components/footer.html}}
+  <script src="../interactions.js"></script>
+</body>
+</html>
+```
+
+**Screen ordering rules:**
+1. Entry-point screen first (how the persona arrives).
+2. Core workflow screens next, in the order `docs/WORKFLOWS.md` lists them.
+3. Edge / empty / error states last.
+4. If a screen has A/B variants (see Iteration mode), include both, separated by a `<hr class="variant-divider" />` and a small caption identifying A vs B.
+
+If a persona has more than ~15 screens, do not split the page — add an in-page nav at the top using anchor links to the section ids (each screen `<section>` should already have an `id`).
+
+---
+
+## Phase 5: Generate gallery navigator (index.html)
+
+Write `mockup/index.html` (~250 lines, hand-authored — **not** assembled via include directives because the content is bespoke):
+
+Structure:
+
+1. **Header.** Product name + tagline + the watermark banner ("Mockup — not implemented") top-right.
+2. **Section nav cards.** One `<a class="card">` per persona, linking to `pages/{persona}.html`. Each card shows:
+   - Persona display name + role (e.g., "Patient — books care, compares quotes").
+   - Screen count for this persona.
+   - One-sentence description of what this tour covers.
+3. **Token preview.** Auto-generated from `mockup/styles.css :root`:
+   - Color swatches grid: each `--c-*` token rendered as a labeled swatch with the hex value and the CSS var name.
+   - Type scale: render `display-lg`, `display-md`, `title-lg`, `title-sm`, `body`, `caption`, `text-meta` with sample text.
+   - Spacing scale: visual bars for `--space-xs` through `--space-xxl`.
+   - Shadow elevation: cards showing `--shadow-sm`, `--shadow-md`, `--shadow-lg`.
+4. **Footer.** Revision metadata: last-generated timestamp, persona count, screen count, link back to `docs/WORKFLOWS.md`.
+
+To extract tokens for the preview, grep `mockup/styles.css` for `--c-`, `--space-`, `--shadow-` declarations inside `:root { ... }`. Do not hardcode token values — read them from the stylesheet so the preview stays in sync.
+
+---
+
+## Phase 6: Generate mock data
+
+For each persona, write `mockup/data/persona-{slug}.json` with realistic content keyed by the `data-bind` paths used in Phase 3 screens.
+
+Schema (extend per persona as needed):
+
+```json
+{
+  "persona": "patient",
+  "name": "Mariam K.",
+  "avatar": "MK",
+  "stats": { "upcoming": 2, "quotations": 5, "messages": 3 },
+  "recentActivity": [
+    { "type": "quotation", "title": "Dental implant — Bangkok Smile Clinic", "ago": "2h" },
+    { "type": "message", "title": "Dr. Sasithon replied", "ago": "yesterday" }
+  ],
+  "forms": {
+    "bookConsultation": { "successMessage": "Consultation requested. The clinic replies within one business day." }
+  }
+}
+```
+
+**Mock-data rules:**
+1. **No lorem ipsum.** Ever.
+2. **No "User 1", "Test User", "John Doe".** Use plausible names, region-appropriate to the product (Thai names for a Thai product, varied names for global products, etc.).
+3. **No placeholder URLs** like `example.com`. Use realistic product URLs that look like the brand (e.g., `arokago.com/clinic/bangkok-smile`).
+4. **Match counts in stats to entries in lists.** If `stats.quotations = 5`, the `quotations` array has 5 entries — do not stub the count and leave the list empty.
+5. **Domain coherence.** A medical-tourism product gets care + provider + quotation entities; a trading product gets order + position + ticker entities. Read `docs/PRODUCT_CI.md` or `/office-hours` output to pick the right vocabulary.
+
+If you do not have enough product context to write realistic data, AskUserQuestion before writing rather than inventing — fake-looking mock data kills stakeholder credibility.
+
+---
+
+## Phase 7: Build + announce
+
+Run the build script:
+
+```bash
+bun run mockup:build
+```
+
+The script (`scripts/build-mockup.ts`) resolves every `{{include path}}` directive recursively and writes flat HTML to `mockup-dist/`. If the build fails, fix the offending include path or missing fragment before declaring done — never report success on a broken build.
+
+After a successful build, announce:
+
+```
+Mockup written. <N> screens across <M> personas. Build successful.
+
+Preview locally:  bun run mockup:serve   (opens at http://localhost:4321)
+Iterate per screen: edit mockup/screens/{persona}/{screen}.html, then bun run mockup:build
+Wire interactions: /interactive-mockup
+Validate:         /plan-design-review --mockup
+                  /plan-ux-review --mockup
+```
+
+---
+
+## Iteration mode
+
+On re-run, detect existing `mockup/` and branch on user intent.
+
+1. **Targeted edit** — user says `/mockup edit patient.dashboard` or "tweak the patient dashboard". Open just `mockup/screens/patient/dashboard.html` and AskUserQuestion for the change. Edit one file, rebuild, report. Do not touch other screens.
+
+2. **Regenerate all** — user says "regenerate the whole mockup" or `/mockup --regenerate`. AskUserQuestion to confirm:
+
+   > Regenerating all mockup screens will overwrite existing files in mockup/screens/ and mockup/pages/. mockup/styles.css and mockup/interactions.js are not affected. Proceed?
+   >
+   > **A) Yes, regenerate everything**
+   > **B) Regenerate one persona only** — pick which.
+   > **C) Cancel**
+
+3. **A/B variant** — user says "show me a version with cards instead of rows for the patient dashboard" or `/mockup variant patient.dashboard cards-vs-rows`. Fork the screen into `mockup/screens/patient/dashboard.A.html` and `dashboard.B.html` (the current file becomes A, the new variant becomes B). Update `pages/patient.html` to include both with a `<hr class="variant-divider" />` between them and a small caption labeling each.
+
+4. **New screen added to a workflow** — when `docs/WORKFLOWS.md` adds a Screen reference that has no partial yet, generate just that screen and append its include to the persona page in the correct narrative position.
+
+5. **Drift from styles.css** — if a screen references a utility class that no longer exists in `mockup/styles.css`, surface it and AskUserQuestion: regenerate the screen against current utilities, or signal `/design-consultation` to add the missing class.
+
+---
+
+## Rules
+
+1. **Fragments only.** Screen partials and `_components/` files NEVER include `<html>`, `<head>`, or `<body>` tags. Only Layer-4 persona pages and Layer-5 `index.html` carry the document shell.
+2. **Utility classes only.** No inline `style="..."` attributes anywhere in screens or components. Every visual property goes through a class defined in `mockup/styles.css`.
+3. **Realistic mock data.** No lorem ipsum, no "User 1" placeholders, no `example.com` URLs. Region- and domain-appropriate content driven by `docs/PRODUCT_CI.md`.
+4. **Read/write boundary.** This skill never reads or edits anything under `mockup-dist/`. It never edits `mockup/styles.css` or `mockup/interactions.js`. It writes only under `mockup/screens/`, `mockup/pages/`, `mockup/data/`, and `mockup/index.html`.
+5. **Build before done.** `bun run mockup:build` must succeed before reporting completion. A skill exit on a broken build is a failure.
+6. **Watermark on every persona page.** `screens/_components/watermark.html` must be included in every `pages/{persona}.html` (and on `index.html`). The watermark text reads "Mockup — not implemented".
+7. **No new top-level files.** Do not create README.md, NOTES.md, or any other doc inside `mockup/`. The architecture is documented in `MOCKUP-ARCHITECTURE.md` at the repo root.
+
+---
+
+## Dependencies
+
+- `mockup/styles.css` Layers 1 + 2 — produced by `/product-ci` and `/design-consultation`. Read-only here.
+- `docs/WORKFLOWS.md` — produced by `/ux-workflows`. Source of the screen inventory.
+- `docs/PERSONAS.md` — produced by `/discover-personas`. Persona names + roles.
+- `docs/PRODUCT_CI.md` — produced by `/product-ci`. Drives domain-appropriate mock data.
+- `scripts/build-mockup.ts` — the `{{include path}}` resolver. Must exist and `bun run mockup:build` must be wired in `package.json`.
+- Downstream: `/interactive-mockup` wires `data-action` handlers in `mockup/interactions.js`; `/plan-design-review --mockup` and `/plan-ux-review --mockup` validate the output.

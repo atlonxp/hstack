@@ -1,5 +1,47 @@
 # Changelog
 
+## [1.41.0.0] - 2026-05-16
+
+### **hstack v3.1 launches: the UX Pipeline turns one-shot design into a stakeholder-validated, clickable mockup before any production code lands.**
+
+`/design-consultation` produces a `DESIGN.md` and a one-page `preview.html` in one shot. That works for engineers; it does not answer the question stakeholders actually ask, which is "what does the *experience* look like for an admin / a patient / a provider?" v3.1 adds five new skills and an orchestrator that turn that one-shot flow into an iterative pipeline ending in a multi-page, role-based, clickable mockup that stakeholders can navigate before commits land.
+
+The mockup architecture is layered (tokens → utilities → screens → pages → gallery → interactions) so that every iteration round edits the smallest possible file. Token changes touch ~10 lines; component changes touch ~30 lines; screen changes touch ~300 lines. No edit ever requires reading a 6000-line monolith. Full architecture lives in `MOCKUP-ARCHITECTURE.md`; the family design in `PLAN-v3.1-ux-pipeline.md`.
+
+#### Family M — UX Pipeline (6 new skills)
+
+- **`/product-ci`** — Derives brand values from the product itself (transparency → blue, trust → gold) and maps them to design tokens with reasoning. Writes Layer 1 of `mockup/styles.css` (`:root` block) plus `docs/PRODUCT_CI.md`. Re-runnable; tracks revision history.
+- **`/ux-workflows`** — Reads `docs/PERSONAS.md` and produces `docs/WORKFLOWS.md`. One section per persona, each with entry points, 3-7 core workflows as (action, screen, outcome) tuples, cross-persona hand-offs, edge/error flows, and explicit out-of-scope statements.
+- **`/mockup`** — Reads `docs/WORKFLOWS.md` and produces Layers 3-5 of `MOCKUP-ARCHITECTURE.md`: per-screen partials, per-persona tour pages, gallery navigator. Realistic mock data per persona (no lorem ipsum). Build step `bun run mockup:build` resolves include directives into flat `mockup-dist/`.
+- **`/interactive-mockup`** — Wires the static mockup into a clickable prototype. Adds `data-action="..."` attributes to screens; writes `mockup/interactions.js` with handlers for navigation, fake form success, modals, multi-step flow state machines, and mock-data binding. Pure vanilla JS, zero npm deps.
+- **`/ux-pipeline`** — Orchestrator. Runs `/office-hours → /discover-personas → /product-ci → /ux-workflows → /design-consultation → /mockup → /interactive-mockup` end-to-end with gap detection between every step. Drift-propagates downstream when upstream tokens change. Loops until invariants pass + stakeholder feedback empty (hard cap of 5 loops). Resume-safe.
+
+#### Build pipeline
+
+- **`scripts/build-mockup.ts`** — ~170-line bun script that resolves `{{include path}}` directives recursively, detects cycles, fails loudly on missing includes. Supports `--src`, `--out`, `--watch`. No npm dependencies added.
+- **`scripts/serve-mockup.ts`** — ~85-line static-file server using `Bun.serve`. Supports `--port`, `--watch`, `--share` (prints ngrok instructions for stakeholder URLs).
+- **`package.json` scripts**: `mockup:build`, `mockup:watch`, `mockup:serve`.
+
+#### Design docs
+
+- **`MOCKUP-ARCHITECTURE.md`** — canonical reference for the 6-layer mockup architecture, file-size budgets, edit-cost analysis per layer, include resolver semantics, interactive layer scope, migration path from monolithic `preview.html` patterns.
+- **`PLAN-v3.1-ux-pipeline.md`** — full family design at the same depth as v3 families. Pipeline shape diagram, 6 skill specs, iterative gap-loop semantics, 4 sequencing waves, cross-family integrations, 6 risks + mitigations.
+
+#### Skill count
+
+178 skills total, up from 173 in v1.40.0.0. Family M sits alongside Design, UX Audit, and the v3 families.
+
+#### Designed-but-deferred (Wave 4)
+
+`/design-consultation` iterative refactor and `--mockup` modes for `/plan-design-review` + `/plan-ux-review` are documented in `PLAN-v3.1-ux-pipeline.md` but ship in v3.1.x patches. The `/ux-pipeline` orchestrator already handles iteration via re-invocation; the formal refactor lands when state-management ergonomics are validated in a real project.
+
+#### For contributors
+
+- 6 new SKILL.md.tmpl files written via parallel subagent dispatch (6 agents, all green)
+- Build + serve scripts pure bun, no new npm dependencies
+- `gen-skill-docs` regenerates all 10 host outputs (claude / codex / factory / kiro / opencode / slate / cursor / openclaw / hermes / gbrain)
+- Mockup pipeline is layer-isolated by skill: each skill never reads layers it does not own, so per-skill context stays bounded even on 100-screen mockups
+
 ## [1.40.0.0] - 2026-05-16
 
 ### **hstack v3 launches: 107 new skills, 19 new families, the four executive hats and four practitioner specialties stop being context switches.**

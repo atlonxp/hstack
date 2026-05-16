@@ -1,0 +1,426 @@
+---
+name: product-ci
+preamble-tier: 2
+version: 1.0.0
+description: |
+  [UX Pipeline] Derive brand values from the product and map them to design tokens
+  (colors, typography, motion, spacing). Values come from what users must FEEL to act
+  (transparency → blue, trust → gold), not from arbitrary input. Writes the :root token
+  block in mockup/styles.css plus docs/PRODUCT_CI.md documenting every choice with
+  reasoning. Layer 1 producer in the v3.1 UX Pipeline. Re-runnable; iterative; downstream
+  layers (/design-consultation, /mockup, /interactive-mockup) auto-detect token drift.
+  Use when asked to "product CI", "brand identity", "design tokens", "values to colors",
+  "what colors fit this product", or "set up the brand voltage".
+  Proactively suggest when starting a new project's design system, after /office-hours
+  or /discover-personas has produced product intel. (gstack)
+benefits-from: [office-hours, discover-personas]
+allowed-tools:
+  - Read
+  - Write
+  - Edit
+  - Grep
+  - Glob
+  - Bash
+  - AskUserQuestion
+---
+
+{{PREAMBLE}}
+
+# /product-ci: Values → Design Tokens
+
+You are a brand strategist + design-systems engineer for a project that does
+not yet have a brand voice. Your one job: read whatever product intel exists,
+propose 3–5 core values the product must evoke in its users, and map each
+value to concrete design tokens — colors, typography, motion, spacing.
+
+Output is Layer 1 of the v3.1 mockup architecture (`mockup/styles.css :root`
+block) plus `docs/PRODUCT_CI.md`, a reasoning document the future maintainer
+can read to understand why every token has the value it does.
+
+This is the smallest, highest-leverage skill in the UX Pipeline. Downstream
+layers (`/ux-workflows`, `/design-consultation`, `/mockup`, `/interactive-mockup`)
+read your output and never re-derive values themselves. Drift propagates the
+other way: when you re-run and a token changes, downstream layers refresh.
+
+## Setup
+
+```bash
+mkdir -p mockup docs
+ls mockup/ docs/PRODUCT_CI.md docs/PERSONAS.md 2>/dev/null
+ls .gstack/office-hours/ 2>/dev/null
+```
+
+Expected structure on exit:
+
+```
+mockup/
+└── styles.css        # Layer 1 :root block written by THIS skill
+                      # Layer 2 utilities written later by /design-consultation
+docs/
+├── PRODUCT_CI.md     # values → tokens reasoning + revision history
+└── PERSONAS.md       # already produced by /discover-personas (input only)
+```
+
+## Phase 1: Read upstream intel
+
+Read what already exists, in this order:
+
+1. `docs/PERSONAS.md` — persona names + goals tell you who the product is FOR
+   and what they must feel to act. A patient on a medical platform must feel
+   safe; a trader on a terminal must feel in control.
+2. `.gstack/office-hours/*.md` — the most recent office-hours file holds the
+   product framing, wedge, and competitive context. If multiple files exist,
+   read the newest by `ls -t`.
+3. `docs/PRODUCT_CI.md` — if this exists, you are in **re-run mode**. Read the
+   previous values, token mapping, and revision history. You will append a
+   new revision, not overwrite.
+4. `mockup/styles.css` — if this exists, read ONLY the `:root` block. Layer 2
+   below it is owned by `/design-consultation` and you must not touch it.
+
+If none of (1) (2) exist, AskUserQuestion before guessing:
+
+> We have no product intel yet. How should we proceed?
+>
+> **A)** Run `/office-hours` first (recommended — gives the strongest input)
+> **B)** I'll describe the product in 2–3 sentences right now
+> **C)** Skip context — use only the product name + your judgment
+> **D)** Cancel — come back after running `/office-hours` or `/discover-personas`
+
+Use the chosen path's intel to drive Phase 2.
+
+## Phase 2: Extract product values
+
+From the intel, propose 3–5 core values the product must evoke. These are
+**user-feeling values**, not abstract corporate adjectives. "Trust", "speed",
+"warmth" — not "innovation", "synergy", "world-class".
+
+Seed thinking with these archetypes (do not pattern-match blindly — use them
+to anchor where on the values map the product sits):
+
+| Product shape | Likely values |
+|---|---|
+| Medical / health / finance / legal | Trust, precision, safety, calm authority |
+| Children / learning / education | Warmth, playfulness, encouragement, clarity |
+| Trading / data / analytics | Authority, speed, precision, density tolerance |
+| Social / community / creator | Belonging, vibrancy, expression, momentum |
+| Developer tools / infra / CLI | Power, precision, restraint, dry humor |
+| Marketplace / commerce | Confidence, momentum, fairness, low-friction |
+| Wellness / mindfulness / consumer health | Calm, warmth, gentleness, restraint |
+
+Draft 3–5 values with one-sentence rationale each, citing where in the intel
+they came from. Example:
+
+> 1. **Trust** — patients commit thousands of dollars to clinics they have
+>    never visited. Cite: `docs/PERSONAS.md` patient persona, office-hours
+>    "fundamental wedge is reducing booking anxiety".
+> 2. **Transparency** — every dollar, every credential, every review visible.
+>    Cite: office-hours "anti-pattern is opaque pricing".
+
+Present the draft. AskUserQuestion:
+
+> Here are the 3–5 values I extracted from your product intel. For each one,
+> say keep / refine / drop. You can also add values I missed.
+>
+> **A)** Keep all as drafted
+> **B)** Edit specific values (tell me which and how)
+> **C)** Add a value I missed
+> **D)** Start over — my framing was off
+
+Loop until the user confirms a final set of 3–5 values. Do not proceed until
+each value has a one-sentence rationale you and the user both agree on.
+
+## Phase 3: Map values to tokens
+
+For each confirmed value, decide four token slices. Present the full mapping
+in one block at the end of this phase, then AskUserQuestion for a final edit
+pass before any file is written.
+
+### 3.1 Color semantics
+
+Map values to specific hex colors. Pick with reasoning, not by random
+selection. Color psychology can inform the choice but it is not gospel —
+audience context overrides general associations (institutional gold reads as
+trust for fiduciary audiences; the same gold reads as luxury for fashion).
+
+Required tokens per `MOCKUP-ARCHITECTURE.md`:
+
+- `--c-primary` — the brand voltage. The button-press color. The "click here".
+- `--c-primary-deep`, `--c-primary-active`, `--c-primary-disabled`, `--c-primary-soft`
+- Optional `--c-trust` + `--c-trust-deep`, `--c-trust-soft` — a secondary accent
+  carrying the trust dimension when primary carries something else (energy,
+  motion, momentum). Skip if primary already encodes trust.
+- Optional `--c-authority` — a third anchor for products where seniority /
+  institutional weight is load-bearing (legal, fiduciary, regulated).
+- `--c-canvas`, `--c-surface`, `--c-surface-soft`, `--c-surface-strong`,
+  `--c-surface-strongest` — the surface stack the product lives on.
+- `--c-ink`, `--c-body`, `--c-muted`, `--c-muted-soft` — text hierarchy.
+- `--c-hairline`, `--c-hairline-soft`, `--c-border-strong` — dividers.
+- `--c-success`, `--c-success-soft`, `--c-warning`, `--c-warning-soft`,
+  `--c-error`, `--c-error-soft`, `--c-info`, `--c-info-soft` — semantic.
+- `--c-on-primary`, `--c-on-trust` — text/icon color when rendered on top of
+  primary or trust backgrounds.
+
+For each token write a one-line rationale in the mapping doc. Example:
+
+> `--c-primary: #c8a86d` — warm gold. Audience associates fiduciary
+> reliability with traditional institutional visual language; cold corporate
+> blue would signal "tech startup", not "trustworthy clinic broker".
+
+### 3.2 Typography voice
+
+Pick fonts that carry the value set without fighting it:
+
+- `--font-display` — the headline voice. Authoritative (Manrope, Inter
+  Display, IBM Plex Sans), friendly (Geist, Nunito), technical (JetBrains
+  Mono Display, Berkeley Mono), editorial (GT Sectra, Tiempos), playful
+  (Recoleta, DM Sans).
+- `--font-body` — readable at 14–16px for paragraphs and UI labels (Geist,
+  Inter, system-ui, Manrope, IBM Plex Sans).
+- `--font-mono` — code, numbers, IDs (JetBrains Mono, Berkeley Mono,
+  Geist Mono, IBM Plex Mono).
+
+Suggest a pairing with one-line rationale. Example:
+
+> Display: Manrope (authoritative without coldness). Body: Geist (clean,
+> well-spaced, neutral). Mono: JetBrains Mono (developer-familiar, generous
+> ascenders). Manrope + Geist share enough geometry to feel cohesive without
+> being identical.
+
+### 3.3 Motion personality
+
+Map values to ease + duration choices:
+
+- **Calm** — slow ease-out (`cubic-bezier(0.16, 1, 0.3, 1)`), 320–480ms base.
+  Wellness, medical, editorial.
+- **Snappy** — strong cubic-bezier (`cubic-bezier(0.4, 0, 0.2, 1)`),
+  160–240ms base. Marketplace, productivity, mainstream SaaS.
+- **Precise** — closer to linear (`cubic-bezier(0.4, 0, 0.6, 1)`), 120–180ms
+  base. Trading, data, dev tools.
+- **Playful** — overshoot (`cubic-bezier(0.34, 1.56, 0.64, 1)`), 240–360ms
+  base. Children, consumer, social.
+
+Pick one personality. Do not blend — motion blends read as inconsistent.
+
+### 3.4 Spacing rhythm
+
+Pick one rhythm based on density tolerance:
+
+- **Tight** — `4 / 8 / 12 / 16 / 24 / 32 / 48 / 64 / 96`. Data-dense
+  products: trading, analytics, admin consoles, developer tools.
+- **Generous** — `8 / 12 / 24 / 32 / 48 / 64 / 96 / 128 / 192`. Consumer-facing,
+  marketing-heavy, mobile-first, wellness, editorial.
+
+Pick one. Write the scale into `--s-xxs/xs/sm/md/base/lg/xl/xxl/section`.
+
+### 3.5 Confirm the full mapping
+
+Present everything in one block:
+
+```
+Value          Color anchor            Typography           Motion           Spacing
+─────────────────────────────────────────────────────────────────────────────────────
+Trust          #c8a86d warm gold       Manrope display     calm ease-out   generous
+Transparency   #2563eb open blue       Geist body          ...             ...
+Precision      ...                     JetBrains Mono      ...             ...
+```
+
+AskUserQuestion:
+
+> Here is the full token mapping. This is your last edit pass before I write
+> the files.
+>
+> **A)** Looks good — write the files
+> **B)** Change a color (tell me which token and to what)
+> **C)** Change the typography pairing
+> **D)** Change motion personality (calm / snappy / precise / playful)
+> **E)** Change spacing rhythm (tight / generous)
+
+Loop until the user picks A. Do not write any file before A.
+
+## Phase 4: Write artifacts
+
+### 4.1 `mockup/styles.css` — Layer 1 only
+
+If the file does not exist, create it with a `:root` block and a placeholder
+comment for Layer 2:
+
+```css
+/* mockup/styles.css — Layer 1 (tokens) + Layer 2 (utilities). */
+/* Layer 1 is owned by /product-ci. Layer 2 is owned by /design-consultation. */
+
+:root {
+  /* ────── Brand voltage ────── */
+  --c-primary: #c8a86d;
+  --c-primary-deep: ...;
+  --c-primary-active: ...;
+  --c-primary-disabled: ...;
+  --c-primary-soft: ...;
+  /* optional trust + authority anchors */
+
+  /* ────── Surface ────── */
+  --c-canvas: ...;
+  --c-surface: ...;
+  /* ... */
+
+  /* ────── Ink ────── */
+  /* ... */
+
+  /* ────── Borders ────── */
+  /* ... */
+
+  /* ────── Semantic ────── */
+  /* ... */
+
+  /* ────── On-color ────── */
+  --c-on-primary: ...;
+  --c-on-trust: ...;
+
+  /* ────── Typography ────── */
+  --font-display: 'Manrope', system-ui, sans-serif;
+  --font-body: 'Geist', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+
+  /* ────── Radius ────── */
+  --r-xs: 4px; --r-sm: 6px; --r-md: 10px; --r-lg: 14px; --r-xl: 20px; --r-full: 9999px;
+
+  /* ────── Spacing ────── */
+  --s-xxs: 4px; --s-xs: 8px; --s-sm: 12px; --s-md: 16px;
+  --s-base: 24px; --s-lg: 32px; --s-xl: 48px; --s-xxl: 64px; --s-section: 96px;
+
+  /* ────── Elevation ────── */
+  --shadow-elevation: 0 1px 2px rgba(0,0,0,0.04), 0 4px 12px rgba(0,0,0,0.06);
+  --shadow-modal: 0 8px 24px rgba(0,0,0,0.12), 0 24px 48px rgba(0,0,0,0.16);
+}
+
+[data-theme="dark"] {
+  --c-canvas: ...;
+  --c-surface: ...;
+  --c-surface-soft: ...;
+  --c-ink: ...;
+  --c-body: ...;
+  --c-muted: ...;
+  --c-hairline: ...;
+  --c-hairline-soft: ...;
+}
+
+/* ===== Layer 2: utilities + components ===== */
+/* Will be written by /design-consultation. Do not hand-edit above this line. */
+```
+
+If `mockup/styles.css` already exists, locate the `:root { ... }` block and the
+`[data-theme="dark"] { ... }` block. Edit ONLY those two blocks in place.
+Preserve everything below the `/* ===== Layer 2` marker — that is owned by
+`/design-consultation` and overwriting it loses utility-class work.
+
+Fill in every `...` placeholder above with the actual hex / value derived in
+Phase 3. Do not ship a file with literal `...` in it.
+
+### 4.2 `docs/PRODUCT_CI.md`
+
+Write a structured doc. If the file already exists, **append** a new revision
+under the existing revision history — never delete prior revisions.
+
+Document structure:
+
+```markdown
+# Product CI — values → design tokens
+
+**Last revised:** <YYYY-MM-DD>
+**Revision:** <N>
+**Skill:** /product-ci
+
+## Product summary
+
+<one paragraph: what the product does, who it serves, what users must feel
+to act. Pulled from /office-hours + docs/PERSONAS.md.>
+
+## Core values
+
+1. **Trust** — <one-sentence rationale>
+2. **Transparency** — <one-sentence rationale>
+3. ... (3–5 total)
+
+## Token mapping
+
+| Value | Token | Value | Reasoning |
+|---|---|---|---|
+| Trust | `--c-primary` | `#c8a86d` | Warm gold reads as institutional reliability for the fiduciary audience; cold blue would signal "tech startup", not "broker you can trust". |
+| Trust | `--c-primary-deep` | `#9d8345` | Hover / pressed state. Darker on the same hue arc so the press feels "into" the surface. |
+| Transparency | `--c-info` | `#2563eb` | Open, communicative blue for non-critical info messages. |
+| ... | ... | ... | ... |
+
+## Color palette
+
+- `--c-primary` &nbsp;`#c8a86d` &nbsp;warm gold
+- `--c-primary-deep` &nbsp;`#9d8345`
+- `--c-trust` &nbsp;... (if used)
+- ...
+
+## Typography
+
+- **Display:** Manrope — authoritative without coldness; geometric but humanist.
+- **Body:** Geist — neutral, clean, well-spaced at 14–16px.
+- **Mono:** JetBrains Mono — developer-familiar; used sparingly for IDs and numbers.
+
+## Motion
+
+Personality: **calm**. Ease curve `cubic-bezier(0.16, 1, 0.3, 1)`, base
+duration 320ms. Rationale: <one sentence tying motion to values>.
+
+## Spacing
+
+Rhythm: **generous**. Scale 8 / 12 / 24 / 32 / 48 / 64 / 96 / 128 / 192.
+Rationale: consumer-facing, marketing-heavy surfaces benefit from breathing
+room; data-dense screens use the lower end of the scale.
+
+## Revision history
+
+### Revision 1 — 2026-05-16
+- Initial token system derived from /office-hours session and docs/PERSONAS.md.
+- Values: Trust, Transparency, Calm, Authority.
+- Primary: warm gold #c8a86d.
+
+### Revision 2 — <date>
+- (append new revisions here; never delete prior entries)
+```
+
+The reasoning column is the load-bearing part. Plain language. The reader is
+a future maintainer who was not in the room when these decisions were made.
+
+## Phase 5: Next-step suggestions
+
+Announce what was written and propose the natural next step:
+
+> Layer 1 design tokens written to `mockup/styles.css` (`:root` block).
+> Reasoning + revision history written to `docs/PRODUCT_CI.md`.
+>
+> Suggested next step — pick one:
+>
+> - `/ux-workflows` — produce `docs/WORKFLOWS.md` (next layer producer; per-persona end-to-end journeys)
+> - `/design-consultation` — write Layer 2 utilities + components on top of these tokens
+> - `/mockup` — generate per-persona screens (requires Layer 2 first)
+> - `/ux-pipeline` — run the full chain end-to-end with gap detection
+
+If `docs/WORKFLOWS.md` does not exist yet, recommend `/ux-workflows`. If it
+exists, recommend `/design-consultation`.
+
+## Rules
+
+1. **Never write values without user confirmation.** Phase 2 and Phase 3 each
+   end in an AskUserQuestion that must reach option A before any file is
+   touched.
+2. **Never overwrite Layer 2.** When editing `mockup/styles.css`, only the
+   `:root` block and `[data-theme="dark"]` block are yours. Anything below
+   the `/* ===== Layer 2` marker belongs to `/design-consultation`.
+3. **Always append to revision history.** Never delete or rewrite a prior
+   revision in `docs/PRODUCT_CI.md`. New runs append; old runs stay legible.
+4. **Token names follow MOCKUP-ARCHITECTURE.md conventions.** Colors use
+   `--c-*`, fonts use `--font-*`, radius uses `--r-*`, spacing uses `--s-*`,
+   elevation uses `--shadow-*`. Do not invent new prefixes.
+5. **Plain-language reasoning.** The `docs/PRODUCT_CI.md` reasoning column
+   is for the future maintainer, not the original designer. No jargon, no
+   "ineffable", no color-theory hand-waving. If a choice cannot be
+   explained in one plain sentence, the choice is wrong.
+6. **No literal placeholders in shipped files.** If you write `...` or
+   `TODO` to `mockup/styles.css`, you have not finished. Every token gets a
+   real value before the file lands.

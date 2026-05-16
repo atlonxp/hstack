@@ -1,0 +1,243 @@
+---
+name: ux-workflows
+preamble-tier: 2
+version: 1.0.0
+description: |
+  [UX Pipeline] Produce docs/WORKFLOWS.md — one section per persona, each with entry points,
+  3-7 core end-to-end workflows (action→screen→outcome tuples), cross-persona hand-offs,
+  edge/error workflows, and an explicit out-of-scope statement. Distinct from /define-workflows
+  (which produces audit-stage gap-analysis input); /ux-workflows is mockup-stage and granular
+  enough to drive /mockup screen generation. Layer-feeding skill in the v3.1 UX Pipeline.
+  Use when asked to "ux workflows", "define user journeys", "workflows per persona",
+  "what does each persona do", or "map out the flows".
+  Proactively suggest after /discover-personas, before /mockup or /design-consultation. (gstack)
+benefits-from: [discover-personas, office-hours]
+allowed-tools:
+  - Read
+  - Write
+  - Edit
+  - Grep
+  - Glob
+  - Bash
+  - AskUserQuestion
+---
+
+{{PREAMBLE}}
+
+{{BENEFITS_FROM}}
+
+# /ux-workflows: Per-Persona End-to-End Journeys
+
+Produce `docs/WORKFLOWS.md` — the mockup-stage workflow document that drives `/mockup`
+and `/interactive-mockup`. One section per persona, with entry points, 3-7 core
+workflows as (action → screen → outcome) tuples, cross-persona hand-offs, edge/error
+workflows, and an out-of-scope statement.
+
+Distinct from `/define-workflows` (audit-stage input for `/gap-analysis`).
+`/ux-workflows` is more granular — every step names a concrete screen slug so the
+mockup generator can produce one HTML partial per reference.
+
+## Setup
+
+```bash
+mkdir -p docs
+ls docs/PERSONAS.md docs/WORKFLOWS.md 2>/dev/null
+```
+
+`docs/PERSONAS.md` is required input.
+
+## Phase 1: Verify persona registry
+
+```bash
+cat docs/PERSONAS.md 2>/dev/null
+```
+
+If missing, AskUserQuestion:
+- A) Run `/discover-personas` first (recommended)
+- B) I'll describe personas inline — collect now and stub a minimal `docs/PERSONAS.md`
+
+If found, parse and present for confirmation:
+
+> Found N personas: P1 — {role} — {goal}, P2 — ...
+> Proceed? (Yes / Edit list / Re-run /discover-personas)
+
+If `docs/WORKFLOWS.md` already exists, offer: append, regenerate, or exit. Workflow
+IDs (W1, W2...) must survive regeneration — never re-number existing workflows.
+
+## Phase 2: Per-persona workflow discovery
+
+Loop over confirmed personas. For each persona, run 2A → 2B → 2C in order. Do not
+move to the next persona until the current draft is confirmed.
+
+### 2A. Entry points
+
+AskUserQuestion: "How does {persona} arrive at the product?" (multi-select)
+
+Options:
+- Marketing site / public landing
+- Direct dashboard link (already authenticated)
+- Deep link from notification (email / SMS / push)
+- Referral from another persona
+- App store / search
+- Other (free-text)
+
+Every workflow in 2B must reference at least one selected entry point.
+
+### 2B. Core workflows (3-7 per persona)
+
+AskUserQuestion: "What are the 3-7 most important things {persona} does end-to-end?"
+
+Guidance: pick goals with a clear START and END. Avoid "browses around" or "uses the
+dashboard" — too vague to mockup. Good examples: "submit a quotation request",
+"respond to a patient message", "approve a pending verification".
+
+Walk the user through a worked example first so they see expected granularity:
+
+```
+Workflow: "Submit a quotation request"
+1. Action: enter clinic name        → Screen: search           → Outcome: list of matching clinics
+2. Action: select a clinic          → Screen: clinic profile   → Outcome: full clinic info loaded
+3. Action: tap "Request quote"      → Screen: quote form       → Outcome: form ready for input
+4. Action: fill details + submit    → Screen: confirmation     → Outcome: request logged, clinic notified
+```
+
+Then ask the user to break each named workflow into 3-8 tuples of the same shape.
+Capture per workflow: name (short verb phrase), entry-point reference, ordered steps,
+expected end state (one sentence).
+
+Reflect each workflow back as a draft before moving on. If the user cannot articulate
+the steps, the workflow is too vague — split it or drop it.
+
+### 2C. Edge / error workflows
+
+For each core workflow, AskUserQuestion: "What happens if {workflow name} fails
+midway? Which failure modes should the mockup show?" (multi-select)
+
+Options:
+- Empty result (search returned nothing)
+- Permission denied (auth or role mismatch)
+- Network failure / offline
+- Partial save (data lost mid-flow)
+- Validation error (form rejected)
+- Conflict (resource already taken / changed)
+- None — skip edge workflows for this one
+
+**Mandatory:** the highest-priority core workflow per persona MUST have at least one
+edge workflow. If the user picks "None" for their top workflow, push back:
+
+> The top workflow per persona needs at least one edge/error path so the mockup can
+> show recovery affordances. Pick the most likely failure mode.
+
+Each edge workflow is a truncated 1-3 tuple sequence. The screen reference may be a
+shared component (e.g., `_components/empty-state`) rather than a unique page.
+
+## Phase 3: Cross-persona hand-offs
+
+Auto-discover: walk every workflow draft, look for **shared artifact references** —
+two persona drafts that name the same noun (quotation, verification, message thread,
+review). For each candidate, AskUserQuestion to confirm:
+
+> Patient W2 ("Submit a quotation request") ends with "request logged, clinic notified."
+> Provider W1 ("Respond to incoming quotation") starts with "notification received."
+> Is this a real hand-off? (Yes / No / Edit the trigger)
+
+Capture confirmed hand-offs in a matrix:
+
+| Trigger persona | Action | Receiver persona | Reaction |
+|---|---|---|---|
+| Patient | Submits quotation | Provider | Notified, prepares response |
+| Provider | Posts review reply | Patient | Notified of new reply |
+
+Auto-discovery proposes; user approves. Rejected candidates are not written.
+
+## Phase 4: Out-of-scope statement
+
+AskUserQuestion: "Anything you explicitly do NOT want mockups for in v1?"
+
+For each item, require a rationale. Examples:
+- "Internal admin reports" — rationale: backend-only, no UI in v1.
+- "Billing flows" — rationale: handled by Stripe-hosted pages, out of scope.
+- "Mobile app onboarding" — rationale: separate native build.
+
+If the user names an item without a rationale, ask "why is this out of scope?" before
+writing. A bullet without rationale invites stakeholder confusion during review.
+
+## Phase 5: Write docs/WORKFLOWS.md
+
+Schema:
+
+```markdown
+# Workflows
+
+Generated: {YYYY-MM-DD}
+Source: docs/PERSONAS.md
+Updated by: /ux-workflows
+
+---
+
+## Persona: {ID} — {Role}
+
+### Entry points
+- {entry 1}
+- {entry 2}
+
+### Core workflows
+
+#### W{n}: {workflow name}
+**Entry:** {which entry point}
+**Steps:**
+1. Action: {verb phrase} → Screen: {screen-slug} → Outcome: {observable result}
+2. ...
+**Expected end state:** {one sentence}
+
+### Edge / error workflows
+
+#### E{n}: {edge name} (covers W{m})
+**Trigger:** {what causes this branch}
+**Steps:**
+1. Action: {verb} → Screen: {screen-slug or _components/...} → Outcome: {recovery state}
+
+---
+
+## Cross-persona hand-offs
+
+| Trigger persona | Action | Receiver persona | Reaction |
+|---|---|---|---|
+| Patient | Submits quotation | Provider | Notified, prepares response |
+
+## Out of scope (v1)
+
+- {item} — {rationale}
+```
+
+Workflow IDs are stable. If existing W1-W4 are present and the user adds two more,
+they become W5 and W6. Deleted workflows leave a gap; downstream skills tolerate gaps.
+
+Confirm after writing: persona count, core-workflow count, edge-workflow count,
+hand-off count.
+
+## Phase 6: Next-step suggestions
+
+> docs/WORKFLOWS.md written with {N} personas, {M} core workflows, {E} edge workflows,
+> and {H} hand-offs.
+>
+> Next step — pick one:
+> - `/design-consultation` — Layer 2 utilities/components matching workflow demands
+> - `/mockup` — Layers 3-5: generate one screen file per Screen reference
+> - `/plan-ux-review` — validate workflows for completeness before mockup generation
+
+## Rules
+
+1. **Never invent workflows.** Only capture what the user describes. If they cannot
+   articulate steps for a named workflow, ask them to split it or drop it.
+2. **Cross-persona hand-offs require explicit confirmation.** Auto-discovery proposes
+   shared-artifact candidates; the user approves each one before it lands.
+3. **Edge workflows are mandatory for the top core workflow per persona.** No persona
+   ships to mockup with zero failure paths covered.
+4. **Out-of-scope items must have rationale.** Refuse to write the doc until every
+   out-of-scope bullet has one.
+5. **Workflow IDs are stable across re-runs.** W1, W2... never rotate. New workflows
+   get the next available ID; deletions leave gaps.
+6. **Screen references must be concrete slugs.** "search", "clinic-profile",
+   "quote-form" — not "the search screen". `/mockup` generates one HTML file per
+   unique slug.

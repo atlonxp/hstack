@@ -1,6 +1,6 @@
 {
   "name": "gstack",
-  "version": "1.40.0.0",
+  "version": "1.41.0.0",
   "description": "Garry's Stack — Claude Code skills + fast headless browser. One repo, one install, entire AI engineering workflow.",
   "license": "MIT",
   "type": "module",
@@ -40,7 +40,10 @@
     "analytics": "bun run scripts/analytics.ts",
     "test:audit": "bun test test/audit-compliance.test.ts",
     "slop": "npx slop-scan scan . 2>/dev/null || echo 'slop-scan not available (install with: npm i -g slop-scan)'",
-    "slop:diff": "bun run scripts/slop-diff.ts"
+    "slop:diff": "bun run scripts/slop-diff.ts",
+    "mockup:build": "bun run scripts/build-mockup.ts",
+    "mockup:watch": "bun run scripts/build-mockup.ts --watch",
+    "mockup:serve": "bun run scripts/serve-mockup.ts"
   },
   "dependencies": {
     "@huggingface/transformers": "^4.1.0",
