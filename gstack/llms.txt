@@ -103,11 +103,11 @@ Conventions:
 - [/investigate](investigate/SKILL.md): [Investigate & Security] Systematic debugging with root cause investigation.
 - [/investigate-workflow](investigate-workflow/SKILL.md): [Investigate & Security] Post-implementation workflow completeness investigator for gstack.
 - [/investor-update](investor-update/SKILL.md): [CEO Cockpit] Monthly investor update generator.
-- [/ios-clean](ios-clean/SKILL.md): [iOS] Remove the DebugBridge SPM package and all #if DEBUG wiring from an iOS app.
-- [/ios-design-review](ios-design-review/SKILL.md): [iOS] Visual design audit for iOS apps on real hardware.
-- [/ios-fix](ios-fix/SKILL.md): [iOS] Autonomous iOS bug fixer.
-- [/ios-qa](ios-qa/SKILL.md): [iOS] Live-device iOS QA for SwiftUI apps.
-- [/ios-sync](ios-sync/SKILL.md): [iOS] Regenerate the iOS debug bridge against the latest upstream gstack templates.
+- [/ios-clean](ios-clean/SKILL.md): Remove the DebugBridge SPM package and all #if DEBUG wiring from an iOS app.
+- [/ios-design-review](ios-design-review/SKILL.md): Visual design audit for iOS apps on real hardware.
+- [/ios-fix](ios-fix/SKILL.md): Autonomous iOS bug fixer.
+- [/ios-qa](ios-qa/SKILL.md): Live-device iOS QA for SwiftUI apps.
+- [/ios-sync](ios-sync/SKILL.md): Regenerate the iOS debug bridge against the latest upstream gstack templates.
 - [/k8s-design](k8s-design/SKILL.md): [Cloud-Native] Generate production-grade Kubernetes manifests, Helm charts, or Kustomize overlays for a workload.
 - [/kpi-dashboard](kpi-dashboard/SKILL.md): [CEO Cockpit] KPI dashboard with weekly cadence.
 - [/land-and-deploy](land-and-deploy/SKILL.md): [Ship & Release] Land and deploy workflow.
