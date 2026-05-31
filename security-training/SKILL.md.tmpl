@@ -84,6 +84,7 @@ The framework determines required topics — HIPAA §164.308(a)(5)(ii)(D) explic
 Pull real material from Hall's repo:
 
 ```bash
+setopt +o nomatch 2>/dev/null || true  # zsh: let unmatched globs pass literally
 # Vendor list for phishing scenarios
 ls compliance/vendors.md compliance/sub-processors/ 2>/dev/null
 [ -f compliance/vendors.md ] && grep -E "^[A-Za-z]" compliance/vendors.md | head -30

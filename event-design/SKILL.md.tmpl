@@ -137,6 +137,7 @@ What's allowed under each policy is format-specific:
 ### Step 0: Detect environment
 
 ```bash
+setopt +o nomatch 2>/dev/null || true  # zsh: let unmatched globs pass literally
 # Find existing schemas
 SCHEMAS=$(find . -type f \( -name "*.avsc" -o -name "*.proto" -o -name "*-schema.json" -o -name "schema.json" \) -not -path "*/node_modules/*" -not -path "*/.git/*" -not -path "*/vendor/*" 2>/dev/null | head -20)
 # Find broker config

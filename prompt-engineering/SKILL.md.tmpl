@@ -213,7 +213,7 @@ with:
 
 ```bash
 # For each (variant × model) pair, run the eval, record S9 metric.
-for variant in prompts/{task}/variants/*.md; do
+for variant in $(find prompts/{task}/variants -name '*.md' 2>/dev/null); do
   for model in {models}; do
     python -m {framework} \
       --prompt $variant \

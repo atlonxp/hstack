@@ -15,11 +15,20 @@ import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-import { spawnSync } from 'child_process';
+import { spawnSync, execFileSync } from 'child_process';
 
 const ROOT = path.resolve(import.meta.dir, '..');
 const DETECT = path.join(ROOT, 'bin', 'gstack-gbrain-detect');
 const INSTALL = path.join(ROOT, 'bin', 'gstack-gbrain-install');
+
+// gstack-gbrain-detect has a `#!/usr/bin/env -S bun run` shebang, so the
+// constrained SAFE_PATH below (which deliberately omits user-bin dirs) can't
+// resolve bun on machines where bun lives in ~/.bun/bin. Resolve bun's
+// absolute path once from the test runner's PATH and invoke that bun script
+// through it, mirroring gbrain-detect-shape.test.ts. The script's internal
+// child-process probes still see the controlled PATH via env, so determinism
+// (no real gbrain on PATH) is preserved.
+const BUN_BIN = execFileSync('sh', ['-c', 'command -v bun'], { encoding: 'utf-8' }).trim();
 
 // Minimal PATH with POSIX tools + homebrew (for jq/git/curl) but no user-bin
 // dirs — this keeps `gbrain` out of PATH deterministically across dev machines
@@ -38,7 +47,12 @@ function run(bin: string, args: string[], opts: RunOpts = {}) {
     HOME: tmpHomeReal,
     ...(opts.env || {}),
   };
-  const res = spawnSync(bin, args, {
+  // Bun-shebang scripts can't be launched via the constrained SAFE_PATH;
+  // invoke them through the absolute bun path instead of relying on the shebang.
+  const isBunScript = bin === DETECT;
+  const spawnBin = isBunScript ? BUN_BIN : bin;
+  const spawnArgs = isBunScript ? ['run', bin, ...args] : args;
+  const res = spawnSync(spawnBin, spawnArgs, {
     env,
     cwd: opts.cwd,
     encoding: 'utf-8',
@@ -204,14 +218,30 @@ describe('gstack-gbrain-install D19 PATH-shadow validation', () => {
   }
 
   test('passes when install-dir version matches `gbrain --version` on PATH', () => {
+    // Version must be >= MIN_GBRAIN_VERSION (0.20.0) floor (#1744).
+    const installDir = seedInstallDir('0.41.29');
+    const fakeBin = seedFakeGbrainBinary('0.41.29');
+    try {
+      const r = run(INSTALL, ['--validate-only', '--install-dir', installDir], {
+        env: { PATH: `${fakeBin}:${SAFE_PATH}` },
+      });
+      expect(r.status).toBe(0);
+      expect(r.stdout).toContain('installed gbrain 0.41.29');
+    } finally {
+      fs.rmSync(installDir, { recursive: true, force: true });
+      fs.rmSync(fakeBin, { recursive: true, force: true });
+    }
+  });
+
+  test('hard-fails (exit 3) when the installed gbrain is below the version floor (#1744)', () => {
     const installDir = seedInstallDir('0.18.2');
     const fakeBin = seedFakeGbrainBinary('0.18.2');
     try {
       const r = run(INSTALL, ['--validate-only', '--install-dir', installDir], {
         env: { PATH: `${fakeBin}:${SAFE_PATH}` },
       });
-      expect(r.status).toBe(0);
-      expect(r.stdout).toContain('installed gbrain 0.18.2');
+      expect(r.status).toBe(3);
+      expect(r.stderr).toContain('below the minimum gstack-tested version');
     } finally {
       fs.rmSync(installDir, { recursive: true, force: true });
       fs.rmSync(fakeBin, { recursive: true, force: true });
@@ -219,8 +249,8 @@ describe('gstack-gbrain-install D19 PATH-shadow validation', () => {
   });
 
   test('tolerates a leading "v" in `gbrain --version` output', () => {
-    const installDir = seedInstallDir('0.18.2');
-    const fakeBin = seedFakeGbrainBinary('v0.18.2');
+    const installDir = seedInstallDir('0.41.29');
+    const fakeBin = seedFakeGbrainBinary('v0.41.29');
     try {
       const r = run(INSTALL, ['--validate-only', '--install-dir', installDir], {
         env: { PATH: `${fakeBin}:${SAFE_PATH}` },

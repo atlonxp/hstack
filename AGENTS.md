@@ -21,6 +21,7 @@ Invoke them by name (e.g., `/office-hours`).
 | `/plan-tune` | Self-tune AskUserQuestion sensitivity per question. |
 | `/autoplan` | One command runs CEO → design → eng → DX review. |
 | `/design-consultation` | Build a complete design system from scratch. |
+| `/spec` | Turn vague intent into a precise, executable spec in five phases. Files a GitHub issue, optionally spawns a Claude Code agent in a fresh worktree, and lets `/ship` close the source issue on merge. |
 
 ### Implementation + review
 
@@ -157,3 +158,118 @@ bun run skill:check      # health dashboard for all skills
 | `/check-ci` | One-shot CI status check (GitHub Actions / GitLab CI). |
 | `/check-deps` | Dependency staleness + vulnerability check. |
 | `/check-issues` | Open-issues triage for the current repo. |
+
+### hstack extended skills (v3 multi-hat expansion)
+
+| Skill | What it does |
+|-------|-------------|
+| `/accessibility-audit` | WCAG 2.2 AA conformance audit augmented with assistive-tech behavioral testing. |
+| `/adr` | Architecture Decision Record generator + linter (Michael Nygard format). |
+| `/agent-design` | Designs an LLM agent as a typed state machine, not an ad-hoc while-loop. |
+| `/agent-ux-review` | Reviews an AI feature's interaction flow against agent-UX principles — predictability, repair, attention budget, surfaced uncertainty, escape hatches, mode visibility. |
+| `/api-contract-test` | Generate consumer-driven contract tests (Pact, or equivalent) from an OpenAPI / GraphQL / Protobuf spec, wire them into CI for both producer and consumer sides, and maintain a... |
+| `/api-design` | Design or audit an API surface. |
+| `/aso` | App Store Optimization. |
+| `/auto-guard` | Automatic security + QA hooks for git events. |
+| `/avatar-design` | Full avatar architecture designer. |
+| `/avatar-sign` | Sign-language-performing avatar pipeline. |
+| `/backtest` | Point-in-time, look-ahead-free backtest harness for algorithmic strategies. |
+| `/behavioral-experiment` | Design a behavioral A/B / multi-arm experiment with proper power analysis, randomization strategy, primary + guardrail metrics, **pre- registered analysis plan**... |
+| `/biases-audit` | Defensive cognitive-bias audit. |
+| `/blueprint` | Structured study of an external target (product, paper, codebase, app, or SDK/API) that produces a domain-agnostic BLUEPRINT.md plus |
+| `/board-deck` | Board deck generator following the YC-style template — Traction, Financials, Product, Team, Risks, Asks. |
+| `/bug-bounty-triage` | Bug-bounty report triage pipeline. |
+| `/buy-vs-build` | Vendor-vs-build scorecard. |
+| `/c4-diagram` | Generates the four C4 model levels (System Context, Container, Component, Code) from the actual codebase, not whiteboard memory. |
+| `/chaos` | Design and run chaos engineering experiments per dependency-graph node. |
+| `/clone-and-twist` | Build the transposed version of a studied mechanism. |
+| `/cognitive-load-audit` | Quantifies cognitive load on a surface using Sweller's intrinsic / extraneous / germane split. |
+| `/collaboration-pattern` | Picks the right human-AI collaboration pattern (pair, supervised, delegated, autonomous) for a given task, with rationale across skill-level fit, error cost,... |
+| `/compliance-audit` | Framework-aware compliance audit (SOC 2 Type II / ISO 27001 / HIPAA / PCI-DSS v4 / GDPR / CCPA). |
+| `/cost-optimize` | FinOps analysis for AWS, GCP, and Azure. |
+| `/counterfactual` | Counterfactual analysis framework for economic simulators. |
+| `/cross-repo-pr` | Atomic PR trains across N repos that must merge in lockstep. |
+| `/customer-interview` | Customer interview workflow — two modes. |
+| `/dashboard` | Multi-agent dashboard for hstack. |
+| `/db-design` | Design a new database schema or audit an existing one. |
+| `/db-migration` | Zero-downtime database migration planner. |
+| `/db-perf` | EXPLAIN-driven slow-query diagnosis and index advisor. |
+| `/dep-graph` | Builds a cross-service dependency graph from imports, route calls, and IaC topology. |
+| `/detect-engineering` | Detection rule engineering. |
+| `/econ-sim` | Designs a runnable economic simulator from a research question. |
+| `/eval-harness` | Generates a per-feature eval harness (dataset, metrics, baselines, CI hook) for any LLM/AI feature. |
+| `/event-design` | Design event/message schemas with explicit versioning and compatibility policy for Kafka, NATS, EventBridge, SQS, RabbitMQ, or Pub/Sub. |
+| `/event-stream` | Designs a real-world event ingestion pipeline for an economic simulator with observability-time modeling — agents react to events when the information would have been... |
+| `/explanation-design` | Designs explanation surfaces for AI features with the goal of trust calibration, not tutorial. |
+| `/exploit-dev` | Scaffolds an authorized exploit-development project (CTF or engagement) for binary pwn, web, mobile, or IoT firmware targets. |
+| `/expression-synth` | Facial expression synthesis designer. |
+| `/finetune` | Generates a fine-tuning project — data prep, format conversion (sharegpt/alpaca/dpo), recipe config (LoRA / QLoRA / full / DPO / ORPO), eval baseline before+after,... |
+| `/forensics` | DFIR (digital forensics + incident response). |
+| `/game-theory-analysis` | Model a strategic situation as a formal game (normal form for one-shot, extensive form for sequential). |
+| `/gesture-synth` | Speech-to-gesture synthesis designer. |
+| `/hiring-loop` | Full hiring kit generator from a role description. |
+| `/honeypot` | Deception deployment. |
+| `/iac-review` | Pre-apply review of Terraform / Pulumi / AWS CDK diffs. |
+| `/incentive-design` | Design an incentive system (pricing tier, referral program, growth loop, OKR / commission plan, in-app reward) using mechanism design plus behavioral economics —... |
+| `/incident-response` | Generates an incident response runbook tuned to Hall's stack (web / mobile / API), and runs in live war-room mode during an actual incident. |
+| `/indoor-nav` | Indoor positioning + accessibility-aware routing design. |
+| `/interactive-mockup` | Wire the static mockup into a clickable interactive prototype. |
+| `/investor-update` | Monthly investor update generator. |
+| `/k8s-design` | Generate production-grade Kubernetes manifests, Helm charts, or Kustomize overlays for a workload. |
+| `/kpi-dashboard` | KPI dashboard with weekly cadence. |
+| `/lip-sync` | Lip-sync model selection + training/inference pipeline designer. |
+| `/log-analyze` | Large-log triage with polars-backed analysis. |
+| `/mental-model-trace` | Diffs the user's mental model of a feature against the real system model. |
+| `/migration-plan` | Given a from→to migration (DB engine swap, framework upgrade, language port, region move, monolith→services), picks the safest pattern (strangler fig, parallel run, blue-green,... |
+| `/mobile-build` | Mobile feature scaffolding across React Native, Flutter, native iOS (Swift), and native Android (Kotlin). |
+| `/mobile-perf` | Mobile performance profiling: cold-start time, time-to-interactive, FPS during scrolling, jank rate, memory under load. |
+| `/mobile-qa` | Mobile QA flow generation + execution across Maestro, Detox, XCUITest, and Espresso. |
+| `/mobile-release` | End-to-end TestFlight / Play Internal release pipeline. |
+| `/mockup` | Generate role-based, multi-screen, clickable mockup pages from docs/WORKFLOWS.md. |
+| `/monorepo-graph` | Unified projection of a monorepo's project graph. |
+| `/multi-repo-refactor` | Coordinated refactor across N repos. |
+| `/multi-sign` | Multi-sign-language platform architecture. |
+| `/observability` | Generate an OpenTelemetry-first observability stack: per-language SDK setup, exporters (Prometheus + Tempo + Loki, or Datadog/Honeycomb/New Relic), trace propagation, log-trace... |
+| `/optimize-decision` | Formulate a decision as a Linear Program (LP), Mixed-Integer Program (MIP), or Constraint Program (CP-SAT) using OR-Tools or Pyomo. |
+| `/paper-pipeline` | Reproducible research-paper scaffold for NeurIPS / ACL / IEEE (and friends). |
+| `/paper-trade` | Realistic-execution paper-trading harness. |
+| `/postmortem` | Blameless postmortem facilitator. |
+| `/pricing-experiment` | Pricing experiment designer. |
+| `/product-ci` | Derive brand values from the product and map them to design tokens (colors, typography, motion, spacing). |
+| `/prompt-engineering` | Systematic prompt engineering: from a task spec, generates 6-8 prompt variants spanning CoT / few-shot / role-play / structured-output / decomposition / self-critique,... |
+| `/prosody-control` | Expression / tone / accent / cadence control surface for a TTS system. |
+| `/purple-exercise` | Purple-team exercise orchestrator. |
+| `/rag-design` | End-to-end RAG design: data-source survey, chunking strategy, embedding model, vector store, retrieval algorithm, reranker, eval plan. |
+| `/recipe` | Document YOUR built thing as a reproducible cookbook: INGREDIENTS.md, STEPS.md, TECHNIQUES.md, PLATING.md. |
+| `/recon` | Passive-then-active reconnaissance orchestrator for AUTHORIZED engagements only. |
+| `/redteam-c2` | Short-lived, scope-gated C2 infrastructure provisioning for AUTHORIZED red-team engagements only. |
+| `/reverse-engineer` | Authorized adversarial RE. |
+| `/risk-engine` | Risk engine designer for algorithmic strategies. |
+| `/runway` | Burn + runway + hire-cost scenario modeler. |
+| `/security-training` | Project-specific security training generator. |
+| `/service-catalog` | One-time scaffolding of a Backstage-style service catalog in markdown. |
+| `/service-mesh` | Decide whether a service mesh actually helps, and if so, generate config for Istio, Linkerd, or Consul Connect. |
+| `/shared-lib-bump` | Cascading version-bump PRs across every detected consumer of a shared lib. |
+| `/siem-tune` | SIEM rule fidelity tuning. |
+| `/sign-linguistics` | Per-sign-language linguistic catalog compiler. |
+| `/sign-text` | Bidirectional text↔sign translation pipeline design. |
+| `/sim-calibrate` | Calibration workflow for economic simulators. |
+| `/simulate` | Build a discrete-event or Monte-Carlo simulation of a system from a description. |
+| `/soar-playbook` | SOAR playbook generation. |
+| `/sre-slo` | Define SLIs, SLOs, and error budgets per service — as engineering contracts, not marketing copy. |
+| `/strategy-design` | Strategy design framework for algorithmic trading. |
+| `/strategy-eval` | Multi-metric strategy evaluation scorecard. |
+| `/team-velocity` | Throughput, cycle-time, review-latency, and bug-rate trend report for the last 12 weeks. |
+| `/tech-debt-register` | ROI-sorted tech-debt register. |
+| `/threat-hunt` | Hypothesis-driven threat hunting. |
+| `/threat-intel` | Threat intelligence ingestion + relevance filter. |
+| `/threat-model-evolve` | Living STRIDE threat model that updates on /ship. |
+| `/transpose` | Interactive bridge-planning skill. |
+| `/tts-design` | TTS architecture + training plan. |
+| `/ux-pipeline` | End-to-end stakeholder-validated UX/UI pipeline. |
+| `/ux-workflows` | Produce docs/WORKFLOWS.md — one section per persona, each with entry points, 3-7 core end-to-end workflows (action→screen→outcome tuples), cross-persona |
+| `/vendor-risk` | Third-party risk inventory + scoring. |
+| `/vendor-score` | Deep single-vendor evaluation across 12 dimensions: security posture, SLA, pricing, API quality, DX, data portability, support, ecosystem, financial health, compliance, roadmap... |
+| `/voice-clone` | End-to-end voice cloning workflow with consent + watermark guardrails. |
+| `/voice-eval` | Multi-metric TTS / voice-clone eval harness. |
+| `/workspace-sync` | Sync shared workspace configs (tsconfig, eslint, prettier, Renovate, GH Actions, .editorconfig, .nvmrc) across consuming repos via Renovate-style PRs. |

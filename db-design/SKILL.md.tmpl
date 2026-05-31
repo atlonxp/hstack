@@ -89,6 +89,7 @@ from the project files.**
 ### Step 0: Detect engine + schema
 
 ```bash
+setopt +o nomatch 2>/dev/null || true  # zsh: let unmatched globs pass literally
 # Try to detect engine from common config locations
 ENGINE=""
 grep -lE "postgres|postgresql|pg_" --include="*.json" --include="*.yaml" --include="*.yml" --include="*.toml" --include=".env*" -r . 2>/dev/null | head -3 && ENGINE="postgres"

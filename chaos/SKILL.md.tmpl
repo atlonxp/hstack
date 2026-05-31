@@ -93,6 +93,7 @@ Persist to `CLAUDE.md` under `## Chaos Engineering`.
 ### Step 1: Verify prerequisites
 
 ```bash
+setopt +o nomatch 2>/dev/null || true  # zsh: let unmatched globs pass literally
 # Dep graph exists?
 ls docs/dep-graph.* deploy/dep-graph.* 2>/dev/null
 

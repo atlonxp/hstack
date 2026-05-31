@@ -96,6 +96,7 @@ Persist to `CLAUDE.md` under `## Observability`.
 ### Step 1: Detect the current state
 
 ```bash
+setopt +o nomatch 2>/dev/null || true  # zsh: let unmatched globs pass literally
 # Already using OTel?
 grep -r "@opentelemetry" package.json 2>/dev/null
 grep -r "opentelemetry" requirements.txt go.mod Gemfile pom.xml 2>/dev/null

@@ -41,6 +41,7 @@ not a product.
 ## Setup
 
 ```bash
+setopt +o nomatch 2>/dev/null || true  # zsh: let unmatched globs pass literally
 test -d mockup/screens || { echo "mockup/screens/ missing — run /mockup first"; exit 1; }
 test -f docs/WORKFLOWS.md || { echo "docs/WORKFLOWS.md missing — run /ux-workflows first"; exit 1; }
 ls mockup/data/*.json >/dev/null 2>&1 || { echo "mockup/data/*.json missing — run /mockup first"; exit 1; }

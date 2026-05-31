@@ -5,6 +5,7 @@ Detailed guides for every gstack skill — philosophy, workflow, and examples.
 | Skill | Your specialist | What they do |
 |-------|----------------|--------------|
 | [`/office-hours`](#office-hours) | **YC Office Hours** | Start here. Six forcing questions that reframe your product before you write code. Pushes back on your framing, challenges premises, generates implementation alternatives. Design doc feeds into every downstream skill. |
+| [`/spec`](#spec) | **Spec Author** | Turn vague intent into a precise, executable spec in five phases. Backlog-ready output that downstream skills can pick up. Optional agent spawn at the end. |
 | [`/plan-ceo-review`](#plan-ceo-review) | **CEO / Founder** | Rethink the problem. Find the 10-star product hiding inside the request. Four modes: Expansion, Selective Expansion, Hold Scope, Reduction. |
 | [`/plan-eng-review`](#plan-eng-review) | **Eng Manager** | Lock in architecture, data flow, diagrams, edge cases, and tests. Forces hidden assumptions into the open. |
 | [`/plan-design-review`](#plan-design-review) | **Senior Designer** | Interactive plan-mode design review. Rates each dimension 0-10, explains what a 10 looks like, fixes the plan. Works in plan mode. |
@@ -32,6 +33,7 @@ Detailed guides for every gstack skill — philosophy, workflow, and examples.
 | [`/plan-devex-review`](#plan-devex-review) | **DX Reviewer** | Plan-stage DX review. TTHW (time-to-hello-world), magical moments, friction points, persona traces. Three modes: Expansion, Polish, Triage. |
 | [`/devex-review`](#devex-review) | **DX Reviewer (live)** | Live developer experience audit. Walks the actual onboarding flow, measures TTHW, catches the docs lies. |
 | [`/plan-tune`](#plan-tune) | **Question Tuner** | Self-tune AskUserQuestion sensitivity per question. Mark questions as never-ask, always-ask, or only-for-one-way. |
+| [`/spec`](#spec) | **Spec Author** | Turn vague intent into a precise, executable spec in five phases. Files a GitHub issue, optionally spawns a Claude Code agent in a fresh worktree, and lets `/ship` close the source issue on merge. |
 | [`/learn`](#learn) | **Memory** | Manage what gstack learned across sessions. Review, search, prune, and export project-specific patterns and preferences. |
 | [`/context-save`](#context-save) | **Save State** | Save working context (git state, decisions, remaining work) so any future session can resume. |
 | [`/context-restore`](#context-restore) | **Restore State** | Resume from a saved context, even across Conductor workspace handoffs. |
@@ -59,6 +61,115 @@ Detailed guides for every gstack skill — philosophy, workflow, and examples.
 | [`/ios-design-review`](#ios-design-review) | **iOS Designer's Eye** | 10-dimension Apple HIG audit on a real iPhone. Rates each screen, says what would make it a 10. |
 | [`/ios-clean`](#ios-clean) | **iOS Bridge Cleanup** | Convenience wrapper to strip DebugBridge SPM + `#if DEBUG` wiring. The structural Release-build guard is in Package.swift + CI; this skill is for guided manual removals. |
 | [`/ios-sync`](#ios-sync) | **iOS Bridge Resync** | Regenerate accessors and Swift templates against the latest upstream gstack. Run when you add new `@Observable` classes or upgrade gstack. |
+| `/accessibility-audit` | hstack | WCAG 2.2 AA conformance audit augmented with assistive-tech behavioral testing. |
+| `/adr` | hstack | Architecture Decision Record generator + linter (Michael Nygard format). |
+| `/agent-design` | hstack | Designs an LLM agent as a typed state machine, not an ad-hoc while-loop. |
+| `/agent-ux-review` | hstack | Reviews an AI feature's interaction flow against agent-UX principles — predictability, repair, attention budget, surfaced uncertainty, escape hatches, mode visibility. |
+| `/api-contract-test` | hstack | Generate consumer-driven contract tests (Pact, or equivalent) from an OpenAPI / GraphQL / Protobuf spec, wire them into CI for both producer and consumer sides, and maintain a... |
+| `/api-design` | hstack | Design or audit an API surface. |
+| `/aso` | hstack | App Store Optimization. |
+| `/auto-guard` | hstack | Automatic security + QA hooks for git events. |
+| `/avatar-design` | hstack | Full avatar architecture designer. |
+| `/avatar-sign` | hstack | Sign-language-performing avatar pipeline. |
+| `/backtest` | hstack | Point-in-time, look-ahead-free backtest harness for algorithmic strategies. |
+| `/behavioral-experiment` | hstack | Design a behavioral A/B / multi-arm experiment with proper power analysis, randomization strategy, primary + guardrail metrics, **pre- registered analysis plan**... |
+| `/biases-audit` | hstack | Defensive cognitive-bias audit. |
+| `/blueprint` | hstack | Structured study of an external target (product, paper, codebase, app, or SDK/API) that produces a domain-agnostic BLUEPRINT.md plus |
+| `/board-deck` | hstack | Board deck generator following the YC-style template — Traction, Financials, Product, Team, Risks, Asks. |
+| `/bug-bounty-triage` | hstack | Bug-bounty report triage pipeline. |
+| `/buy-vs-build` | hstack | Vendor-vs-build scorecard. |
+| `/c4-diagram` | hstack | Generates the four C4 model levels (System Context, Container, Component, Code) from the actual codebase, not whiteboard memory. |
+| `/chaos` | hstack | Design and run chaos engineering experiments per dependency-graph node. |
+| `/clone-and-twist` | hstack | Build the transposed version of a studied mechanism. |
+| `/cognitive-load-audit` | hstack | Quantifies cognitive load on a surface using Sweller's intrinsic / extraneous / germane split. |
+| `/collaboration-pattern` | hstack | Picks the right human-AI collaboration pattern (pair, supervised, delegated, autonomous) for a given task, with rationale across skill-level fit, error cost,... |
+| `/compliance-audit` | hstack | Framework-aware compliance audit (SOC 2 Type II / ISO 27001 / HIPAA / PCI-DSS v4 / GDPR / CCPA). |
+| `/cost-optimize` | hstack | FinOps analysis for AWS, GCP, and Azure. |
+| `/counterfactual` | hstack | Counterfactual analysis framework for economic simulators. |
+| `/cross-repo-pr` | hstack | Atomic PR trains across N repos that must merge in lockstep. |
+| `/customer-interview` | hstack | Customer interview workflow — two modes. |
+| `/db-design` | hstack | Design a new database schema or audit an existing one. |
+| `/db-migration` | hstack | Zero-downtime database migration planner. |
+| `/db-perf` | hstack | EXPLAIN-driven slow-query diagnosis and index advisor. |
+| `/dep-graph` | hstack | Builds a cross-service dependency graph from imports, route calls, and IaC topology. |
+| `/detect-engineering` | hstack | Detection rule engineering. |
+| `/econ-sim` | hstack | Designs a runnable economic simulator from a research question. |
+| `/eval-harness` | hstack | Generates a per-feature eval harness (dataset, metrics, baselines, CI hook) for any LLM/AI feature. |
+| `/event-design` | hstack | Design event/message schemas with explicit versioning and compatibility policy for Kafka, NATS, EventBridge, SQS, RabbitMQ, or Pub/Sub. |
+| `/event-stream` | hstack | Designs a real-world event ingestion pipeline for an economic simulator with observability-time modeling — agents react to events when the information would have been... |
+| `/explanation-design` | hstack | Designs explanation surfaces for AI features with the goal of trust calibration, not tutorial. |
+| `/exploit-dev` | hstack | Scaffolds an authorized exploit-development project (CTF or engagement) for binary pwn, web, mobile, or IoT firmware targets. |
+| `/expression-synth` | hstack | Facial expression synthesis designer. |
+| `/finetune` | hstack | Generates a fine-tuning project — data prep, format conversion (sharegpt/alpaca/dpo), recipe config (LoRA / QLoRA / full / DPO / ORPO), eval baseline before+after,... |
+| `/forensics` | hstack | DFIR (digital forensics + incident response). |
+| `/game-theory-analysis` | hstack | Model a strategic situation as a formal game (normal form for one-shot, extensive form for sequential). |
+| `/gesture-synth` | hstack | Speech-to-gesture synthesis designer. |
+| `/hiring-loop` | hstack | Full hiring kit generator from a role description. |
+| `/honeypot` | hstack | Deception deployment. |
+| `/iac-review` | hstack | Pre-apply review of Terraform / Pulumi / AWS CDK diffs. |
+| `/incentive-design` | hstack | Design an incentive system (pricing tier, referral program, growth loop, OKR / commission plan, in-app reward) using mechanism design plus behavioral economics —... |
+| `/incident-response` | hstack | Generates an incident response runbook tuned to Hall's stack (web / mobile / API), and runs in live war-room mode during an actual incident. |
+| `/indoor-nav` | hstack | Indoor positioning + accessibility-aware routing design. |
+| `/interactive-mockup` | hstack | Wire the static mockup into a clickable interactive prototype. |
+| `/investor-update` | hstack | Monthly investor update generator. |
+| `/k8s-design` | hstack | Generate production-grade Kubernetes manifests, Helm charts, or Kustomize overlays for a workload. |
+| `/kpi-dashboard` | hstack | KPI dashboard with weekly cadence. |
+| `/lip-sync` | hstack | Lip-sync model selection + training/inference pipeline designer. |
+| `/log-analyze` | hstack | Large-log triage with polars-backed analysis. |
+| `/mental-model-trace` | hstack | Diffs the user's mental model of a feature against the real system model. |
+| `/migration-plan` | hstack | Given a from→to migration (DB engine swap, framework upgrade, language port, region move, monolith→services), picks the safest pattern (strangler fig, parallel run, blue-green,... |
+| `/mobile-build` | hstack | Mobile feature scaffolding across React Native, Flutter, native iOS (Swift), and native Android (Kotlin). |
+| `/mobile-perf` | hstack | Mobile performance profiling: cold-start time, time-to-interactive, FPS during scrolling, jank rate, memory under load. |
+| `/mobile-qa` | hstack | Mobile QA flow generation + execution across Maestro, Detox, XCUITest, and Espresso. |
+| `/mobile-release` | hstack | End-to-end TestFlight / Play Internal release pipeline. |
+| `/mockup` | hstack | Generate role-based, multi-screen, clickable mockup pages from docs/WORKFLOWS.md. |
+| `/monorepo-graph` | hstack | Unified projection of a monorepo's project graph. |
+| `/multi-repo-refactor` | hstack | Coordinated refactor across N repos. |
+| `/multi-sign` | hstack | Multi-sign-language platform architecture. |
+| `/observability` | hstack | Generate an OpenTelemetry-first observability stack: per-language SDK setup, exporters (Prometheus + Tempo + Loki, or Datadog/Honeycomb/New Relic), trace propagation, log-trace... |
+| `/optimize-decision` | hstack | Formulate a decision as a Linear Program (LP), Mixed-Integer Program (MIP), or Constraint Program (CP-SAT) using OR-Tools or Pyomo. |
+| `/paper-pipeline` | hstack | Reproducible research-paper scaffold for NeurIPS / ACL / IEEE (and friends). |
+| `/paper-trade` | hstack | Realistic-execution paper-trading harness. |
+| `/postmortem` | hstack | Blameless postmortem facilitator. |
+| `/pricing-experiment` | hstack | Pricing experiment designer. |
+| `/product-ci` | hstack | Derive brand values from the product and map them to design tokens (colors, typography, motion, spacing). |
+| `/prompt-engineering` | hstack | Systematic prompt engineering: from a task spec, generates 6-8 prompt variants spanning CoT / few-shot / role-play / structured-output / decomposition / self-critique,... |
+| `/prosody-control` | hstack | Expression / tone / accent / cadence control surface for a TTS system. |
+| `/purple-exercise` | hstack | Purple-team exercise orchestrator. |
+| `/rag-design` | hstack | End-to-end RAG design: data-source survey, chunking strategy, embedding model, vector store, retrieval algorithm, reranker, eval plan. |
+| `/recipe` | hstack | Document YOUR built thing as a reproducible cookbook: INGREDIENTS.md, STEPS.md, TECHNIQUES.md, PLATING.md. |
+| `/recon` | hstack | Passive-then-active reconnaissance orchestrator for AUTHORIZED engagements only. |
+| `/redteam-c2` | hstack | Short-lived, scope-gated C2 infrastructure provisioning for AUTHORIZED red-team engagements only. |
+| `/reverse-engineer` | hstack | Authorized adversarial RE. |
+| `/risk-engine` | hstack | Risk engine designer for algorithmic strategies. |
+| `/runway` | hstack | Burn + runway + hire-cost scenario modeler. |
+| `/security-training` | hstack | Project-specific security training generator. |
+| `/service-catalog` | hstack | One-time scaffolding of a Backstage-style service catalog in markdown. |
+| `/service-mesh` | hstack | Decide whether a service mesh actually helps, and if so, generate config for Istio, Linkerd, or Consul Connect. |
+| `/shared-lib-bump` | hstack | Cascading version-bump PRs across every detected consumer of a shared lib. |
+| `/siem-tune` | hstack | SIEM rule fidelity tuning. |
+| `/sign-linguistics` | hstack | Per-sign-language linguistic catalog compiler. |
+| `/sign-text` | hstack | Bidirectional text↔sign translation pipeline design. |
+| `/sim-calibrate` | hstack | Calibration workflow for economic simulators. |
+| `/simulate` | hstack | Build a discrete-event or Monte-Carlo simulation of a system from a description. |
+| `/soar-playbook` | hstack | SOAR playbook generation. |
+| `/sre-slo` | hstack | Define SLIs, SLOs, and error budgets per service — as engineering contracts, not marketing copy. |
+| `/strategy-design` | hstack | Strategy design framework for algorithmic trading. |
+| `/strategy-eval` | hstack | Multi-metric strategy evaluation scorecard. |
+| `/team-velocity` | hstack | Throughput, cycle-time, review-latency, and bug-rate trend report for the last 12 weeks. |
+| `/tech-debt-register` | hstack | ROI-sorted tech-debt register. |
+| `/threat-hunt` | hstack | Hypothesis-driven threat hunting. |
+| `/threat-intel` | hstack | Threat intelligence ingestion + relevance filter. |
+| `/threat-model-evolve` | hstack | Living STRIDE threat model that updates on /ship. |
+| `/transpose` | hstack | Interactive bridge-planning skill. |
+| `/tts-design` | hstack | TTS architecture + training plan. |
+| `/ux-pipeline` | hstack | End-to-end stakeholder-validated UX/UI pipeline. |
+| `/ux-workflows` | hstack | Produce docs/WORKFLOWS.md — one section per persona, each with entry points, 3-7 core end-to-end workflows (action→screen→outcome tuples), cross-persona |
+| `/vendor-risk` | hstack | Third-party risk inventory + scoring. |
+| `/vendor-score` | hstack | Deep single-vendor evaluation across 12 dimensions: security posture, SLA, pricing, API quality, DX, data portability, support, ecosystem, financial health, compliance, roadmap... |
+| `/voice-clone` | hstack | End-to-end voice cloning workflow with consent + watermark guardrails. |
+| `/voice-eval` | hstack | Multi-metric TTS / voice-clone eval harness. |
+| `/workspace-sync` | hstack | Sync shared workspace configs (tsconfig, eslint, prettier, Renovate, GH Actions, .editorconfig, .nvmrc) across consuming repos via Renovate-style PRs. |
 
 ---
 

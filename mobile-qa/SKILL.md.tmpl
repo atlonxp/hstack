@@ -99,6 +99,7 @@ they want Detox because the team already has Detox infrastructure).
 ### Step 1: Mode selection
 
 ```bash
+setopt +o nomatch 2>/dev/null || true  # zsh: let unmatched globs pass literally
 # Author mode if the user named a NEW screen; run mode if flows already exist
 ls mobile/qa/flows/*.yaml mobile/qa/flows/*.test.js mobile/qa/flows/*.swift mobile/qa/flows/*.kt 2>/dev/null
 ```

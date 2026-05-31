@@ -181,7 +181,7 @@ mkdir -p docs/architecture
 
 # Mermaid lint — render via mermaid-cli if available, else syntax check only
 if command -v mmdc >/dev/null 2>&1; then
-  for f in docs/architecture/*.mmd; do
+  for f in $(find docs/architecture -maxdepth 1 -name '*.mmd' 2>/dev/null); do
     mmdc -i "$f" -o "${f%.mmd}.svg" 2>&1 | head -5
   done
 fi

@@ -42,6 +42,10 @@ const FORBIDDEN_ARCHETYPE_NAMES = [
 const ALLOWED_SKILLS_WITH_V0_VOCAB = new Set([
   'plan-tune',
   'office-hours',
+  // econ-sim uses "risk_tolerance" as a household-agent state variable (a real
+  // economics term in agent-based modeling), which collides with the V0 5D
+  // dimension name. It is domain vocabulary, not V0 psychographic machinery.
+  'econ-sim',
 ]);
 
 function discoverTier2PlusSkillMds(): Array<{ skillName: string; mdPath: string }> {

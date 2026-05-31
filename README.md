@@ -488,6 +488,7 @@ Claude: [per-person breakdowns, shipping streaks, test health trends]
 | Get a fully reviewed plan fast | `/autoplan-full` (idea → plan) or `/autoplan` (plan → reviewed plan) |
 | Review each plan step with full control | `/plan-ceo-review` → `/plan-design-review` → `/plan-ux-review` → `/plan-devex-review` → `/plan-eng-review` |
 | Tune a plan's voice/tone before building | `/plan-tune` |
+| Turn vague intent into a precise, executable spec | `/spec` (5 phases, dedupes vs issues, optional `--execute` agent spawn) |
 | Explore visual design directions | `/design-shotgun` → `/design-html` |
 | Build a design system from scratch | `/design-consultation` |
 | Build from an approved plan | `/autobuild` |
@@ -624,6 +625,16 @@ Feature-build (opposite direction from UX audit — build what's missing, not fi
 | `/retro` | **Eng Manager** | Team-aware weekly retro. Per-person breakdowns, shipping streaks, test health trends, growth opportunities. `/retro global` runs across all your projects and AI tools (Claude Code, Codex, Gemini). |
 | `/browse` | **QA Engineer** | Give the agent eyes. Real Chromium browser, real clicks, real screenshots. ~100ms per command. `$B connect` launches your real Chrome as a headed window — watch every action live. |
 | `/setup-browser-cookies` | **Session Manager** | Import cookies from your real browser (Chrome, Arc, Brave, Edge) into the headless session. Test authenticated pages. |
+| `/spec` | **Spec Author** | Turn vague intent into a precise, executable spec in five phases (why, scope, technical with mandatory code-reading, draft, file). Codex quality gate before file (blocks below 7/10), fail-closed secret redaction, dedupe against existing issues, archive to `$GSTACK_STATE_ROOT/projects/$SLUG/specs/` for team-corpus recall. `--execute` spawns `claude -p` in a fresh worktree; `/ship` auto-closes the source issue on merge. Plan-mode aware. |
+
+### Which review should I use?
+
+| Building for... | Plan stage (before code) | Live audit (after shipping) |
+|-----------------|--------------------------|----------------------------|
+| **End users** (UI, web app, mobile) | `/plan-design-review` | `/design-review` |
+| **Developers** (API, CLI, SDK, docs) | `/plan-devex-review` | `/devex-review` |
+| **Architecture** (data flow, perf, tests) | `/plan-eng-review` | `/review` |
+| **All of the above** | `/autoplan` (runs CEO → design → eng → DX, auto-detects which apply) | — |
 
 ### Power tools
 

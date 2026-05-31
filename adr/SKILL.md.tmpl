@@ -77,6 +77,7 @@ If any input is missing, AskUserQuestion before writing.
 ### Step 0: Locate or scaffold `docs/adr/`
 
 ```bash
+setopt +o nomatch 2>/dev/null || true  # zsh: let unmatched globs pass literally
 mkdir -p docs/adr
 ls docs/adr/*.md 2>/dev/null | wc -l
 ```

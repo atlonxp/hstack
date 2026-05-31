@@ -61,6 +61,7 @@ yours probably hasn't moved in 6 months. This skill fixes that.
 Detect the platforms the app ships on, plus the package identifiers.
 
 ```bash
+setopt +o nomatch 2>/dev/null || true  # zsh: let unmatched globs pass literally
 # iOS bundle ID — Info.plist or ExportOptions
 find . -name "Info.plist" -not -path "*/node_modules/*" -not -path "*/Pods/*" 2>/dev/null | head -3
 grep -r "PRODUCT_BUNDLE_IDENTIFIER" --include="*.pbxproj" 2>/dev/null | head -1

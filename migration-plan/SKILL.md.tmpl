@@ -220,6 +220,7 @@ For each phase, define:
 ### Step 4: Capacity sanity check
 
 ```bash
+setopt +o nomatch 2>/dev/null || true  # zsh: let unmatched globs pass literally
 # Optional: read team size from catalog
 [ -f docs/services/INDEX.md ] && grep -A2 "team_size:" docs/services/*.md 2>/dev/null | head -20
 ```

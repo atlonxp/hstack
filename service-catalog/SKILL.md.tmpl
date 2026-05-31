@@ -131,6 +131,7 @@ incidents, links to design docs.
 ### Step 0: Detect existing catalog and current services
 
 ```bash
+setopt +o nomatch 2>/dev/null || true  # zsh: let unmatched globs pass literally
 # Existing catalog
 [ -d docs/services ] && ls docs/services/*.md 2>/dev/null | wc -l | xargs echo "Existing entries:"
 

@@ -152,6 +152,7 @@ If `compliance/frameworks/{framework}.yaml` exists, prefer it (it's the canonica
 For each control, the auditor will ask "show me." Collect evidence before scoring:
 
 ```bash
+setopt +o nomatch 2>/dev/null || true  # zsh: let unmatched globs pass literally
 # Access control evidence
 find . -type f \( -name "iam-*.yaml" -o -name "*.tf" -o -name "rbac*.yaml" \) 2>/dev/null
 ls .github/CODEOWNERS 2>/dev/null

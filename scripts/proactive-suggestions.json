@@ -1,0 +1,922 @@
+{
+  "$schema": "https://gstack.dev/schemas/proactive-suggestions.json",
+  "catalog_mode": "trim",
+  "note": "Routing / voice-trigger prose extracted from SKILL.md frontmatter descriptions during catalog trim. Loaded on demand when routing guidance is needed.",
+  "skills": {
+    "accessibility-audit": {
+      "lead": "[Accessibility AI] WCAG 2.2 AA conformance audit augmented with assistive-tech behavioral testing. Runs VoiceOver / TalkBack / NVDA / JAWS",
+      "routing": "via /browse\nautomation, validates keyboard-only flows, checks colour contrast and\ncognitive load, and walks personas (blind, low-vision, deaf,\nmotor-impaired, cognitive) through real workflows on the live site. Outputs\na conformance level AND an assistive-tech experience score — a site can\npass WCAG and still be unusable for AT users, and this skill catches both.\nUse when asked to \"accessibility audit\", \"WCAG audit\", \"a11y\", \"screen\nreader test\", \"is this accessible?\", or \"assistive tech review\".",
+      "voice_line": null
+    },
+    "adr": {
+      "lead": "[CTO Strategy] Architecture Decision Record generator + linter (Michael Nygard format).",
+      "routing": "Captures architectural decisions as numbered, immutable ADRs so the team remembers WHY a\nchoice was made six months later. Lints the existing ADR set for stale Status fields,\nconflicting decisions, missing context, and broken supersession chains. Output goes to\n`docs/adr/{NNNN}-{slug}.md`. Use when: \"write an ADR\", \"document this decision\", \"ADR\nlint\", \"architecture decision record\", \"why did we choose X\".",
+      "voice_line": "Voice triggers (speech-to-text aliases): \"write an adr\", \"architecture decision record\", \"adr lint\"."
+    },
+    "agent-design": {
+      "lead": "[AI Engineering / Research] Designs an LLM agent as a typed state machine, not an ad-hoc while-loop.",
+      "routing": "Pick a pattern (ReAct / Plan-Solve / Reflexion / Anthropic-style\nsub-agents), declare tools, prompts, stopping criteria, and an eval plan.\nAlso audits an existing agent for infinite loops, hallucinated tools, lost\nintent. Outputs agents/{slug}/{state-machine.ts,tools.ts,prompts/,EVAL.md}.\nUse when: \"design an agent\", \"build a tool-using LLM\", \"audit my agent loop\",\n\"why does the agent keep failing\".",
+      "voice_line": "Voice triggers (speech-to-text aliases): \"agent design\", \"design an agent\", \"audit my agent\"."
+    },
+    "agent-ux-review": {
+      "lead": "[Cognitive Computing / HMC] Reviews an AI feature's interaction flow against agent-UX principles — predictability, repair, attention budget, surfaced uncertainty, escape hatches, mode visibility.",
+      "routing": "Rates each principle 0-10 with concrete examples and edits\nthe plan or component spec to close gaps. Complement to /plan-ux-review, which covers\nnon-AI workflows. Surfaces tradeoffs (e.g., predictability vs. usefulness, repair\naffordances vs. attention budget) rather than enforcing one style.\nUse when asked to \"review the agent UX\", \"AI feature UX review\", \"agent interaction\nreview\", \"is this AI feature usable\", or \"trust UX for this AI feature\".",
+      "voice_line": null
+    },
+    "api-contract-test": {
+      "lead": "[API/DB] Generate consumer-driven contract tests (Pact, or equivalent) from an OpenAPI / GraphQL / Protobuf spec, wire them into CI for both producer and consumer sides, and maintain a...",
+      "routing": "Catches the\n\"frontend ships expecting one shape, backend ships another\" class of bug before\nintegration. Use when: \"contract tests\", \"pact tests\", \"consumer driven contracts\",\n\"api compatibility matrix\", or \"did the API break\".",
+      "voice_line": null
+    },
+    "api-design": {
+      "lead": "[API/DB] Design or audit an API surface.",
+      "routing": "Picks REST / GraphQL / gRPC based on use case\nand consumer profile, generates OpenAPI 3.1 / GraphQL SDL / Protocol Buffers, and\nvalidates against a chosen style guide (Stripe API Design Guide is the default).\nReviewer mode walks an existing surface, catches breaking changes, scores consistency,\nand produces a remediation plan. Use when: \"design this API\", \"audit our API\",\n\"REST vs GraphQL\", \"generate OpenAPI\", \"API style guide\", or \"is this a breaking\nchange\".",
+      "voice_line": null
+    },
+    "aso": {
+      "lead": "[Mobile] App Store Optimization.",
+      "routing": "Reads the current App Store / Play Store listing,\nanalyzes the top-10 competitor listings in the same category, and proposes updates to\ntitle, subtitle, keywords, promo text, and screenshots. Generates updated screenshot\nvariants via /app-store-screenshots. Writes a monthly proposal under mobile/aso/ with\na clean diff against the current live listing. Use when: \"ASO\", \"app store\noptimization\", \"improve our store listing\", \"keyword research\", \"competitor store\nlistings\", or \"refresh screenshots\".",
+      "voice_line": null
+    },
+    "auto-feature-build": {
+      "lead": "[Build & Autonomy] Single-persona feature builder for gstack.",
+      "routing": "Auto-discovers MISSING workflows for one persona,\nplans and builds each feature in dependency order, verifies as the persona, and\nruns autoaudit + auto-ux-audit at the end. Orchestrates office-hours, autoplan,\nautobuild, verify-loop, autoaudit, and auto-ux-audit on a queue of features.\nMirrors /auto-ux-audit on the build side: /auto-ux-audit fixes friction in\nexisting workflows, /auto-feature-build builds the workflows that don't exist yet.\nUse when asked to \"build missing features\", \"auto feature build\", \"build what the\npersona needs\", \"kickstart features for this persona\", or \"feature gap fill\".\nFor a single user-specified feature, use /feature-build. For all personas at once,\nuse /auto-feature-build-full.",
+      "voice_line": null
+    },
+    "auto-feature-build-full": {
+      "lead": "[Build & Autonomy] Full feature gap-fill across ALL personas for gstack.",
+      "routing": "Runs gap analysis per persona,\ndedups into a unified feature queue, builds each feature in dependency\norder, and re-verifies critical workflows for EVERY persona after each\nbuild (not just the feature's primary persona). Cross-persona regression\ndetection prevents fixes for one persona breaking another's flows.\nOrchestrates office-hours, autoplan, autobuild, verify-loop, autoaudit,\nand auto-ux-audit-full at the end. Tier 3 of the feature-build family.\nUse when asked to \"build all missing features\", \"feature build full\",\n\"auto feature build full\", \"kickstart for every persona\", or\n\"complete feature gap fill\". For single-persona, use /auto-feature-build.\nFor one feature, use /feature-build.",
+      "voice_line": null
+    },
+    "auto-guard": {
+      "lead": "[Tools] Automatic security + QA hooks for git events.",
+      "routing": "Installs Claude Code\nhooks that run a lightweight /cso scan on staged files before each commit\n(OWASP Top 10, offline, <5s) and an async /qa-only smoke test after each\npush. Critical secrets block the commit by default; everything else warns.\nUse when asked to \"install auto-guard\", \"auto security check\", \"pre-commit\nscan\", \"qa on push\", or \"automate security hooks\".",
+      "voice_line": "Voice triggers (speech-to-text aliases): \"auto guard\", \"install hooks\", \"pre commit security\"."
+    },
+    "auto-ux-audit": {
+      "lead": "[UX Audit] Single-persona UX audit with auto-fix.",
+      "routing": "Runs /ux-audit for one specified persona,\nthen fixes all friction points, dead ends, and UX gaps found in the source code.\nEach fix gets an atomic commit and browser re-verification. Use when asked to\n\"fix the UX for admins\", \"auto ux audit\", \"audit and fix persona workflow\",\nor \"fix the new user experience\". For report-only mode, use /ux-audit.\nFor all personas at once, use /auto-ux-audit-full.",
+      "voice_line": null
+    },
+    "auto-ux-audit-full": {
+      "lead": "[UX Audit] Full UX audit across all personas with auto-fix.",
+      "routing": "Discovers or accepts personas,\nruns workflow simulations for each one on the live app, then iteratively fixes\nall friction points in source code. Orchestrates multiple /auto-ux-audit passes\nwith cross-persona consistency checks between rounds. Use when asked to\n\"full ux audit\", \"audit all user types\", \"fix ux for everyone\",\n\"auto ux audit full\", or \"complete workflow audit with fixes\".\nFor a single persona, use /auto-ux-audit. For report-only, use /ux-audit.",
+      "voice_line": null
+    },
+    "autoaudit": {
+      "lead": "[Code Review] Post-build verification pipeline for gstack — runs security audit (/cso) then code review (/review + /codex) sequentially.",
+      "routing": "Reports findings, auto-fixes obvious issues,\nflags ambiguous ones. No shipping — just verification.\nUse when asked to \"audit\", \"autoaudit\", \"verify the build\", \"security + review\",\n\"check my code\", or \"is this ready to ship?\".\nProactively suggest after the user finishes building from a plan, or after /autobuild.",
+      "voice_line": null
+    },
+    "autobuild": {
+      "lead": "[Build & Autonomy] Autonomous implementation for gstack from an approved plan.",
+      "routing": "Reads the plan file, enters plan mode,\nand builds everything with full autonomy. Clears conversation context to maximize\navailable tokens for implementation. Designed to run headless or with minimal supervision.\nUse when asked to \"autobuild\", \"build the plan\", \"implement it\", \"go build\",\n\"execute the plan\", or \"start building\".\nProactively suggest after /autoplan-full or /autoplan produces an approved plan.",
+      "voice_line": null
+    },
+    "autoplan": {
+      "lead": "[Code Review] Auto-review pipeline — reads the full CEO, design, eng, and DX review skills from disk and runs them sequentially with auto-decisions using 6 decision principles.",
+      "routing": "Surfaces\ntaste decisions (close approaches, borderline scope, codex disagreements) at a final\napproval gate. One command, fully reviewed plan out.\nUse when asked to \"auto review\", \"autoplan\", \"run all reviews\", \"review this plan\nautomatically\", or \"make the decisions for me\".\nProactively suggest when the user has a plan file and wants to run the full review\ngauntlet without answering 15-30 intermediate questions.",
+      "voice_line": "Voice triggers (speech-to-text aliases): \"auto plan\", \"automatic review\"."
+    },
+    "autoplan-full": {
+      "lead": "[Code Review] Full CTO planning pipeline for gstack — from raw idea to fully reviewed implementation plan.",
+      "routing": "Runs office-hours → discover → CEO review → UX review → DX review → design review → eng review\nsequentially. UX always runs; DX (developer experience) runs when the plan has API/CLI/SDK/\nplatform/docs surface; design runs when the plan has UI scope. Interactive in phases 1-2\n(framing + research), auto-decided in phases 3-6 using decision principles. Two gates:\nframing confirmation and final approval.\nUse when asked to \"full plan\", \"autoplan-full\", \"plan everything\", \"plan from scratch\",\n\"run the full pipeline\", or \"idea to plan\".\nProactively suggest when the user describes a new product idea or feature from scratch.",
+      "voice_line": null
+    },
+    "avatar-design": {
+      "lead": "[Avatar & Embodiment] Full avatar architecture designer.",
+      "routing": "Given a use case\n(real-time conversational / pre-rendered cinematic / sign-language performer\n/ scripted explainer), picks the face model (NeRF / Gaussian Splatting / 3DMM\n/ 2D portrait), body model (SMPL-X / VR avatar / 2D), animation driver,\nexpression vocabulary, voice (from Family L), and integration layer. Outputs\nbuild-ready ARCHITECTURE + SUBSYSTEMS + INTEGRATION + EVAL-HUMANNESS docs\nthe downstream avatar skills consume.\nUse when: \"design an avatar\", \"avatar architecture\", \"embodied agent stack\",\n\"build a virtual human\", \"talking-head system\", or \"sign-performing avatar\".",
+      "voice_line": "Voice triggers (speech-to-text aliases): \"design an avatar\", \"avatar architecture\", \"build a virtual human\", \"embodied agent\"."
+    },
+    "avatar-sign": {
+      "lead": "[Avatar & Embodiment] Sign-language-performing avatar pipeline.",
+      "routing": "Ingests gloss\n(via /sign-text) or text, maps to sign parameters (via /sign-linguistics) —\nhandshape + location + movement + non-manual features + prosody — and\nanimates the avatar with linguistic fidelity, not keyframe stiffness. Native-\ndeaf-reviewer loop is built in. Bridges Family P (Avatar) + Family L (Speech) +\nFamily O (Accessibility) + Family G (CV). Outputs PARAM-MAPPER + ANIMATION-\nPIPELINE + FLUENCY-EVAL docs and a rendered video.\nUse when: \"sign-performing avatar\", \"sign-language avatar\", \"TSL/ASL avatar\",\n\"gloss-to-animation\", or \"deaf-accessible avatar\".",
+      "voice_line": "Voice triggers (speech-to-text aliases): \"sign performing avatar\", \"sign language avatar\", \"tsl avatar\", \"asl avatar\", \"gloss to animation\"."
+    },
+    "backtest": {
+      "lead": "[FinTech / Algorithmic Trading] Point-in-time, look-ahead-free backtest harness for algorithmic strategies.",
+      "routing": "Enforces survivorship-corrected universes, realistic transaction\ncosts (commissions + slippage + market impact + borrow), realistic fills (LOB-aware or\nqueue-position model), walk-forward instead of in-sample / out-of-sample, and regime\nbreakdowns. Emits a backtest report a reviewer can replicate or attack — not a\nmarketing chart.\nUse when: \"backtest this strategy\", \"run a backtest\", \"walk-forward\", \"point-in-time\nbacktest\", \"look-ahead check\".",
+      "voice_line": "Voice triggers (speech-to-text aliases): \"backtest this strategy\", \"walk forward\", \"point in time backtest\"."
+    },
+    "behavioral-experiment": {
+      "lead": "[Operations Research / Behavioral] Design a behavioral A/B / multi-arm experiment with proper power analysis, randomization strategy, primary + guardrail metrics, **pre- registered analysis plan**...",
+      "routing": "Cites the underlying behavioral principle being tested (anchoring,\ndefault effects, framing, salience, loss aversion, social proof) and predicts the\nexpected effect size before the experiment runs.\nUse when: \"design an experiment\", \"A/B test\", \"behavioral experiment\", \"power\nanalysis\", \"pre-registration\", \"anti p-hacking experiment design\".",
+      "voice_line": null
+    },
+    "benchmark": {
+      "lead": "[Ship & Release] Performance regression detection using the browse daemon.",
+      "routing": "Establishes\nbaselines for page load times, Core Web Vitals, and resource sizes.\nCompares before/after on every PR. Tracks performance trends over time.\nUse when: \"performance\", \"benchmark\", \"page speed\", \"lighthouse\", \"web vitals\",\n\"bundle size\", \"load time\".",
+      "voice_line": "Voice triggers (speech-to-text aliases): \"speed test\", \"check performance\"."
+    },
+    "benchmark-models": {
+      "lead": "[Ship & Release] Cross-model benchmark for gstack skills.",
+      "routing": "Runs the same prompt through Claude,\nGPT (via Codex CLI), and Gemini side-by-side — compares latency, tokens, cost,\nand optionally quality via LLM judge. Answers \"which model is actually best\nfor this skill?\" with data instead of vibes. Separate from /benchmark, which\nmeasures web page performance. Use when: \"benchmark models\", \"compare models\",\n\"which model is best for X\", \"cross-model comparison\", \"model shootout\".",
+      "voice_line": "Voice triggers (speech-to-text aliases): \"compare models\", \"model shootout\", \"which model is best\"."
+    },
+    "biases-audit": {
+      "lead": "[Operations Research / Behavioral] Defensive cognitive-bias audit.",
+      "routing": "Reviews a decision\ndocument, UX surface, pricing page, hiring loop, or self-decision plan for\ntarget-specific cognitive biases — anchoring, decoy, halo, sunk-cost, confirmation,\navailability, narrative fallacy, in-group, framing, default, status-quo, planning\nfallacy. This is the DEFENSIVE twin to marketing-psychology — same primitives, but\nused to **detect and remove** manipulation, not deploy it. Produces a per-subject\nbias map with severity, evidence, and remediation.\nUse when: \"bias audit\", \"cognitive biases\", \"check for dark patterns\", \"audit this\ndecision\", \"check my reasoning\", \"audit the pricing page\", \"audit the hiring rubric\".",
+      "voice_line": null
+    },
+    "blueprint": {
+      "lead": "[Product Transposition] Structured study of an external target (product, paper, codebase, app, or SDK/API) that produces a domain-agnostic BLUEPRINT.md plus",
+      "routing": "evidence, notes, and citations.\nFive input modes (`--mode product|paper|code|app|api`) each use the right extractor.\nRefuses auth-walled targets without ownership declaration. Never copies verbatim\ntext, code, images, or branding — transformative analysis only. First step of Family J's\nconstructive reverse-engineering pipeline (`/blueprint → /transpose → /clone-and-twist → /recipe`).\nUse when asked to \"study this product\", \"blueprint this paper\", \"extract the mechanism\",\n\"RE this codebase\", \"study fingerspelling.xyz\", or \"blueprint supertonic-v3\".",
+      "voice_line": null
+    },
+    "board-deck": {
+      "lead": "[CEO Cockpit] Board deck generator following the YC-style template — Traction, Financials, Product, Team, Risks, Asks.",
+      "routing": "Each slide pulls from a named data source (Stripe, GitHub,\nLinear, HubSpot, prior retros). Hall reviews and edits the narrative, not the data.\nOutputs markdown + PPTX + PDF. Compresses 2-3 days of pre-board prep into ~2 hours.\nUse when: \"board deck\", \"board meeting prep\", \"draft the board deck\".",
+      "voice_line": "Voice triggers (speech-to-text aliases): \"board deck\", \"board prep\", \"draft the deck\"."
+    },
+    "browse": {
+      "lead": "[Browser & Web] Fast headless browser for QA testing and site dogfooding.",
+      "routing": "Navigate any URL, interact with\nelements, verify page state, diff before/after actions, take annotated screenshots, check\nresponsive layouts, test forms and uploads, handle dialogs, and assert element states.\n~100ms per command. Use when you need to test a feature, verify a deployment, dogfood a\nuser flow, or file a bug with evidence. Use when asked to \"open in browser\", \"test the\nsite\", \"take a screenshot\", or \"dogfood this\".",
+      "voice_line": null
+    },
+    "bug-bounty-triage": {
+      "lead": "[Red Team / RE] Bug-bounty report triage pipeline.",
+      "routing": "Reads a triaged report (HackerOne /\nBugcrowd / direct), validates reproduction in an isolated sandbox, scores severity\nusing CVSS v4.0, dedups against intel/iocs.jsonl + prior reports, drafts the internal\nfix ticket AND the reply-to-reporter. Two-sided posture: rigorous on impact, generous\non attribution and bounty pay. Refuses to test in production unless the report's program\nexplicitly allows it.\nUse when: \"bug bounty triage\", \"validate report\", \"cvss score\", \"h1 report\", \"bugcrowd\",\n\"dedup vulnerability\", \"reporter reply\", \"fix ticket draft\", \"security report intake\".",
+      "voice_line": "Voice triggers (speech-to-text aliases): \"triage bug bounty\", \"validate this report\", \"cvss score\"."
+    },
+    "buy-vs-build": {
+      "lead": "[CTO Strategy] Vendor-vs-build scorecard.",
+      "routing": "Hall names the capability needed; the skill\nresearches 3-5 candidate vendors via /discover, scores each on Cost, Lock-in, Fit,\nRisk, Time-to-value, and Team capacity. Recommends with rationale and a back-out\nplan. Output is a single decision doc at `decisions/buy-vs-build/{slug}.md` that\ncan be linked from an ADR. Use when: \"buy vs build\", \"should we use Stripe\", \"make\nor buy\", \"vendor decision\", \"is X worth building\".",
+      "voice_line": "Voice triggers (speech-to-text aliases): \"buy vs build\", \"make or buy\", \"should we use\"."
+    },
+    "c4-diagram": {
+      "lead": "[Chief Architect] Generates the four C4 model levels (System Context, Container, Component, Code) from the actual codebase, not whiteboard memory.",
+      "routing": "Uses imports,\nservice boundaries, IaC, and OpenAPI specs as ground truth. Emits Mermaid and\nstructurizr-DSL so diagrams can be rendered in docs or pushed to a Structurizr\nworkspace. Use when: \"C4 diagram\", \"architecture diagram\", \"draw the system\",\n\"context container component\", \"structurizr\", or \"generate architecture docs\".",
+      "voice_line": null
+    },
+    "canary": {
+      "lead": "[Ship & Release] Post-deploy canary monitoring.",
+      "routing": "Watches the live app for console errors,\nperformance regressions, and page failures using the browse daemon. Takes\nperiodic screenshots, compares against pre-deploy baselines, and alerts\non anomalies. Use when: \"monitor deploy\", \"canary\", \"post-deploy check\",\n\"watch production\", \"verify deploy\".",
+      "voice_line": null
+    },
+    "careful": {
+      "lead": "[Build & Autonomy] Safety guardrails for destructive commands.",
+      "routing": "Warns before rm -rf, DROP TABLE,\nforce-push, git reset --hard, kubectl delete, and similar destructive operations.\nUser can override each warning. Use when touching prod, debugging live systems,\nor working in a shared environment. Use when asked to \"be careful\", \"safety mode\",\n\"prod mode\", or \"careful mode\".",
+      "voice_line": null
+    },
+    "chaos": {
+      "lead": "[Cloud-Native] Design and run chaos engineering experiments per dependency-graph node.",
+      "routing": "Generates Litmus / Chaos Mesh experiments (pod kill, network delay,\nCPU stress, dep failure), defines steady-state hypotheses from existing SLOs,\nruns in staging, and measures actual SLO impact. Requires /sre-slo and a\ndependency graph. Use when: \"chaos engineering\", \"fault injection experiments\",\n\"game day\", \"resilience testing\", \"litmus\", \"chaos mesh\".",
+      "voice_line": null
+    },
+    "check-ci": {
+      "lead": "[Investigate & Security] One-shot CI status check for gstack.",
+      "routing": "Queries GitHub Actions (or GitLab CI) for recent\nworkflow runs, reports failures, and suggests fixes. No daemon — run manually\nwhen you want to know if CI is green.\nUse when asked to \"check ci\", \"ci status\", \"are builds passing\", \"check-ci\",\nor \"what's failing in CI\".",
+      "voice_line": null
+    },
+    "check-deps": {
+      "lead": "[Investigate & Security] One-shot dependency audit for gstack.",
+      "routing": "Runs npm audit, pip audit, or equivalent for the\ndetected package manager. Reports vulnerabilities by severity with fix\nrecommendations. No daemon — run manually when you want a dependency health check.\nUse when asked to \"check deps\", \"audit dependencies\", \"check-deps\",\n\"security audit deps\", or \"are my packages safe\".",
+      "voice_line": null
+    },
+    "check-issues": {
+      "lead": "[Investigate & Security] One-shot issue triage for gstack.",
+      "routing": "Queries GitHub Issues (or GitLab) for open issues,\ncategorizes by priority, and suggests which to tackle next. No daemon — run\nmanually when you want to see what needs attention.\nUse when asked to \"check issues\", \"triage issues\", \"check-issues\",\n\"what's open\", \"issue backlog\", or \"what should I work on next\".",
+      "voice_line": null
+    },
+    "clone-and-twist": {
+      "lead": "[Product Transposition] Build the transposed version of a studied mechanism.",
+      "routing": "Reads BLUEPRINT.md + TRANSPOSITION.md from studies/<slug>/, produces an\n/autoplan-full-compatible build plan with core skeleton, domain adapters,\nreplacement modules, and pre-stubbed proprietary slots — then hands off to\n/autobuild for execution. Writes mechanism-fidelity tests to\nevals/fidelity/<slug>.jsonl consumed by /eval-harness (S13). Refuses to operate\non a study without a non-trivial domain shift + ≥1 proprietary slot.\nMaintains BUILD-LOG.md linking commits back to blueprint sections.\nUse when asked to \"build the transposed version\", \"clone and twist this\",\n\"kick off the build from this transposition\", or \"scaffold the transposed code\".",
+      "voice_line": null
+    },
+    "codex": {
+      "lead": "[Code Review] OpenAI Codex CLI wrapper — three modes.",
+      "routing": "Code review: independent diff review via\ncodex review with pass/fail gate. Challenge: adversarial mode that tries to break\nyour code. Consult: ask codex anything with session continuity for follow-ups.\nThe \"200 IQ autistic developer\" second opinion. Use when asked to \"codex review\",\n\"codex challenge\", \"ask codex\", \"second opinion\", or \"consult codex\".",
+      "voice_line": "Voice triggers (speech-to-text aliases): \"code x\", \"code ex\", \"get another opinion\"."
+    },
+    "cognitive-load-audit": {
+      "lead": "[Cognitive Computing / HMC] Quantifies cognitive load on a surface using Sweller's intrinsic / extraneous / germane split.",
+      "routing": "Counts decisions per screen, working-memory\nchunks, novelty rate, and choice overload signals; identifies which load type is\ndominant and proposes cuts targeted at that type. Live capture via /browse when\navailable, plan/spec analysis otherwise. Surfaces tradeoffs (simplicity vs.\ncapability, defaults vs. agency) rather than enforcing a \"remove things\" reflex.\nUse when asked to \"audit cognitive load\", \"this feels heavy\", \"too many options\",\n\"simplify this screen\", or \"is this overwhelming\".",
+      "voice_line": null
+    },
+    "collaboration-pattern": {
+      "lead": "[Cognitive Computing / HMC] Picks the right human-AI collaboration pattern (pair, supervised, delegated, autonomous) for a given task, with rationale across skill-level fit, error cost,...",
+      "routing": "Generates\nthe prompt scaffolding and UI affordances for the chosen pattern. References\nEngelbart's augmentation framework, Suchman's situated action, and recent HCAI\nliterature (Shneiderman, Amershi, Bansal). Presents the four patterns as a\ncontinuum, not a hierarchy.\nUse when asked to \"pick a collaboration pattern\", \"should this be autonomous\",\n\"how much should the AI do\", \"pair vs delegate\", or \"design the human-AI\nhand-off\".",
+      "voice_line": null
+    },
+    "compliance-audit": {
+      "lead": "[CISO Compliance + IR] Framework-aware compliance audit (SOC 2 Type II / ISO 27001 / HIPAA / PCI-DSS v4 / GDPR / CCPA).",
+      "routing": "Walks each control with the framework citation,\nmaps existing artifacts (CI configs, IAM policies, runbooks, /cso findings) to\nevidence, scores Pass / Partial / Gap per control, and emits a Plan-of-Action-and-\nMilestones (POA&M) with owners and target dates. Designed for the founder-CISO\nwho has to answer an enterprise security questionnaire before the next renewal.\nUse when: \"compliance audit\", \"SOC 2 readiness\", \"HIPAA gap analysis\",\n\"ISO 27001 control walk\", \"PCI-DSS assessment\", \"GDPR readiness\", \"POA&M\".",
+      "voice_line": null
+    },
+    "context-restore": {
+      "lead": "[Intelligence & Memory] Restore working context saved earlier by /context-save.",
+      "routing": "Loads the most recent\nsaved state (across all branches by default) so you can pick up where you\nleft off — even across Conductor workspace handoffs.\nUse when asked to \"resume\", \"restore context\", \"where was I\", or\n\"pick up where I left off\". Pair with /context-save.\nFormerly /checkpoint resume — renamed because Claude Code treats /checkpoint\nas a native rewind alias in current environments.",
+      "voice_line": null
+    },
+    "context-save": {
+      "lead": "[Intelligence & Memory] Save working context.",
+      "routing": "Captures git state, decisions made, and remaining work\nso any future session can pick up without losing a beat.\nUse when asked to \"save progress\", \"save state\", \"context save\", or\n\"save my work\". Pair with /context-restore to resume later.\nFormerly /checkpoint — renamed because Claude Code treats /checkpoint as a\nnative rewind alias in current environments, which was shadowing this skill.",
+      "voice_line": null
+    },
+    "cost-optimize": {
+      "lead": "[Chief Architect] FinOps analysis for AWS, GCP, and Azure.",
+      "routing": "Pulls Cost Explorer /\nCloud Billing / Cost Management, ranks the top spend, finds rightsizing\ncandidates, reserved-instance vs Savings-Plan picks, spot eligibility, and\nidle resources. Emits an action list with $/month savings per item, sorted by\nratio of savings to effort. Read-only by default; tag/stop suggestions are\nproposals, not actions. Use when: \"cost optimize\", \"finops review\", \"cloud bill\nis up\", \"find idle resources\", \"should we buy reserved instances\", or \"cost\nattribution\".",
+      "voice_line": null
+    },
+    "counterfactual": {
+      "lead": "[Economic Simulation] Counterfactual analysis framework for economic simulators.",
+      "routing": "Runs\npaired baseline / intervention simulations across a multi-seed ensemble, computes\nconfidence bands via bootstrap or quantile aggregation, performs sensitivity analysis\non key parameters, and produces a structured counterfactual report. Enforces\nmulti-seed discipline — single-run counterfactuals are rejected because they hide\nMonte Carlo uncertainty. Pairs with `/econ-sim` (consumes the sim), `/event-stream`\n(replays or mutates the event log to encode the intervention), and `/sim-calibrate`\n(uses the same sim but for fitting rather than asking \"what if\").\nUse when asked to \"run a counterfactual\", \"what if the central bank had raised\nrates 6 months earlier\", \"policy analysis on the sim\", \"intervention analysis\",\n\"paired-run counterfactual\", or \"sensitivity analysis on an econ sim\".",
+      "voice_line": null
+    },
+    "cross-repo-pr": {
+      "lead": "[Multi-Repo] Atomic PR trains across N repos that must merge in lockstep.",
+      "routing": "Defines a merge\ngate (all green + all approved), lands PRs in dependency order with retry on conflict,\nand reverts the WHOLE train automatically if any post-merge production check fails.\nUse when asked to \"atomic multi-repo PR\", \"PR train\", \"lockstep merge\", \"ship across repos\ntogether\", or \"merge these PRs as a unit\".",
+      "voice_line": null
+    },
+    "cso": {
+      "lead": "[Investigate & Security] Chief Security Officer mode.",
+      "routing": "Infrastructure-first security audit: secrets archaeology,\ndependency supply chain, CI/CD pipeline security, LLM/AI security, skill supply chain\nscanning, plus OWASP Top 10, STRIDE threat modeling, and active verification.\nTwo modes: daily (zero-noise, 8/10 confidence gate) and comprehensive (monthly deep\nscan, 2/10 bar). Trend tracking across audit runs.\nUse when: \"security audit\", \"threat model\", \"pentest review\", \"OWASP\", \"CSO review\".",
+      "voice_line": "Voice triggers (speech-to-text aliases): \"see-so\", \"see so\", \"security review\", \"security check\", \"vulnerability scan\", \"run security\"."
+    },
+    "customer-interview": {
+      "lead": "[CEO Cockpit] Customer interview workflow — two modes.",
+      "routing": "**Prep mode** generates a JTBD-style\nquestion script for a target persona. **Synthesis mode** ingests transcripts (or audio\nvia `markitdown`), extracts pain points, segments by job-to-be-done, scores by\nfrequency × intensity, and proposes 3 concrete product moves. Cross-interview pattern\ndetection via `/intel` keeps learnings from rotting in Notion.\nUse when: \"customer interview prep\", \"synthesize the interview\", \"JTBD interview\".",
+      "voice_line": "Voice triggers (speech-to-text aliases): \"interview prep\", \"synthesize the call\", \"JTBD\"."
+    },
+    "dashboard": {
+      "lead": "[Build & Autonomy] Multi-agent dashboard for hstack.",
+      "routing": "Launches several review/QA skills\nin parallel via Claude Code Agent Teams (or sequential fallback), renders\nlive progress as a terminal box-drawing table, then merges per-skill output\ninto a unified scorecard. Three built-in presets: review (cso + review +\ncodex), qa (qa + design-review), full (all reviews + qa + audit). Resource-\ncapped at 3 parallel agents; one crash never takes the others down.\nUse when asked to \"run dashboard\", \"parallel review\", \"review everything\",\n\"dashboard preset\", or \"multi-agent review\".",
+      "voice_line": "Voice triggers (speech-to-text aliases): \"dashboard\", \"parallel review\", \"run them all\"."
+    },
+    "db-design": {
+      "lead": "[API/DB] Design a new database schema or audit an existing one.",
+      "routing": "Knows naming\nconventions, normalization vs denormalization, index choice, partitioning,\nsoft-delete patterns, append-only vs mutable history, JSON-column tradeoffs.\nOutputs forward migration SQL plus rollback. For audits, scores the schema\nagainst rules and produces a remediation plan. Supports Postgres, SQLite, and\nMySQL. Use when: \"design a schema\", \"audit our schema\", \"review this migration\",\n\"should this be a JSON column\", \"normalization review\".",
+      "voice_line": null
+    },
+    "db-migration": {
+      "lead": "[API/DB] Zero-downtime database migration planner.",
+      "routing": "Given a migration intent\n(add column, change type, add index, rename, backfill, drop), picks the safe\npattern — expand-migrate-contract, online DDL, pt-osc / gh-ost for MySQL,\nCREATE INDEX CONCURRENTLY for Postgres — and emits phased migration scripts\nwith locks-and-load analysis plus rollback at every phase. Supports Postgres,\nSQLite, and MySQL. Use when: \"safely migrate this table\", \"add NOT NULL\ncolumn\", \"rename a column on a live table\", \"add index without blocking\",\nor \"zero-downtime migration\".",
+      "voice_line": null
+    },
+    "db-perf": {
+      "lead": "[API/DB] EXPLAIN-driven slow-query diagnosis and index advisor.",
+      "routing": "Extracts candidate\nqueries from app code and DB logs, runs EXPLAIN ANALYZE against a read-only\ndev/staging DB, spots seq scans, missing indexes, N+1 patterns, suboptimal joins,\nand bad statistics. Suggests indexes with cost estimates and predicted impact.\nSupports Postgres, SQLite, and MySQL. Use when: \"the API is slow\", \"diagnose\nthis query\", \"missing index\", \"p99 spike\", \"explain plan\", or \"advise indexes\".",
+      "voice_line": null
+    },
+    "define-workflows": {
+      "lead": "[UX Audit] Derive the list of workflows each persona *should* be able to accomplish, based on their goal, permissions, and entry point.",
+      "routing": "Produces one expected-\nworkflows file per persona at .gstack/feature-build/expected-workflows-\n{persona}-{datetime}.md. This is the input to /gap-analysis and\n/auto-feature-build — a lightweight standalone entry point for Step A of\nfeature-build gap analysis, extracted so you can enumerate workflows\nwithout running the full build pipeline.\nUse when asked to \"define workflows\", \"list expected workflows\", \"what\nshould each persona be able to do\", or \"enumerate workflows per persona\".",
+      "voice_line": null
+    },
+    "dep-graph": {
+      "lead": "[Chief Architect] Builds a cross-service dependency graph from imports, route calls, and IaC topology.",
+      "routing": "Detects cycles, identifies bottleneck nodes, and\ncomputes blast radius for any node (\"what does this change affect\"). Stores\nthe graph in ~/.gstack/projects/{slug}/graph.json for /c4-diagram,\n/migration-plan, and /service-catalog to consume. Emits Markdown + SVG +\nJSON. Use when: \"dependency graph\", \"what does this affect\", \"blast radius\",\n\"find cycles\", \"what imports X\", or \"build a dep graph\".",
+      "voice_line": null
+    },
+    "design-consultation": {
+      "lead": "[Design] Design consultation: understands your product, researches the landscape, proposes a complete design system (aesthetic, typography, color, layout, spacing, motion), and generates...",
+      "routing": "Creates DESIGN.md as your project's design source\nof truth. For existing sites, use /plan-design-review to infer the system instead.\nUse when asked to \"design system\", \"brand guidelines\", or \"create DESIGN.md\".\nProactively suggest when starting a new project's UI with no existing\ndesign system or DESIGN.md.",
+      "voice_line": null
+    },
+    "design-html": {
+      "lead": "[Design] Design finalization: generates production-quality Pretext-native HTML/CSS.",
+      "routing": "Works with approved mockups from /design-shotgun, CEO plans from /plan-ceo-review,\ndesign review context from /plan-design-review, or from scratch with a user\ndescription. Text actually reflows, heights are computed, layouts are dynamic.\n30KB overhead, zero deps. Smart API routing: picks the right Pretext patterns\nfor each design type. Use when: \"finalize this design\", \"turn this into HTML\",\n\"build me a page\", \"implement this design\", or after any planning skill.\nProactively suggest when user has approved a design or has a plan ready.",
+      "voice_line": "Voice triggers (speech-to-text aliases): \"build the design\", \"code the mockup\", \"make it real\"."
+    },
+    "design-review": {
+      "lead": "[Design] Designer's eye QA: finds visual inconsistency, spacing issues, hierarchy problems, AI slop patterns, and slow interactions — then fixes them.",
+      "routing": "Iteratively fixes issues\nin source code, committing each fix atomically and re-verifying with before/after\nscreenshots. For plan-mode design review (before implementation), use /plan-design-review.\nUse when asked to \"audit the design\", \"visual QA\", \"check if it looks good\", or \"design polish\".\nProactively suggest when the user mentions visual inconsistencies or\nwants to polish the look of a live site.",
+      "voice_line": null
+    },
+    "design-shotgun": {
+      "lead": "[Design] Design shotgun: generate multiple AI design variants, open a comparison board, collect structured feedback, and iterate.",
+      "routing": "Standalone design exploration you can\nrun anytime. Use when: \"explore designs\", \"show me options\", \"design variants\",\n\"visual brainstorm\", or \"I don't like how this looks\".\nProactively suggest when the user describes a UI feature but hasn't seen\nwhat it could look like.",
+      "voice_line": null
+    },
+    "detect-engineering": {
+      "lead": "[Blue Team / Defensive] Detection rule engineering.",
+      "routing": "Given a threat indicator\n(ATT&CK technique, malware family, IoC bundle, behavioral pattern), generates\none rule per detection dialect — Sigma (universal source), KQL (Microsoft\nDefender / Sentinel), SPL (Splunk), EQL (Elastic), YARA (file artifacts),\nSuricata (network), Zeek (network). Every rule ships with FP-reduction\nmodifiers and concrete test cases. Refuses to run without an\n`~/.gstack/projects/{slug}/security-ownership.yaml` ownership declaration.\nUse when: \"write a detection\", \"Sigma rule for X\", \"convert this to KQL\",\n\"detection engineering\", \"FP-tune this rule\".",
+      "voice_line": null
+    },
+    "devex-review": {
+      "lead": "[UX Audit] Live developer experience audit.",
+      "routing": "Uses the browse tool to actually TEST the\ndeveloper experience: navigates docs, tries the getting started flow, times\nTTHW, screenshots error messages, evaluates CLI help text. Produces a DX\nscorecard with evidence. Compares against /plan-devex-review scores if they\nexist (the boomerang: plan said 3 minutes, reality says 8). Use when asked to\n\"test the DX\", \"DX audit\", \"developer experience test\", or \"try the\nonboarding\". Proactively suggest after shipping a developer-facing feature.",
+      "voice_line": "Voice triggers (speech-to-text aliases): \"dx audit\", \"test the developer experience\", \"try the onboarding\", \"developer experience test\"."
+    },
+    "discover": {
+      "lead": "[CTO Discovery] CTO-mode technology and product intelligence for gstack.",
+      "routing": "Scans competitors, scouts\nemerging tech, finds market gaps, and delivers opinionated recommendations.\nNot a report generator — a visionary who synthesizes and recommends with\nconviction. Output is a research brief consumable by downstream skills.\nUse when asked to \"research competitors\", \"what's out there\", \"tech scout\",\n\"discover alternatives\", \"market analysis\", \"build vs buy\", or \"landscape scan\".\nProactively suggest when the user is exploring a new product area,\nevaluating technology choices, or asking \"what should we use for X\".",
+      "voice_line": null
+    },
+    "discover-personas": {
+      "lead": "[UX Audit] Discover and register personas for the project, either from the user's description or by auto-discovering them from the live app.",
+      "routing": "Writes the shared\npersona registry at .gstack/ux-audit/personas.md, which is consumed by\n/ux-audit, /auto-ux-audit, /auto-ux-audit-full, /feature-build,\n/auto-feature-build, and /auto-feature-build-full. Lightweight standalone\nentry point — same logic as /ux-audit Phase 1, extracted so you can bootstrap\nthe registry without running a full audit.\nUse when asked to \"discover personas\", \"who uses this app\", \"find the user\nroles\", \"bootstrap personas\", or \"set up the persona registry\".",
+      "voice_line": null
+    },
+    "document-generate": {
+      "lead": "[Ship & Release] Generate missing documentation from scratch for a feature, module, or entire project.",
+      "routing": "Uses the Diataxis framework (tutorial / how-to / reference / explanation) to produce\ncomplete, structured documentation. Can be invoked standalone or called by\n/document-release when it finds coverage gaps. Use when asked to \"write docs\",\n\"generate documentation\", \"document this feature\", \"create a tutorial\", or\n\"explain this module\".",
+      "voice_line": null
+    },
+    "document-release": {
+      "lead": "[Ship & Release] Post-ship documentation update.",
+      "routing": "Reads all project docs, cross-references the\ndiff, builds a Diataxis coverage map (reference/how-to/tutorial/explanation),\nupdates README/ARCHITECTURE/CONTRIBUTING/CLAUDE.md to match what shipped,\ndetects architecture diagram drift, polishes CHANGELOG voice with a sell-test\nrubric, cleans up TODOS, and optionally bumps VERSION. Surfaces documentation\ndebt in the PR body. Use when asked to \"update the docs\", \"sync documentation\",\nor \"post-ship docs\". Proactively suggest after a PR is merged or code is shipped.",
+      "voice_line": null
+    },
+    "econ-sim": {
+      "lead": "[Economic Simulation] Designs a runnable economic simulator from a research question.",
+      "routing": "Picks paradigm — agent-based (Mesa / Agents.jl) for heterogeneous agents and emergent\nbehavior, system dynamics (PySD) for aggregate stock-flow, DSGE (Dynare) for\ngeneral-equilibrium policy analysis, or hybrid for cross-scale. Specifies agent classes\n(households / firms / banks / govt / external), interaction protocol, time discretization,\nmarket clearing, and a reproducibility envelope (seed, config, git SHA pinned per run).\nPairs with `/event-stream` for live event ingestion, `/counterfactual` for paired-run\npolicy analysis, and `/sim-calibrate` for historical fit.\nUse when asked to \"design an economic simulation\", \"build an ABM\", \"pick a sim\nparadigm\", \"agent-based macro model\", \"DSGE model\", \"system dynamics model\", or\n\"stand up a runnable economic simulator\".",
+      "voice_line": null
+    },
+    "eval-harness": {
+      "lead": "[AI Engineering / Research] Generates a per-feature eval harness (dataset, metrics, baselines, CI hook) for any LLM/AI feature.",
+      "routing": "Picks pytest/deepeval/ragas/promptfoo per fit. Supports\n--domain {nlp, cv, speech-tts, speech-asr, multimodal, sign}. Each domain pins\nthe right datasets, metrics, and judge model. Writes typed records to the\nshared S9 eval store so /rag-design, /agent-design, /finetune, and\n/prompt-engineering can compare across runs. Use when: \"set up evals\", \"add\nevals for this feature\", \"regression test for an AI feature\", \"I need a\nbenchmark for this model\".",
+      "voice_line": "Voice triggers (speech-to-text aliases): \"eval harness\", \"evaluation harness\", \"set up evals\"."
+    },
+    "event-design": {
+      "lead": "[API/DB] Design event/message schemas with explicit versioning and compatibility policy for Kafka, NATS, EventBridge, SQS, RabbitMQ, or Pub/Sub.",
+      "routing": "Generates Avro,\nJSON Schema, or Protobuf. Audits existing topics for compat violations and\nregistry hygiene. Knows forward / backward / full compatibility rules and the\ntrade-offs per format. Use when: \"design event schemas\", \"kafka schemas\",\n\"avro vs protobuf vs json schema\", \"schema registry\", or \"are these events\nbackwards compatible\".",
+      "voice_line": null
+    },
+    "event-stream": {
+      "lead": "[Economic Simulation] Designs a real-world event ingestion pipeline for an economic simulator with observability-time modeling — agents react to events when the information would have been...",
+      "routing": "Sources span\nnews, social signal, macro indicators (FRED), policy announcements, and market data\n(Alpha Vantage). Outputs a normalized event schema, an observability map per agent\nclass, an ingestion plan with replay vs live-fire modes, and a reproducibility envelope\nper run. Pairs with `/econ-sim`, `/counterfactual`, and `/sim-calibrate`.\nUse when asked to \"design an event stream\", \"ingest real-world events into a sim\",\n\"model information arrival\", \"news / macro / market event pipeline\", \"observability-time\nevent modeling\", or \"replay vs live event ingestion\".",
+      "voice_line": null
+    },
+    "explanation-design": {
+      "lead": "[Cognitive Computing / HMC] Designs explanation surfaces for AI features with the goal of trust calibration, not tutorial.",
+      "routing": "Picks the right format (inline / on-demand /\nprogressive) per user task, and scopes the five trust dimensions: confidence,\nalternatives, provenance, controllability, recourse. References Doshi-Velez & Kim,\nMiller, Lipton, Wachter on counterfactual recourse. Surfaces tradeoffs between\nfaithfulness, intelligibility, and attention budget rather than enforcing a fixed\nexplanation style.\nUse when asked to \"design the explanation\", \"explain this AI feature\", \"trust\nsurfaces\", \"why did the model say that\", \"should we add an explanation\", or\n\"calibrate trust\".",
+      "voice_line": null
+    },
+    "exploit-dev": {
+      "lead": "[Red Team / RE] Scaffolds an authorized exploit-development project (CTF or engagement) for binary pwn, web, mobile, or IoT firmware targets.",
+      "routing": "Generates pwntools / radare2 / angr\nstarter scripts, Makefile, journal template, and a structured README. Two modes:\n--mode ctf (relaxed, for capture-the-flag and personal practice) and --mode engagement\n(strict, requires engagements/{slug}/scope.yaml with the target in scope and authorized\ntechniques covering exploitation). Every action hash-chained into audit.log.\nUse when: \"exploit dev\", \"pwn this binary\", \"ctf scaffold\", \"rop chain template\",\n\"pwntools setup\", \"angr harness\", \"exploit project\".",
+      "voice_line": "Voice triggers (speech-to-text aliases): \"exploit dev\", \"pwn scaffold\", \"start exploit\"."
+    },
+    "expression-synth": {
+      "lead": "[Avatar & Embodiment] Facial expression synthesis designer.",
+      "routing": "Builds a control\nsurface combining continuous valence-arousal, conversational-beat markers\n(back-channels, turn-taking cues), intent-driven micro-expressions\n(curiosity, doubt, recognition), and FACS-based action unit composition.\nPicks the right backbone (EMOCA / DECA / FACSHuman / FLAME-based regressors)\nper face rig and writes a build-ready plan. Outputs CONTROL-SURFACE +\nEMOTION-MODEL + BEAT-CUES + FACS-MAP + EVAL docs.\nUse when: \"facial expression synthesis\", \"emotion model for avatar\", \"FACS map\",\n\"conversational beats\", \"micro-expressions\", or \"expression control surface\".",
+      "voice_line": "Voice triggers (speech-to-text aliases): \"expression synthesis\", \"facial expression\", \"emotion model\", \"facs map\", \"micro expressions\"."
+    },
+    "feature-build": {
+      "lead": "[Build & Autonomy] Single-feature manual builder for gstack.",
+      "routing": "The user specifies exactly ONE feature they want\nbuilt; feature-build runs it through the full pipeline: (optionally) frame it\nwith office-hours, plan it with autoplan-full (deep framing) or autoplan (fast),\nbuild it with autobuild, verify with verify-loop, then scoped workflow\nverification + autoaudit. One feature, maximum rigor. No auto-discovery.\nUse when asked to \"build this feature\", \"feature build\", \"take this feature\nend-to-end\", or \"one feature through the pipeline\". For auto-discovery of\nmissing workflows, use /auto-feature-build. For all personas, use\n/auto-feature-build-full.",
+      "voice_line": null
+    },
+    "finetune": {
+      "lead": "[AI Engineering / Research] Generates a fine-tuning project — data prep, format conversion (sharegpt/alpaca/dpo), recipe config (LoRA / QLoRA / full / DPO / ORPO), eval baseline before+after,...",
+      "routing": "Supports --domain {nlp, cv,\nspeech-tts, speech-asr, multimodal, sign}. Framework-agnostic: names Axolotl,\nTRL, Unsloth, HuggingFace, Diffusers as CHOICES per task type.\nOutputs finetune/{model-slug}/{prepare.py,config.yaml,evals/,RECIPE.md}.\nUse when: \"fine-tune this model\", \"LoRA for X\", \"DPO recipe\", \"train an\nadapter\".",
+      "voice_line": "Voice triggers (speech-to-text aliases): \"fine tune\", \"finetune\", \"train an adapter\"."
+    },
+    "forensics": {
+      "lead": "[Blue Team / Defensive] DFIR (digital forensics + incident response).",
+      "routing": "Walks a case end-to-end: disk image acquisition (dd / FTK Imager /\nVelociraptor agent), memory capture (Volatility 3), filesystem timeline\n(Plaso / log2timeline), browser-artifact extraction, process-tree\nreconstruction, IoC extraction. Produces a hash-chained chain-of-custody\nlog, structured findings, and an IoC handoff to /threat-intel and\n/detect-engineering. STRICT READ-ONLY on evidence; mutations only in\nworking-copy. Refuses to run without\n`~/.gstack/projects/{slug}/security-ownership.yaml` + per-case explicit\nauthorization.\nUse when: \"DFIR\", \"forensics case\", \"analyze this disk image\", \"memory\nanalysis\", \"build a timeline of compromise\", \"chain of custody\".",
+      "voice_line": null
+    },
+    "freeze": {
+      "lead": "[Build & Autonomy] Restrict file edits to a specific directory for the session.",
+      "routing": "Blocks Edit and\nWrite outside the allowed path. Use when debugging to prevent accidentally\n\"fixing\" unrelated code, or when you want to scope changes to one module.\nUse when asked to \"freeze\", \"restrict edits\", \"only edit this folder\",\nor \"lock down edits\".",
+      "voice_line": null
+    },
+    "game-theory-analysis": {
+      "lead": "[Operations Research / Behavioral] Model a strategic situation as a formal game (normal form for one-shot, extensive form for sequential).",
+      "routing": "Identifies players, action\nspaces, payoffs, and the right equilibrium concept (Nash, subgame-perfect, dominant-\nstrategy, correlated, evolutionary stable). Generates the payoff matrix, computes\nequilibria with nashpy / gambit, surfaces dominated strategies, credible threats,\nand commitment opportunities. Use for pricing wars, feature races, negotiation prep,\ncompetitive responses, and public-commitment design.\nUse when: \"game theory\", \"nash equilibrium\", \"payoff matrix\", \"competitive response\",\n\"negotiation prep\", \"credible threat\", \"dominant strategy\".",
+      "voice_line": null
+    },
+    "gap-analysis": {
+      "lead": "[UX Audit] Compare expected workflows (from /define-workflows) against what the app actually supports.",
+      "routing": "Produces one gap report per persona at\n.gstack/feature-build/gap-report-{persona}-{datetime}.md with a\ncompleteness rubric (route, form, handler, persist, feedback — 5 signals\neach 0/1) and a verdict (PRESENT_COMPLETE, PRESENT_BROKEN, PRESENT_PARTIAL,\nHIDDEN, ABSENT). Lightweight standalone entry point for Steps B+C+D of\nfeature-build gap analysis, extracted so you can see what's missing\nwithout running the full build pipeline.\nUse when asked to \"gap analysis\", \"what's missing\", \"find gaps in the\napp\", \"completeness check\", or \"what does each persona still need\".",
+      "voice_line": null
+    },
+    "gesture-synth": {
+      "lead": "[Avatar & Embodiment] Speech-to-gesture synthesis designer.",
+      "routing": "Picks the right\nco-speech-gesture model (GENEA SOTA / Audio2Gestures / GestureDiffusion /\nZeroEGGS / DiffuseStyleGesture) per use case (conversational / presenter /\ncharacter), builds a cultural-gesture vocabulary (beats / deictics / iconic /\nmetaphoric), and writes a build-ready plan with retargeting strategy to the\navatar body rig. Outputs MODEL + VOCAB + STYLE + EVAL docs.\nUse when: \"co-speech gestures\", \"gesture synthesis\", \"speech-to-motion\",\n\"presenter gestures\", or \"audio-to-body animation\".",
+      "voice_line": "Voice triggers (speech-to-text aliases): \"co speech gestures\", \"gesture synthesis\", \"speech to gesture\", \"presenter gestures\"."
+    },
+    "gstack": {
+      "lead": "Fast headless browser for QA testing and site dogfooding.",
+      "routing": "Navigate pages, interact with\nelements, verify state, diff before/after, take annotated screenshots, test responsive\nlayouts, forms, uploads, dialogs, and capture bug evidence. Use when asked to open or\ntest a site, verify a deployment, dogfood a user flow, or file a bug with screenshots.",
+      "voice_line": null
+    },
+    "gstack-upgrade": {
+      "lead": "[Tools] Upgrade gstack to the latest version.",
+      "routing": "Detects global vs vendored install,\nruns the upgrade, and shows what's new. Use when asked to \"upgrade gstack\",\n\"update gstack\", or \"get latest version\".",
+      "voice_line": "Voice triggers (speech-to-text aliases): \"upgrade the tools\", \"update the tools\", \"gee stack upgrade\", \"g stack upgrade\"."
+    },
+    "guard": {
+      "lead": "[Build & Autonomy] Full safety mode: destructive command warnings + directory-scoped edits.",
+      "routing": "Combines /careful (warns before rm -rf, DROP TABLE, force-push, etc.) with\n/freeze (blocks edits outside a specified directory). Use for maximum safety\nwhen touching prod or debugging live systems. Use when asked to \"guard mode\",\n\"full safety\", \"lock it down\", or \"maximum safety\".",
+      "voice_line": null
+    },
+    "health": {
+      "lead": "[Tools] Code quality dashboard.",
+      "routing": "Wraps existing project tools (type checker, linter,\ntest runner, dead code detector, shell linter), computes a weighted composite\n0-10 score, and tracks trends over time. Use when: \"health check\",\n\"code quality\", \"how healthy is the codebase\", \"run all checks\",\n\"quality score\".",
+      "voice_line": null
+    },
+    "hiring-loop": {
+      "lead": "[CTO Strategy] Full hiring kit generator from a role description.",
+      "routing": "Produces JD with\nleveling, async screen prompt, 4-stage interview kit (technical, system design,\nbehavioral, founder-fit), and per-stage scorecards. Mode flag for IC vs lead.\nAll four artifacts stay aligned to the same competency rubric so signal doesn't\ndrift between stages. Output: `hiring/{role-slug}/{JD,SCREEN,INTERVIEW,SCORECARD}.md`.\nUse when: \"write a JD\", \"hiring kit\", \"interview kit for senior engineer\", \"screen\nprompt for backend role\", \"scorecard for a tech lead role\".",
+      "voice_line": "Voice triggers (speech-to-text aliases): \"hiring kit\", \"write a jd\", \"interview loop\"."
+    },
+    "honeypot": {
+      "lead": "[Blue Team / Defensive] Deception deployment.",
+      "routing": "Three tiers: (1) canary\ntokens (AWS keys, IAM users, fake env files, watermarked docs) via\ncanarytokens.org or self-hosted Thinkst; (2) honeypages (fake admin\npanels, planted API keys in code) seeded on attacker discovery paths;\n(3) full honeypots via T-Pot or Thinkst Canary. Monitors triggers, alerts\non hit, suggests follow-up (rotate adjacent real creds, block source IP,\nescalate to /forensics). Refuses to run without\n`~/.gstack/projects/{slug}/security-ownership.yaml` AND explicit cloud-\naccount + IAM scope declaration.\nUse when: \"deploy canary tokens\", \"set up honeypot\", \"deception\", \"fake\ncredentials for attackers\".",
+      "voice_line": null
+    },
+    "iac-review": {
+      "lead": "[Chief Architect] Pre-apply review of Terraform / Pulumi / AWS CDK diffs.",
+      "routing": "Skips\nthe 200 lines of resource-rename noise to surface the things that actually\nmatter: destructive changes (deletes, replaces), IAM widenings, public exposure,\ninstance-class upgrades over 2x cost, missing tags, drift from the policy\nbaseline. Default is dry-run; --apply requires explicit confirmation. Use when:\n\"review this terraform plan\", \"iac review\", \"is this plan safe to apply\",\n\"review the cdk diff\", or \"review the pulumi preview\".",
+      "voice_line": null
+    },
+    "incentive-design": {
+      "lead": "[Operations Research / Behavioral] Design an incentive system (pricing tier, referral program, growth loop, OKR / commission plan, in-app reward) using mechanism design plus behavioral economics —...",
+      "routing": "Produces (a) the incentive structure, (b) the predicted\nbehavior, and (c) a MANDATORY failure-mode list (gaming, perverse incentives, second-\norder effects, Goodhart). Cross-domain orchestrator for pricing + marketing-psychology.\nUse when: \"design the incentive\", \"design the OKR\", \"design the referral program\",\n\"design the commission plan\", \"design pricing tiers\", \"mechanism design\".",
+      "voice_line": null
+    },
+    "incident-response": {
+      "lead": "[CISO Compliance + IR] Generates an incident response runbook tuned to Hall's stack (web / mobile / API), and runs in live war-room mode during an actual incident.",
+      "routing": "Walks the operator through declaration, triage, mitigation, comms,\nand resolution. Includes severity rubric (SEV-1 to SEV-4), comms templates\n(customer, internal, status page), on-call rotation suggestions, and a clean\nhand-off to /postmortem. Maps to SOC 2 CC7.3-7.5, ISO 27001 A.5.24-A.5.27,\nHIPAA §164.308(a)(6), PCI-DSS Req 12.10, GDPR Art. 33-34 (72-hour breach clock).\nUse when: \"incident response\", \"we have an outage\", \"we're breached\",\n\"incident runbook\", \"war room\", \"SEV-1\", \"page the on-call\".",
+      "voice_line": null
+    },
+    "indoor-nav": {
+      "lead": "[Accessibility AI] Indoor positioning + accessibility-aware routing design.",
+      "routing": "Picks the sensor stack (Wi-Fi RTT, BLE beacons, IMU dead-reckoning, magnetic\nanomaly, visual SLAM), the localization algorithm (particle filter, EKF/UKF,\nfactor graph), the indoor map data model (with elevator/stairs/ramp/door-width\nannotations), the accessibility routing constraints (elevator preference,\nwheelchair width, slope limits, no stairs), and the turn-by-turn UX for\nvision-impaired and mobility-impaired users. Outputs a build-ready architecture\nper venue type (mall, hospital, campus, transit hub).\nUse when asked to \"design indoor nav\", \"indoor positioning\", \"wayfinding\nsystem\", \"accessible routing\", \"where am I indoors\", or \"build indoor\nnavigation\".",
+      "voice_line": null
+    },
+    "intel": {
+      "lead": "[Intelligence & Memory] Project intelligence briefing — reads cross-session memory from intelligence.jsonl, compacts stale entries, and presents a briefing of",
+      "routing": "recurring patterns, recent findings,\nand known hotspots. Run at session start for full context, or anytime to check what\ngstack has learned about this project.\nUse when asked to \"show intel\", \"what do you know\", \"project briefing\",\n\"intelligence report\", or \"project intel\".\nProactively suggest at session start if intelligence data exists.",
+      "voice_line": null
+    },
+    "interactive-mockup": {
+      "lead": "[UX Pipeline] Wire the static mockup into a clickable interactive prototype.",
+      "routing": "Reads docs/WORKFLOWS.md and mockup/screens/. Adds data-action attributes to relevant\nbuttons/links/forms; writes mockup/interactions.js with handlers for navigation,\nfake form success, modals, dropdowns, multi-step flow state machines, and mock-data\nbinding from mockup/data/*.json. Pure vanilla JS, zero npm deps. Layer 6 of\nMOCKUP-ARCHITECTURE.md. Stakeholders get a clickable Figma-alike preview, not a slideshow.\nUse when asked to \"make the mockup interactive\", \"wire the clicks\", \"interactive mockup\",\n\"add behavior\", or \"the mockup should respond\".\nProactively suggest after /mockup completes, before stakeholder review.",
+      "voice_line": null
+    },
+    "investigate": {
+      "lead": "[Investigate & Security] Systematic debugging with root cause investigation.",
+      "routing": "Four phases: investigate,\nanalyze, hypothesize, implement. Iron Law: no fixes without root cause.\nUse when asked to \"debug this\", \"fix this bug\", \"why is this broken\",\n\"investigate this error\", or \"root cause analysis\".\nProactively invoke this skill (do NOT debug directly) when the user reports\nerrors, 500 errors, stack traces, unexpected behavior, \"it was working\nyesterday\", or is troubleshooting why something stopped working.",
+      "voice_line": null
+    },
+    "investigate-workflow": {
+      "lead": "[Investigate & Security] Post-implementation workflow completeness investigator for gstack.",
+      "routing": "Traces every code path\nin a feature area end-to-end — routes, handlers, APIs, state transitions, UI\ntriggers — and reports what's broken, incomplete, or disconnected. Unlike\n/investigate (debugs a known bug) or /plan-ux-review (reviews a plan), this\nskill discovers problems you don't know about yet by walking every workflow path.\nUse when asked to \"check if this feature is complete\", \"verify the workflow\",\n\"trace the flow\", \"what's missing\", or \"is this fully wired up\".\nProactively suggest when Claude has just finished building a multi-step feature,\nor when the user suspects something was partially implemented.",
+      "voice_line": null
+    },
+    "investor-update": {
+      "lead": "[CEO Cockpit] Monthly investor update generator.",
+      "routing": "Reads git log, gh PRs, Stripe/Plausible/PostHog\nmetrics via configured connectors, prior `/retro` outputs, and the last update. Drafts\nthe next update in Hall's voice with Highlights / Lowlights / Metrics / Asks. Stops\nat AskUserQuestion gates for tone calibration and the ask list. Runs in ~10 minutes\nwhat used to take a full day to reconstruct.\nUse when: \"investor update\", \"monthly update for investors\", \"draft the LP update\".",
+      "voice_line": "Voice triggers (speech-to-text aliases): \"investor update\", \"draft the update\", \"monthly update\"."
+    },
+    "ios-clean": {
+      "lead": "Remove the DebugBridge SPM package and all #if DEBUG wiring from an iOS app.",
+      "routing": "Cleans up StateServer, DebugOverlay, accessor codegen output, and\napp-side hooks installed by /ios-qa. This is a convenience wrapper —\nthe structural Release-build guard (Package.swift conditional + CI\nswift build -c release check) is the safety-critical path.\nUse when asked to \"clean the iOS debug bridge\", \"remove DebugBridge\",\nor \"strip the gstack iOS instrumentation\".",
+      "voice_line": "Voice triggers (speech-to-text aliases): \"clean the iOS debug bridge\", \"remove DebugBridge\", \"strip the gstack iOS instrumentation\"."
+    },
+    "ios-design-review": {
+      "lead": "Visual design audit for iOS apps on real hardware.",
+      "routing": "Connects to a real\niPhone via the same StateServer as /ios-qa, screenshots every screen,\nevaluates against Apple HIG, DESIGN.md, and design best practices. Scores\neach dimension 0-10 with \"what would make it a 10\" framing — mirrors\n/plan-design-review for browser. For plan-stage design review (before\nimplementation), use /plan-design-review. For live web visual audits, use\n/design-review.\nUse when asked to \"review the iOS design\", \"audit the iPhone app's\nvisuals\", or \"design QA the iOS app\".",
+      "voice_line": "Voice triggers (speech-to-text aliases): \"review the iOS design\", \"audit the iPhone app's visuals\", \"design QA the iPhone app\"."
+    },
+    "ios-fix": {
+      "lead": "Autonomous iOS bug fixer.",
+      "routing": "Takes a bug found by /ios-qa, reads the source,\nwrites the fix, rebuilds, redeploys, and verifies the fix on the real\ndevice. Closes the loop: find bug → fix bug → confirm fix — zero human\nintervention. Captures the pre-bug state snapshot as a regression test\nfixture, so the bug can never recur silently.\nUse when /ios-qa reports a bug and you want it fixed automatically, or\nwhen asked to \"fix this iOS bug\", \"patch the iPhone app\", or \"auto-fix\nthe iOS issue\".",
+      "voice_line": "Voice triggers (speech-to-text aliases): \"fix the iOS bug\", \"patch the iPhone app\", \"auto-fix the iOS issue\"."
+    },
+    "ios-qa": {
+      "lead": "Live-device iOS QA for SwiftUI apps.",
+      "routing": "Connects to a real iPhone via USB\nCoreDevice IPv6 tunnel, reads Swift source to understand every screen, then\nruns a vision-driven agent loop: screenshot → analyze → decide → act →\nverify → repeat. All interaction happens via HTTP to an embedded\nStateServer in the app under test. Optionally exposes the device over\nTailscale so remote agents (OpenClaw, Codex, any HTTP-capable agent) can\nrun iOS QA from anywhere without touching the hardware.\nUse when asked to \"ios qa\", \"test my iPhone app\", \"find bugs on the device\",\nor \"qa the iOS app\".",
+      "voice_line": "Voice triggers (speech-to-text aliases): \"iOS quality check\", \"test the iPhone app\", \"run iOS QA\"."
+    },
+    "ios-sync": {
+      "lead": "Regenerate the iOS debug bridge against the latest upstream gstack templates.",
+      "routing": "Updates StateServer.swift, DebugOverlay.swift, Package.swift,\nand the typed @Observable state accessors. Use after you upgrade gstack\nor add new ViewModels/properties that need accessor coverage.\nUse when asked to \"resync the iOS debug bridge\", \"regenerate iOS\naccessors\", or \"update the gstack iOS instrumentation\".",
+      "voice_line": "Voice triggers (speech-to-text aliases): \"resync the iOS debug bridge\", \"regenerate iOS accessors\", \"update the gstack iOS instrumentation\"."
+    },
+    "k8s-design": {
+      "lead": "[Cloud-Native] Generate production-grade Kubernetes manifests, Helm charts, or Kustomize overlays for a workload.",
+      "routing": "Knows resource requests/limits, HPA/VPA, PDB,\nNetworkPolicy, ServiceAccount least-privilege, readiness vs liveness probes,\ntopology spread, init containers, and sidecars — and refuses to ship the\ndefault-hostile config that first-time manifests usually have.\nUse when: \"design k8s manifests\", \"generate helm chart\", \"kustomize overlay\",\n\"production k8s config\", \"harden this deployment\".",
+      "voice_line": null
+    },
+    "kpi-dashboard": {
+      "lead": "[CEO Cockpit] KPI dashboard with weekly cadence.",
+      "routing": "One-time setup picks the north-star metric\nand 4-6 supporting KPIs. Weekly cadence pulls current values, computes WoW/MoM/QoQ\ndeltas, flags anomalies (>2σ) via `lib/anomaly-detect.ts`, emits a Slack-ready\nsummary. Founders track 15 KPIs in their head; only 3 matter. This skill forces the\npicking and keeps you honest.\nUse when: \"set up KPIs\", \"weekly KPI report\", \"north star metric\".",
+      "voice_line": "Voice triggers (speech-to-text aliases): \"weekly KPIs\", \"north star\", \"kpi dashboard\"."
+    },
+    "land-and-deploy": {
+      "lead": "[Ship & Release] Land and deploy workflow.",
+      "routing": "Merges the PR, waits for CI and deploy,\nverifies production health via canary checks. Takes over after /ship\ncreates the PR. Use when: \"merge\", \"land\", \"deploy\", \"merge and verify\",\n\"land it\", \"ship it to production\".",
+      "voice_line": null
+    },
+    "landing-report": {
+      "lead": "[Tools] Read-only queue dashboard for workspace-aware ship.",
+      "routing": "Shows which VERSION slots\nare currently claimed by open PRs, which sibling Conductor workspaces have\nWIP work likely to ship soon, and what slot /ship would pick next. No\nmutations — just a snapshot. Use when asked to \"landing report\", \"what's in\nthe queue\", \"show me open PRs\", or \"which version do I claim next\".",
+      "voice_line": null
+    },
+    "learn": {
+      "lead": "[Intelligence & Memory] Manage project learnings.",
+      "routing": "Review, search, prune, and export what gstack\nhas learned across sessions. Use when asked to \"what have we learned\",\n\"show learnings\", \"prune stale learnings\", or \"export learnings\".\nProactively suggest when the user asks about past patterns or wonders\n\"didn't we fix this before?\"",
+      "voice_line": null
+    },
+    "lip-sync": {
+      "lead": "[Avatar & Embodiment] Lip-sync model selection + training/inference pipeline designer.",
+      "routing": "Picks the right backbone (Wav2Lip / SadTalker / MuseTalk / EMO /\nlatentSync / Diff2Lip) per use case (real-time vs cinematic vs multilingual)\nand writes a build-ready plan with phoneme-to-viseme mapping per target\nlanguage (English visemes are not Thai visemes are not ASL mouth-shapes).\nOutputs MODEL-CHOICE + VISEME-MAP + TRAIN-PLAN + EVAL docs.\nUse when: \"pick a lip-sync model\", \"lip-sync architecture\", \"viseme mapping\",\n\"talking-head pipeline\", or \"audio-driven mouth animation\".",
+      "voice_line": "Voice triggers (speech-to-text aliases): \"lip sync\", \"lipsync\", \"pick a lip sync model\", \"talking head\", \"viseme map\"."
+    },
+    "log-analyze": {
+      "lead": "[Blue Team / Defensive] Large-log triage with polars-backed analysis.",
+      "routing": "Auto-detects log format (JSON / syslog / CEF / CloudTrail / IIS / nginx /\napp), normalizes to a common schema, surfaces statistical anomalies\n(rare user agents, unusual time-of-day, geographic outliers, frequency\nspikes), proposes IoCs to pivot on, generates a timeline of suspicious\nactivity. Outputs a persistable case file consumable by /forensics and\n/postmortem. Refuses to run without\n`~/.gstack/projects/{slug}/security-ownership.yaml`.\nUse when: \"triage these logs\", \"what happened in this CloudTrail\", \"find\nanomalies\", \"build a timeline from logs\", \"log forensics\".",
+      "voice_line": null
+    },
+    "make-pdf": {
+      "lead": "[Tools] Turn any markdown file into a publication-quality PDF.",
+      "routing": "Proper 1in margins,\nintelligent page breaks, page numbers, cover pages, running headers, curly\nquotes and em dashes, clickable TOC, diagonal DRAFT watermark. Not a draft\nartifact — a finished artifact. Use when asked to \"make a PDF\", \"export to\nPDF\", \"turn this markdown into a PDF\", or \"generate a document\".",
+      "voice_line": "Voice triggers (speech-to-text aliases): \"make this a pdf\", \"make it a pdf\", \"export to pdf\", \"turn this into a pdf\", \"turn this markdown into a pdf\", \"generate a pdf\", \"make a pdf from\", \"pdf this markdown\"."
+    },
+    "mental-model-trace": {
+      "lead": "[Cognitive Computing / HMC] Diffs the user's mental model of a feature against the real system model.",
+      "routing": "Walks five personas through the feature, captures their\nthink-aloud-style narration (or simulates it from persona data), traces what model\neach forms, identifies the exact moment divergence is introduced, and proposes\nclosure mechanisms (label, hint, demo, friction, redesign). Output is a mental-model\ndiff plus closure plan, not a usability report.\nUse when asked to \"trace mental models\", \"mental model diff\", \"why are users\nconfused\", \"user vs system model\", or \"why does this feature surprise people\".",
+      "voice_line": null
+    },
+    "migration-plan": {
+      "lead": "[Chief Architect] Given a from→to migration (DB engine swap, framework upgrade, language port, region move, monolith→services), picks the safest pattern (strangler fig, parallel run, blue-green,...",
+      "routing": "Also produces an `/autobuild`-compatible\nTASKS.md so the plan can drive implementation. Use when: \"migration plan\",\n\"migrate from X to Y\", \"strangler fig\", \"blue-green deploy\", \"cutover plan\",\nor \"how do we get off this thing\".",
+      "voice_line": null
+    },
+    "mobile-build": {
+      "lead": "[Mobile] Mobile feature scaffolding across React Native, Flutter, native iOS (Swift), and native Android (Kotlin).",
+      "routing": "Auto-detects the project's stack, generates a feature scaffold\nwith screen + state + navigation + tests, and follows the project's idioms (RN New\nArchitecture / Fabric, Flutter Riverpod or Bloc, SwiftUI + Observation, Jetpack Compose).\nHooks into /feature-build's commit cadence so each scaffolded artifact lands as its own\natomic commit. Use when: \"build a mobile feature\", \"scaffold this screen\", \"RN feature\",\n\"Flutter feature\", \"iOS screen\", \"Android screen\", or \"new mobile feature\".",
+      "voice_line": null
+    },
+    "mobile-perf": {
+      "lead": "[Mobile] Mobile performance profiling: cold-start time, time-to-interactive, FPS during scrolling, jank rate, memory under load.",
+      "routing": "Uses Xcode Instruments (iOS), Android Profiler\n/ Macrobenchmark (Android), and Flipper / React DevTools (RN/Flutter). Compares to the\nlast release baseline; flags regressions over threshold. Writes results to\nmobile/perf/ and shares the baseline store with the web /benchmark skill. Use when:\n\"mobile perf\", \"profile cold start\", \"FPS check\", \"jank report\", \"memory regression\",\nor \"compare perf to last release\".",
+      "voice_line": null
+    },
+    "mobile-qa": {
+      "lead": "[Mobile] Mobile QA flow generation + execution across Maestro, Detox, XCUITest, and Espresso.",
+      "routing": "Auto-detects the project's stack, generates a flow for the target screen,\nruns it against simulators/emulators for the current OS, current+1 (beta), and\ncurrent-1, and captures screenshots + video on failure. Writes flow files to\nmobile/qa/flows/ and run artifacts to mobile/qa/runs/. Use when: \"mobile qa\",\n\"test this screen\", \"Maestro flow\", \"Detox flow\", \"XCUITest flow\", \"Espresso flow\",\nor \"run the app on three OS versions\".",
+      "voice_line": null
+    },
+    "mobile-release": {
+      "lead": "[Mobile] End-to-end TestFlight / Play Internal release pipeline.",
+      "routing": "Bumps the app version,\nbuilds a signed artifact, uploads to TestFlight (iOS) and the Play Internal track\n(Android), drafts release notes from git log + CHANGELOG, notifies testers, and writes\na release record with a rollback runbook. Use when: \"ship to TestFlight\", \"ship to\ninternal track\", \"cut a mobile release\", \"mobile release\", or \"upload the build\".",
+      "voice_line": null
+    },
+    "mockup": {
+      "lead": "[UX Pipeline] Generate role-based, multi-screen, clickable mockup pages from docs/WORKFLOWS.md. Produces Layers 3-5 of MOCKUP-ARCHITECTURE.md: per-screen partials, per-persona tour pages,",
+      "routing": "and the gallery navigator. Realistic mock data per persona,\nno lorem ipsum. Iteration-friendly: each screen lives in its own ~300-line file so\nstakeholder feedback (\"the dashboard feels cramped\") touches one file, not 6000 lines.\nBuild step bundles to mockup-dist/ via bun run mockup:build.\nUse when asked to \"mockup\", \"create mockup\", \"build the mockup\", \"generate screens\",\n\"stakeholder mockup\", \"clickable preview\", or \"show me what the product looks like\".\nProactively suggest after /design-consultation has produced styles.css, when docs/WORKFLOWS.md exists.",
+      "voice_line": null
+    },
+    "monorepo-graph": {
+      "lead": "[Multi-Repo] Unified projection of a monorepo's project graph.",
+      "routing": "Detects Nx, Turbo, Bazel,\nLerna, pnpm-workspace, or Rush; projects each tool's native graph into a standard shape;\nanswers cross-tool queries like \"what depends on package X?\", \"what's the longest build\nchain?\", or \"which packages are unowned?\".\nUse when asked to \"show the project graph\", \"what depends on X\", \"monorepo graph\",\n\"build chain\", \"unowned packages\", or \"monorepo blast radius\".",
+      "voice_line": null
+    },
+    "multi-repo-refactor": {
+      "lead": "[Multi-Repo] Coordinated refactor across N repos.",
+      "routing": "Given a refactor intent (e.g. \"rename\nUser.email to User.primaryEmail\") and a list of consumer repos, opens linked PRs with\nthe same change, polls each repo's CI until green, and merges in dependency order so\nconsumers never see a broken base.\nUse when asked to \"refactor across repos\", \"rename across services\", \"coordinated rename\",\n\"multi-repo refactor\", or \"land this change in all consumers\".",
+      "voice_line": null
+    },
+    "multi-sign": {
+      "lead": "[Accessibility AI] Multi-sign-language platform architecture.",
+      "routing": "Designs the\nshared infrastructure (avatar rendering, video preprocessing, pose backbone,\neval harness, gloss intermediate representation) that supports multiple sign\nlanguages (ASL + BSL + TSL + JSL + LSF + DGS + Auslan + Libras + ...) AS\nPLUG-INS, not as forks. Specifies the per-language plug-in interface,\nlanguage-detection at input, code-switching support, and the deployment\narchitecture. Consumes one /sign-linguistics catalog + one /sign-text\npipeline per supported language.\nUse when asked to \"multi sign language\", \"multi-language sign platform\",\n\"sign-language plug-in architecture\", or \"support more sign languages\".",
+      "voice_line": null
+    },
+    "observability": {
+      "lead": "[Cloud-Native] Generate an OpenTelemetry-first observability stack: per-language SDK setup, exporters (Prometheus + Tempo + Loki, or Datadog/Honeycomb/New Relic), trace propagation, log-trace...",
+      "routing": "Vendor-neutral — the SDK stays OTel, the backend is a swappable exporter choice.\nUse when: \"set up observability\", \"wire up tracing\", \"OpenTelemetry SDK\",\n\"Prometheus + Grafana\", \"Datadog setup\", \"log-trace correlation\".",
+      "voice_line": null
+    },
+    "office-hours": {
+      "lead": "[Planning & Review] YC Office Hours — two modes.",
+      "routing": "Startup mode: six forcing questions that expose\ndemand reality, status quo, desperate specificity, narrowest wedge, observation,\nand future-fit. Builder mode: design thinking brainstorming for side projects,\nhackathons, learning, and open source. Saves a design doc.\nUse when asked to \"brainstorm this\", \"I have an idea\", \"help me think through\nthis\", \"office hours\", or \"is this worth building\".\nProactively invoke this skill (do NOT answer directly) when the user describes\na new product idea, asks whether something is worth building, wants to think\nthrough design decisions for something that doesn't exist yet, or is exploring\na concept before any code is written.\nUse before /plan-ceo-review or /plan-eng-review.",
+      "voice_line": null
+    },
+    "open-gstack-browser": {
+      "lead": "[Browser & Web] Launch GStack Browser — AI-controlled Chromium with the sidebar extension baked in.",
+      "routing": "Opens a visible browser window where you can watch every action in real time.\nThe sidebar shows a live activity feed and chat. Anti-bot stealth built in.\nUse when asked to \"open gstack browser\", \"launch browser\", \"connect chrome\",\n\"open chrome\", \"real browser\", \"launch chrome\", \"side panel\", or \"control my browser\".",
+      "voice_line": "Voice triggers (speech-to-text aliases): \"show me the browser\"."
+    },
+    "optimize-decision": {
+      "lead": "[Operations Research / Behavioral] Formulate a decision as a Linear Program (LP), Mixed-Integer Program (MIP), or Constraint Program (CP-SAT) using OR-Tools or Pyomo.",
+      "routing": "Identifies decision variables, constraints, objective(s), and uncertainty. Solves the\nmodel, surfaces shadow prices (\"what would a one-unit relaxation buy you?\"), generates\na sensitivity table, and produces a runnable Python solver.\nUse when: \"which features to ship\", \"which customers to call\", \"allocate engineering\nhours\", \"optimize the decision\", \"LP / MIP / OR-Tools / Pyomo / shadow prices\".",
+      "voice_line": null
+    },
+    "pair-agent": {
+      "lead": "[Browser & Web] Pair a remote AI agent with your browser.",
+      "routing": "One command generates a setup key and\nprints instructions the other agent can follow to connect. Works with OpenClaw,\nHermes, Codex, Cursor, or any agent that can make HTTP requests. The remote agent\ngets its own tab with scoped access (read+write by default, admin on request).\nUse when asked to \"pair agent\", \"connect agent\", \"share browser\", \"remote browser\",\n\"let another agent use my browser\", or \"give browser access\".",
+      "voice_line": "Voice triggers (speech-to-text aliases): \"pair agent\", \"connect agent\", \"share my browser\", \"remote browser access\"."
+    },
+    "paper-pipeline": {
+      "lead": "[AI Engineering / Research] Reproducible research-paper scaffold for NeurIPS / ACL / IEEE (and friends).",
+      "routing": "Sets up experiment runner with seeded configs, results store,\nfigure generators, LaTeX skeleton, citation manager. On `/paper-pipeline\nrun-ablation X`, runs the ablation and auto-updates the results table.\nHands off to /recipe (Family J) for the reproducibility appendix.\nOutputs papers/{slug}/{paper.tex,experiments/,figs/,results.db}.\nUse when: \"set up a paper\", \"research project skeleton\", \"ablation table\",\n\"make this reproducible\".",
+      "voice_line": "Voice triggers (speech-to-text aliases): \"paper pipeline\", \"set up a paper\", \"research project\"."
+    },
+    "paper-trade": {
+      "lead": "[FinTech / Algorithmic Trading] Realistic-execution paper-trading harness.",
+      "routing": "Sits between\nbacktest and live trading. Order-book-aware fills, latency simulation, partial fills,\nrejections, exchange downtime, broker-API quirks. Generates a Divergence Report\ncomparing paper P&L to the idealized backtest projection — flags drift beyond the\nnoise threshold so divergence is visible BEFORE risking real capital.\nUse when: \"paper trade this strategy\", \"shadow run\", \"realistic execution\",\n\"broker simulation\", \"pre-live validation\".",
+      "voice_line": "Voice triggers (speech-to-text aliases): \"paper trade\", \"shadow run\", \"pre-live test\"."
+    },
+    "plan-ceo-review": {
+      "lead": "[Planning & Review] CEO/founder-mode plan review.",
+      "routing": "Rethink the problem, find the 10-star product,\nchallenge premises, expand scope when it creates a better product. Four modes:\nSCOPE EXPANSION (dream big), SELECTIVE EXPANSION (hold scope + cherry-pick\nexpansions), HOLD SCOPE (maximum rigor), SCOPE REDUCTION (strip to essentials).\nUse when asked to \"think bigger\", \"expand scope\", \"strategy review\", \"rethink this\",\nor \"is this ambitious enough\".\nProactively suggest when the user is questioning scope or ambition of a plan,\nor when the plan feels like it could be thinking bigger.",
+      "voice_line": null
+    },
+    "plan-design-review": {
+      "lead": "[Planning & Review] Designer's eye plan review — interactive, like CEO and Eng review.",
+      "routing": "Rates each design dimension 0-10, explains what would make it a 10,\nthen fixes the plan to get there. Works in plan mode. For live site\nvisual audits, use /design-review. Use when asked to \"review the design plan\"\nor \"design critique\".\nProactively suggest when the user has a plan with UI/UX components that\nshould be reviewed before implementation.",
+      "voice_line": null
+    },
+    "plan-devex-review": {
+      "lead": "[Planning & Review] Interactive developer experience plan review.",
+      "routing": "Explores developer personas,\nbenchmarks against competitors, designs magical moments, and traces friction\npoints before scoring. Three modes: DX EXPANSION (competitive advantage),\nDX POLISH (bulletproof every touchpoint), DX TRIAGE (critical gaps only).\nUse when asked to \"DX review\", \"developer experience audit\", \"devex review\",\nor \"API design review\".\nProactively suggest when the user has a plan for developer-facing products\n(APIs, CLIs, SDKs, libraries, platforms, docs).",
+      "voice_line": "Voice triggers (speech-to-text aliases): \"dx review\", \"developer experience review\", \"devex review\", \"devex audit\", \"API design review\", \"onboarding review\"."
+    },
+    "plan-eng-review": {
+      "lead": "[Planning & Review] Eng manager-mode plan review.",
+      "routing": "Lock in the execution plan — architecture,\ndata flow, diagrams, edge cases, test coverage, performance. Walks through\nissues interactively with opinionated recommendations. Use when asked to\n\"review the architecture\", \"engineering review\", or \"lock in the plan\".\nProactively suggest when the user has a plan or design doc and is about to\nstart coding — to catch architecture issues before implementation.",
+      "voice_line": "Voice triggers (speech-to-text aliases): \"tech review\", \"technical review\", \"plan engineering review\"."
+    },
+    "plan-tune": {
+      "lead": "[Planning & Review] Self-tuning question sensitivity + developer psychographic for gstack (v1: observational).",
+      "routing": "Review which AskUserQuestion prompts fire across gstack skills, set per-question preferences\n(never-ask / always-ask / ask-only-for-one-way), inspect the dual-track\nprofile (what you declared vs what your behavior suggests), and enable/disable\nquestion tuning. Conversational interface — no CLI syntax required.\n\nUse when asked to \"tune questions\", \"stop asking me that\", \"too many questions\",\n\"show my profile\", \"what questions have I been asked\", \"show my vibe\",\n\"developer profile\", or \"turn off question tuning\". \n\nProactively suggest when the user says the same gstack question has come up before,\nor when they explicitly override a recommendation for the Nth time.",
+      "voice_line": null
+    },
+    "plan-ux-review": {
+      "lead": "[Planning & Review] UX researcher-mode plan review for gstack.",
+      "routing": "Maps stakeholder workflows, persona journeys,\nhandoff points, and cross-feature flows. Rates each UX dimension 0-10,\nexplains what would make it a 10, then fixes the plan to get there.\nComplements /plan-design-review (visual craft) with experience flow analysis.\nUse when asked to \"review the UX\", \"workflow review\", \"persona review\",\n\"stakeholder journeys\", or \"how do different users experience this\".\nProactively suggest when the plan involves multiple user roles,\nmulti-step workflows, or cross-feature interactions.",
+      "voice_line": null
+    },
+    "postmortem": {
+      "lead": "[CISO Compliance + IR] Blameless postmortem facilitator.",
+      "routing": "Walks Hall through\ntimeline reconstruction (paste/import from chat), 5-whys, contributing factors\n(people, process, tech), impact quantification, action items with owners,\nand detection-gap analysis. Produces a publishable postmortem internally\nand externally. Maps to SOC 2 CC7.4-7.5, ISO 27001 A.5.27, HIPAA §164.308(a)(6)(ii),\nPCI-DSS Req 12.10.6.\nUse when: \"postmortem\", \"post-mortem\", \"incident review\", \"5-whys\",\n\"blameless review\", \"what happened\", \"RCA writeup\".",
+      "voice_line": null
+    },
+    "pricing-experiment": {
+      "lead": "[CEO Cockpit] Pricing experiment designer.",
+      "routing": "Takes a hypothesis (\"free tier hurts conversion\"),\nproposes 2-3 alternative tier structures with concrete prices, predicts revenue impact\nfrom current cohort data, and outputs an experiment design (audience, duration,\nsuccess metric, ramp-down trigger). Uses decision-math primitives for power calc\nand sample-size estimation. Pricing changes made on signal, not gut.\nUse when: \"pricing experiment\", \"test a new tier\", \"should we change pricing\".",
+      "voice_line": "Voice triggers (speech-to-text aliases): \"pricing experiment\", \"test new pricing\", \"should we change pricing\"."
+    },
+    "product-ci": {
+      "lead": "[UX Pipeline] Derive brand values from the product and map them to design tokens (colors, typography, motion, spacing).",
+      "routing": "Values come from what users must FEEL to act\n(transparency → blue, trust → gold), not from arbitrary input. Writes the :root token\nblock in mockup/styles.css plus docs/PRODUCT_CI.md documenting every choice with\nreasoning. Layer 1 producer in the v3.1 UX Pipeline. Re-runnable; iterative; downstream\nlayers (/design-consultation, /mockup, /interactive-mockup) auto-detect token drift.\nUse when asked to \"product CI\", \"brand identity\", \"design tokens\", \"values to colors\",\n\"what colors fit this product\", or \"set up the brand voltage\".\nProactively suggest when starting a new project's design system, after /office-hours\nor /discover-personas has produced product intel.",
+      "voice_line": null
+    },
+    "prompt-engineering": {
+      "lead": "[AI Engineering / Research] Systematic prompt engineering: from a task spec, generates 6-8 prompt variants spanning CoT / few-shot / role-play / structured-output / decomposition / self-critique,...",
+      "routing": "Replaces trial-and-error tuning that breaks at scale.\nOutputs prompts/{task}/{variants/,winner.md,EVAL.md}.\nUse when: \"improve this prompt\", \"test prompt variants\", \"why does my prompt\nbreak at scale\", \"pick the best prompt\".",
+      "voice_line": "Voice triggers (speech-to-text aliases): \"prompt engineering\", \"test prompt variants\", \"tune the prompt\"."
+    },
+    "prosody-control": {
+      "lead": "[Speech & Voice AI] Expression / tone / accent / cadence control surface for a TTS system.",
+      "routing": "Designs the right technique stack — reference-audio conditioning, learned\nstyle tokens (GST), explicit SSML extensions, IPA + tone marks, per-sentence style\nembeddings, multi-speaker mixing — per use case. Generates the training-data\naugmentation strategy. Built for cases like Thai-accented English with\nteaching-cadence prosody (fingerspelling → TSL) where no off-the-shelf model carries\nthe full surface.\nUse when: \"control prosody\", \"voice expression\", \"TTS emotion control\", \"accent control\",\n\"cadence control\", \"SSML design\", \"style tokens\", \"GST\".",
+      "voice_line": "Voice triggers (speech-to-text aliases): \"control prosody\", \"tts expression\", \"accent control\", \"teaching cadence\"."
+    },
+    "purple-exercise": {
+      "lead": "[Red Team / RE] Purple-team exercise orchestrator.",
+      "routing": "Picks a MITRE ATT&CK technique,\ngenerates an Atomic Red Team or Caldera test plan, executes it (or hands off to blue\nteam to detect blind), records what fired / what didn't / what should have, and\noutputs a coverage delta against ATT&CK Navigator. Bridges Family F (offensive) and\nFamily K (defensive) — every technique tested here should produce a detection\ncandidate in /detect-engineering. Requires engagements/{slug}/scope.yaml for the\noffensive side; reads security-ownership.yaml for the defensive side.\nUse when: \"purple team\", \"attack technique test\", \"atomic red team\", \"caldera plan\",\n\"attack and defend\", \"detection coverage\", \"att&ck mapping\", \"siem efficacy\".",
+      "voice_line": "Voice triggers (speech-to-text aliases): \"purple exercise\", \"atomic test\", \"detection coverage\"."
+    },
+    "qa": {
+      "lead": "[QA & Bugs] Systematically QA test a web application and fix bugs found.",
+      "routing": "Runs QA testing,\nthen iteratively fixes bugs in source code, committing each fix atomically and\nre-verifying. Use when asked to \"qa\", \"QA\", \"test this site\", \"find bugs\",\n\"test and fix\", or \"fix what's broken\".\nProactively suggest when the user says a feature is ready for testing\nor asks \"does this work?\". Three tiers: Quick (critical/high only),\nStandard (+ medium), Exhaustive (+ cosmetic). Produces before/after health scores,\nfix evidence, and a ship-readiness summary. For report-only mode, use /qa-only.",
+      "voice_line": "Voice triggers (speech-to-text aliases): \"quality check\", \"test the app\", \"run QA\"."
+    },
+    "qa-only": {
+      "lead": "[QA & Bugs] Report-only QA testing.",
+      "routing": "Systematically tests a web application and produces a\nstructured report with health score, screenshots, and repro steps — but never\nfixes anything. Use when asked to \"just report bugs\", \"qa report only\", or\n\"test but don't fix\". For the full test-fix-verify loop, use /qa instead.\nProactively suggest when the user wants a bug report without any code changes.",
+      "voice_line": "Voice triggers (speech-to-text aliases): \"bug report\", \"just check for bugs\"."
+    },
+    "rag-design": {
+      "lead": "[AI Engineering / Research] End-to-end RAG design: data-source survey, chunking strategy, embedding model, vector store, retrieval algorithm, reranker, eval plan.",
+      "routing": "Each design decision is eval-gated — you don't pick a chunker because someone\nsaid it was good, you pick it because the eval beat the alternatives.\nOutputs `rag/{namespace}/{ingest.py,retrieve.py,evals/,DESIGN.md}`.\nUse when: \"add RAG to this\", \"search over my docs\", \"build a retriever\",\n\"design a knowledge base\".",
+      "voice_line": "Voice triggers (speech-to-text aliases): \"rag design\", \"build rag\", \"design retrieval\"."
+    },
+    "recipe": {
+      "lead": "[Product Transposition] Document YOUR built thing as a reproducible cookbook: INGREDIENTS.md, STEPS.md, TECHNIQUES.md, PLATING.md. Four output modes via `--for {paper,",
+      "routing": "blog, onboarding, replay}`. Works on transposed projects\n(studies/<slug>/) and on plain built projects (project root). Defaults to\n`--exclude proprietary` for paper + blog modes; `--anonymize` strips identifying\ninfo for review. Replay mode emits a strict reproducibility bundle (Dockerfile,\nseeded configs, golden outputs). Use when asked to \"document this project\",\n\"write the recipe\", \"paper supplement\", \"onboarding doc\", \"blog draft\", or\n\"make this reproducible\".",
+      "voice_line": null
+    },
+    "recon": {
+      "lead": "[Red Team / RE] Passive-then-active reconnaissance orchestrator for AUTHORIZED engagements only.",
+      "routing": "Chains subfinder + amass + httpx + nuclei + shodan + crt.sh + wayback, dedups, scores\nassets by attack surface (exposed admin, stale TLS, leaked secrets), and produces an\nattack-tree-ready inventory. Enforces engagements/{slug}/scope.yaml — refuses any target\nnot declared in scope. Every action hash-chained into engagements/{slug}/audit.log.\nUse when: \"recon\", \"subdomain enumeration\", \"attack surface map\", \"external footprint\",\n\"passive recon\", \"active recon\", \"shodan sweep\", \"crt.sh\", \"wayback urls\".",
+      "voice_line": "Voice triggers (speech-to-text aliases): \"run recon\", \"recon this target\", \"attack surface map\"."
+    },
+    "redteam-c2": {
+      "lead": "[Red Team / RE] Short-lived, scope-gated C2 infrastructure provisioning for AUTHORIZED red-team engagements only.",
+      "routing": "Provisions a hardened Sliver / Mythic / Havoc stack from\ntemplate, generates implants for the agreed scope, configures redirectors, and defines\na kill-switch + full teardown sequence. Strictest authorization gate in Family F:\nrefuses without engagements/{slug}/scope.yaml containing client name, ROE doc, target\nlist, authorized techniques (must include \"c2-operations\"), duration, and contacts.\nEvery action hash-chained into audit.log. Idle timer auto-teardown.\nUse when: \"redteam c2\", \"sliver setup\", \"mythic profile\", \"havoc listener\", \"c2 infrastructure\",\n\"redirector setup\", \"implant generation\", \"engagement teardown\".",
+      "voice_line": "Voice triggers (speech-to-text aliases): \"redteam c2\", \"c2 setup\", \"engagement infrastructure\"."
+    },
+    "retro": {
+      "lead": "[Intelligence & Memory] Weekly engineering retrospective.",
+      "routing": "Analyzes commit history, work patterns,\nand code quality metrics with persistent history and trend tracking.\nTeam-aware: breaks down per-person contributions with praise and growth areas.\nUse when asked to \"weekly retro\", \"what did we ship\", or \"engineering retrospective\".\nProactively suggest at the end of a work week or sprint.",
+      "voice_line": null
+    },
+    "reverse-engineer": {
+      "lead": "[Red Team / RE] Authorized adversarial RE.",
+      "routing": "Drives Ghidra headless (or Cutter) over Mach-O /\nELF / PE binaries — extracts strings, functions, xrefs, suspicious calls, anti-debug,\npacker signatures — annotated report with next-step hypotheses. Mobile: jadx (Android),\nclass-dump (iOS). Refuses without engagements/{slug}/scope.yaml in scope (engagement) or\nowned-artifact declaration (research on Hall's own binaries / CTF challenges).\nUse when: \"reverse engineer\", \"analyze this binary\", \"ghidra headless\", \"decompile\",\n\"unpack\", \"android apk decompile\", \"mach-o analysis\". \nDistinct from /blueprint (Family J — constructive RE on public material); this is\n*adversarial* RE on scope-gated targets.",
+      "voice_line": "Voice triggers (speech-to-text aliases): \"reverse engineer\", \"analyze binary\", \"decompile this\"."
+    },
+    "review": {
+      "lead": "[Code Review] Pre-landing PR review.",
+      "routing": "Analyzes diff against the base branch for SQL safety, LLM trust\nboundary violations, conditional side effects, and other structural issues. Use when\nasked to \"review this PR\", \"code review\", \"pre-landing review\", or \"check my diff\".\nProactively suggest when the user is about to merge or land code changes.",
+      "voice_line": null
+    },
+    "risk-engine": {
+      "lead": "[FinTech / Algorithmic Trading] Risk engine designer for algorithmic strategies.",
+      "routing": "Lays\ndown Kelly / fractional-Kelly / risk-parity / vol-targeted position sizing,\nper-asset and per-factor caps, daily / weekly / monthly drawdown triggers, a kill\nswitch with manual interlock, and a re-backtest of the strategy WITH the risk\noverlay applied. Enforces the \"no naked strategy\" rule: a backtest may exist\nwithout a risk engine; a paper trade or live trade may not.\nUse when: \"design risk engine\", \"position sizing\", \"kill switch\",\n\"drawdown limits\", \"Kelly\", \"risk overlay\".",
+      "voice_line": "Voice triggers (speech-to-text aliases): \"design risk engine\", \"position sizing\", \"kill switch\"."
+    },
+    "runway": {
+      "lead": "[CEO Cockpit] Burn + runway + hire-cost scenario modeler.",
+      "routing": "Reads bank balance + monthly burn +\nrevenue from a configured ledger source (Stripe + Mercury/Brex CSV). Models scenarios:\n\"if I hire X at $Y\", \"if revenue grows N% MoM\", \"if we cut Z\". Deterministic math in\n`lib/runway-model.ts` — not an LLM guess. Outputs a one-page report with scenario\ntables and a runway chart.\nUse when: \"what's our runway\", \"model the hire\", \"burn analysis\", \"runway scenarios\".",
+      "voice_line": "Voice triggers (speech-to-text aliases): \"what's our runway\", \"model the hire\", \"burn analysis\"."
+    },
+    "scrape": {
+      "lead": "[Browser & Web] Pull data from a web page.",
+      "routing": "First call on a new intent prototypes the flow\nvia $B primitives and returns JSON. Subsequent calls on a matching intent\nroute to a codified browser-skill and return in ~200ms. Read-only — for\nmutating flows (form fills, clicks, submissions), use /automate.\nUse when asked to \"scrape\", \"get data from\", \"pull\", \"extract from\", or\n\"what's on\" a page.",
+      "voice_line": null
+    },
+    "security-training": {
+      "lead": "[CISO Compliance + IR] Project-specific security training generator.",
+      "routing": "Replaces\ngeneric SaaS training with materials that name Hall's actual vendors, cite\nreal diffs (good and bad) from the repo, and walk through the team's own\nthreat model. Outputs markdown training decks + a quiz that doubles as a\ntraining-completion record (SOC 2 CC1.4, ISO 27001 A.6.3, HIPAA §164.308(a)(5),\nPCI-DSS Req 12.6, GDPR Art. 39(1)(b) awareness).\nUse when: \"security training\", \"phishing simulation\", \"secure coding training\",\n\"awareness training\", \"training records for SOC 2\", \"annual training\".",
+      "voice_line": null
+    },
+    "service-catalog": {
+      "lead": "[Chief Architect] One-time scaffolding of a Backstage-style service catalog in markdown.",
+      "routing": "Per-service entry with owner, SLOs, runbook link, on-call rotation,\ndependencies, data classification, and lifecycle state. Auto-detects services\nfrom the codebase + IaC + container manifests, proposes entries for missing\nservices, and detects services that have been deleted. Keeps an INDEX.md with\nownership and search. Use when: \"service catalog\", \"who owns this\", \"list our\nservices\", \"service ownership\", or \"backstage in markdown\".",
+      "voice_line": null
+    },
+    "service-mesh": {
+      "lead": "[Cloud-Native] Decide whether a service mesh actually helps, and if so, generate config for Istio, Linkerd, or Consul Connect.",
+      "routing": "Covers mTLS, traffic policies,\nretries, timeouts, circuit breakers, canary routing, and fault injection — with\na hard audit step that often concludes \"you don't need a mesh.\" Use when:\n\"do we need a service mesh\", \"istio config\", \"linkerd setup\", \"mTLS between\nservices\", \"canary routing\", \"fault injection\".",
+      "voice_line": null
+    },
+    "setup-browser-cookies": {
+      "lead": "[Browser & Web] Import cookies from your real Chromium browser into the headless browse session.",
+      "routing": "Opens an interactive picker UI where you select which cookie domains to import.\nUse before QA testing authenticated pages. Use when asked to \"import cookies\",\n\"login to the site\", or \"authenticate the browser\".",
+      "voice_line": null
+    },
+    "setup-deploy": {
+      "lead": "[Tools] Configure deployment settings for /land-and-deploy.",
+      "routing": "Detects your deploy\nplatform (Fly.io, Render, Vercel, Netlify, Heroku, GitHub Actions, custom),\nproduction URL, health check endpoints, and deploy status commands. Writes\nthe configuration to CLAUDE.md so all future deploys are automatic.\nUse when: \"setup deploy\", \"configure deployment\", \"set up land-and-deploy\",\n\"how do I deploy with gstack\", \"add deploy config\".",
+      "voice_line": null
+    },
+    "setup-gbrain": {
+      "lead": "[Intelligence & Memory] Set up gbrain for this coding agent: install the CLI, initialize a local PGLite or Supabase brain, register MCP, capture per-remote trust policy.",
+      "routing": "One command from zero to \"gbrain is running, and this agent\ncan call it.\" Use when: \"setup gbrain\", \"connect gbrain\", \"start\ngbrain\", \"install gbrain\", \"configure gbrain for this machine\".",
+      "voice_line": null
+    },
+    "shared-lib-bump": {
+      "lead": "[Multi-Repo] Cascading version-bump PRs across every detected consumer of a shared lib.",
+      "routing": "Detects consumers via /dep-graph or by scanning lockfiles, opens a bump PR per consumer,\nruns each consumer's test suite, and files ONE tracking issue with the merge plan\n(not N — the issue is the rollup).\nUse when asked to \"bump shared lib\", \"cascade version bump\", \"roll out new version\",\n\"upgrade @org/lib everywhere\", or \"consumer rollout\".",
+      "voice_line": null
+    },
+    "ship": {
+      "lead": "[Ship & Release] Ship workflow: detect + merge base branch, run tests, review diff, bump VERSION, update CHANGELOG, commit, push, create PR.",
+      "routing": "Use when asked to \"ship\", \"deploy\",\n\"push to main\", \"create a PR\", \"merge and push\", or \"get it deployed\".\nProactively invoke this skill (do NOT push/PR directly) when the user says code\nis ready, asks about deploying, wants to push code up, or asks to create a PR.",
+      "voice_line": null
+    },
+    "siem-tune": {
+      "lead": "[Blue Team / Defensive] SIEM rule fidelity tuning.",
+      "routing": "Audits the current SIEM\nrule set against actual alert volume + analyst dispositions (TP / FP /\nbenign). Scores each rule on precision × business impact × adversary\nplausibility. Proposes retirement, tuning (suppression conditions,\nthreshold changes), and new-rule gaps. Default mode is read-only audit;\n`--apply` requires explicit AskUserQuestion approval per rule change.\nRefuses to run without `~/.gstack/projects/{slug}/security-ownership.yaml`.\nUse when: \"tune the SIEM\", \"kill noisy alerts\", \"FP reduction\", \"rule\nfidelity scoring\", \"retire stale rules\".",
+      "voice_line": null
+    },
+    "sign-linguistics": {
+      "lead": "[Accessibility AI] Per-sign-language linguistic catalog compiler.",
+      "routing": "Builds the\nstructured resources that every downstream sign-language tool depends on:\nhandshape inventory (with HamNoSys / SignWriting / SLPA encoding), location\ngrid, movement primitives, non-manual marker conventions, prosody features\n(intensity, repetition, hold, speed), and a primary-source bibliography.\nOne catalog per language — ASL, BSL, TSL, JSL, Auslan, LSF, DGS, Libras, KSL,\netc. Output is structured YAML consumed by /sign-text, /multi-sign, and\n/avatar-sign.\nUse when asked to \"sign linguistics\", \"handshape inventory\", \"build sign\ncatalog\", \"sign phonology\", or \"HamNoSys / SignWriting encoding\".",
+      "voice_line": null
+    },
+    "sign-text": {
+      "lead": "[Accessibility AI] Bidirectional text↔sign translation pipeline design.",
+      "routing": "NOT\nspoken-language MT. Signs decompose into handshape, location, movement,\norientation, and non-manual features (eye gaze, brows, mouthing, head tilt,\nbody lean). text→sign produces a parameter sequence renderable by an avatar\n(Family P) or video synth; sign→text ingests video, extracts pose\n(MediaPipe Holistic / Sapiens), segments signs, recognizes gloss, generates\ntext. Per target sign language: ASL, BSL, TSL, JSL, Auslan, LSF, DGS, etc.\nUse when asked to \"translate sign language\", \"text to sign\", \"sign to\ntext\", \"sign-language pipeline\", or \"build sign translation\".",
+      "voice_line": null
+    },
+    "sim-calibrate": {
+      "lead": "[Economic Simulation] Calibration workflow for economic simulators.",
+      "routing": "Picks the calibration\ntarget (moments, time series, or distributions), the distance metric (mean-squared\ndeviation, KL divergence, Wasserstein, or indirect inference), the parameter-search\nalgorithm (Bayesian via PyMC, grid, or surrogate-model-guided via scikit-learn), and\nenforces train/test split discipline so the calibration target never overlaps the\nheld-out validation window. Pairs with `/econ-sim` (calibrates its parameters),\n`/event-stream` (uses event streams as exogenous input with strict split boundary),\nand `/counterfactual` (consumes the calibrated posterior).\nUse when asked to \"calibrate the sim\", \"fit the model to history\", \"Bayesian\ncalibration\", \"indirect inference\", \"moment matching\", \"match the simulator to data\",\nor \"posterior over sim parameters\".",
+      "voice_line": null
+    },
+    "simulate": {
+      "lead": "[Operations Research / Behavioral] Build a discrete-event or Monte-Carlo simulation of a system from a description.",
+      "routing": "Auto-generates a SimPy (or simmer) model, runs\nscenarios, produces distribution outputs (p50/p95/p99), generates a tornado plot\nfor sensitivity, and persists a reproducible report. Use for capacity / pricing /\nstaffing / latency / queue / failure-rate questions where back-of-envelope math\nhides the tail risk.\nUse when: \"simulate this\", \"monte carlo\", \"queueing analysis\", \"what does the\np99 look like\", \"tornado plot\", \"SimPy / simmer / discrete-event sim\".",
+      "voice_line": null
+    },
+    "skillify": {
+      "lead": "[Intelligence & Memory] Codify the most recent successful /scrape flow into a permanent browser-skill on disk.",
+      "routing": "Future /scrape calls with the same intent run\nthe codified script in ~200ms instead of re-driving the page. Walks\nback through the conversation, synthesizes script.ts + script.test.ts\n+ fixture, runs the test in a temp dir, and asks before committing.\nUse when asked to \"skillify\", \"codify\", \"save this scrape\", or\n\"make this permanent\".",
+      "voice_line": null
+    },
+    "soar-playbook": {
+      "lead": "[Blue Team / Defensive] SOAR playbook generation.",
+      "routing": "Outputs codified\nincident-response playbooks for XSOAR / Tines / TheHive / Shuffle / n8n.\nCovers phishing, credential-stuffed account, ransomware indicator,\npublic-facing-app exploit, insider data exfil. Each playbook: triage\nsteps, evidence collection, containment options (human-approval gated),\ncomms templates, IR handoff. Codified as YAML/JSON the target platform\nimports, with a human-readable RUNBOOK.md companion. Refuses to run\nwithout `~/.gstack/projects/{slug}/security-ownership.yaml`.\nUse when: \"SOAR playbook\", \"automate IR for X\", \"XSOAR / Tines / TheHive\nworkflow\", \"incident response automation\".",
+      "voice_line": null
+    },
+    "spec": {
+      "lead": "Turn vague intent into a precise, executable spec in five phases.",
+      "routing": "Files the issue,\noptionally spawns a Claude Code agent in a fresh worktree, and lets /ship close\nthe source issue on merge. Use when asked to \"spec this out\", \"file an issue\",\n\"write up a ticket\", \"make this a GitHub issue\", or \"turn this into a backlog item\".",
+      "voice_line": null
+    },
+    "sre-slo": {
+      "lead": "[Cloud-Native] Define SLIs, SLOs, and error budgets per service — as engineering contracts, not marketing copy.",
+      "routing": "Picks the right SLI shape (request-based,\nwindow-based, count-based) per workload, generates Prometheus recording +\nalerting rules with multi-window burn-rate alerts, and writes a quarterly\nreview template. Use when: \"define SLOs\", \"error budget\", \"set up SLIs\",\n\"burn-rate alerts\", \"quarterly SLO review\".",
+      "voice_line": null
+    },
+    "strategy-design": {
+      "lead": "[FinTech / Algorithmic Trading] Strategy design framework for algorithmic trading.",
+      "routing": "Forces an explicit edge hypothesis (microstructure / behavioral / informational / latency),\nstrategy class taxonomy (mean-reversion / momentum / stat-arb / market-making / ML),\nsignal generation, position-sizing rule, entry/exit logic, and risk-side constraints\nBEFORE a single line of backtest code. Outputs a fully-specified strategy doc that\nis testable, not an anecdote-driven hyperparameter fantasy.\nUse when: \"design a strategy\", \"new trading strategy\", \"edge hypothesis\",\n\"strategy spec\", \"algo design\".",
+      "voice_line": "Voice triggers (speech-to-text aliases): \"design a strategy\", \"new trading strategy\", \"edge hypothesis\"."
+    },
+    "strategy-eval": {
+      "lead": "[FinTech / Algorithmic Trading] Multi-metric strategy evaluation scorecard.",
+      "routing": "Sharpe +\nSortino + Calmar + max drawdown + tail metrics (CVaR / expected shortfall),\nregime-conditional performance (bull / bear / sideways / high-vol / low-vol),\ncapacity estimate (at what AUM does the edge break?), drawdown recovery analysis,\nand live-vs-backtest divergence detection. Consumes trade history from /backtest,\n/paper-trade, or live, and emits a scorecard a portfolio manager can act on.\nUse when: \"evaluate this strategy\", \"strategy scorecard\", \"Sharpe Sortino Calmar\",\n\"tail risk\", \"regime breakdown\", \"capacity estimate\".",
+      "voice_line": "Voice triggers (speech-to-text aliases): \"evaluate strategy\", \"strategy scorecard\", \"tail risk\"."
+    },
+    "sync-gbrain": {
+      "lead": "[Intelligence & Memory] Keep gbrain current with this repo's code and refresh agent search guidance in CLAUDE.md. Wraps the gstack-gbrain-sync",
+      "routing": "orchestrator with\nstate probing, native code-surface registration, capability checks,\nand a verdict block. Re-runnable, idempotent. Use when: \"sync gbrain\",\n\"refresh gbrain\", \"re-index this repo\", \"gbrain search isn't finding\nthings\".",
+      "voice_line": null
+    },
+    "team-velocity": {
+      "lead": "[CTO Strategy] Throughput, cycle-time, review-latency, and bug-rate trend report for the last 12 weeks.",
+      "routing": "Pulls commit/PR/issue data via `gh` (per contributor or solo),\ncomputes the stats, surfaces inflection points, and asks \"what changed in week N?\"\nwith cross-referenced context from `intel.jsonl`. Output: `metrics/velocity/{YYYY-WW}.md`.\nUse when: \"are we slowing down\", \"team velocity\", \"throughput report\", \"DORA metrics\",\n\"what changed in week N\".",
+      "voice_line": "Voice triggers (speech-to-text aliases): \"team velocity\", \"are we slowing down\", \"throughput report\"."
+    },
+    "tech-debt-register": {
+      "lead": "[CTO Strategy] ROI-sorted tech-debt register.",
+      "routing": "Scans the codebase for debt markers\n(TODO, FIXME, HACK, XXX), correlates with `git blame` age and `/retro` recurring-\nbreakage signals from `intel.jsonl`, scores each item by **impact × frequency /\neffort**, and outputs a register sorted by ROI. Auto-updatable weekly. Use when:\n\"what tech debt should we fix\", \"debt register\", \"list our HACKs\", \"what's slowing\nus down\".",
+      "voice_line": "Voice triggers (speech-to-text aliases): \"tech debt register\", \"list tech debt\", \"what should we fix\"."
+    },
+    "threat-hunt": {
+      "lead": "[Blue Team / Defensive] Hypothesis-driven threat hunting.",
+      "routing": "Generates a hunt\nhypothesis from a threat profile (\"an attacker with foothold X would do\nbehavior Y to achieve objective Z\"), translates it into queries against\ndeclared log sources (CloudTrail / EDR / DNS / identity / process /\nSplunk / Elastic / Sentinel / Loki), executes, scores confidence, declares\noutcome (found / not found / inconclusive), and proposes detection-\nengineering candidates for confirmed patterns. Refuses to run without an\n`~/.gstack/projects/{slug}/security-ownership.yaml` declaration.\nUse when: \"threat hunt\", \"hunt for X behavior\", \"did anyone do Y in our\nlogs\", \"hypothesis hunt\".",
+      "voice_line": null
+    },
+    "threat-intel": {
+      "lead": "[Blue Team / Defensive] Threat intelligence ingestion + relevance filter.",
+      "routing": "Ingests selected feeds (MISP, OpenCTI, commercial vendors, OSINT),\nfilters indicators to Hall's stack (declared in security-ownership.yaml),\nenriches with confidence + sightings, dedups, prioritizes by adversary\nrelevance. Output: daily/weekly briefing + a typed IoC store\n(`intel/iocs.jsonl` per S15 schema) consumable by /detect-engineering,\n/threat-hunt, /log-analyze, /forensics, /honeypot, and Family F /recon.\nRefuses to run without `~/.gstack/projects/{slug}/security-ownership.yaml`.\nUse when: \"ingest threat intel\", \"MISP feed\", \"OpenCTI\", \"what new IoCs\nmatter to us\", \"daily intel briefing\".",
+      "voice_line": null
+    },
+    "threat-model-evolve": {
+      "lead": "[CISO Compliance + IR] Living STRIDE threat model that updates on /ship.",
+      "routing": "Maintains a canonical docs/threat-model.md (assets, actors, flows, threats\nper STRIDE letter) plus a changelog of every diff that touched a trust\nboundary, data flow, or external dependency. On /ship, diffs the architecture\nagainst the last threat model, asks \"did this PR introduce a new trust\nboundary or data flow?\" and prompts for an update. Maps to SOC 2 CC3.1-3.4\n(risk assessment), ISO 27001 A.5.7 (threat intel) + A.8.27 (secure dev),\nHIPAA §164.308(a)(1)(ii)(A) (risk analysis), PCI-DSS Req 12.3.1\n(risk-assessment process).\nUse when: \"threat model\", \"STRIDE\", \"update threat model\", \"risk assessment\",\n\"did this PR change our attack surface\", \"trust boundary\".",
+      "voice_line": null
+    },
+    "transpose": {
+      "lead": "[Product Transposition] Interactive bridge-planning skill.",
+      "routing": "Reads a BLUEPRINT.md\n(from /blueprint) and walks line-by-line through what STAYS, what ADAPTS, and\nwhat gets REPLACED when transposing the mechanism from its source domain to\nyour target domain. Names the proprietary slots, surfaces target-domain edge cases\nthe source didn't have, and emits TRANSPOSITION.md — a bridge plan downstream\n/clone-and-twist consumes. Refuses to produce a transposition with a trivial\ndomain shift (i.e., a literal clone). Use when asked to \"transpose this study\",\n\"plan the bridge\", \"ASL to TSL\", or \"inference to fine-tuning\".",
+      "voice_line": null
+    },
+    "tts-design": {
+      "lead": "[Speech & Voice AI] TTS architecture + training plan.",
+      "routing": "Given target spec (languages,\nvoice count, latency budget, expression requirements, license posture, deployment\nconstraints), recommends the right backbone (VITS, Tacotron2, StyleTTS2, XTTSv2,\nBark, Tortoise, F5-TTS, Coqui) with rationale. Outputs an /autoplan-full-compatible\nbuild plan with data-prep, training, eval, and deployment phases.\nUse when: \"design a TTS system\", \"which TTS model should I use\", \"TTS architecture\",\n\"voice synthesis stack\", \"speech synthesis plan\".",
+      "voice_line": "Voice triggers (speech-to-text aliases): \"design a tts\", \"tts architecture\", \"which tts model\", \"speech synthesis plan\"."
+    },
+    "unfreeze": {
+      "lead": "[Build & Autonomy] Clear the freeze boundary set by /freeze, allowing edits to all directories again.",
+      "routing": "Use when you want to widen edit scope without ending the session.\nUse when asked to \"unfreeze\", \"unlock edits\", \"remove freeze\", or\n\"allow all edits\".",
+      "voice_line": null
+    },
+    "ux-audit": {
+      "lead": "[UX Audit] Persona-driven UX workflow audit on a live site.",
+      "routing": "Defines personas, scripts their\nend-to-end workflows, executes them in the browser, and reports where each persona\ngets stuck, confused, or hits dead ends. Unlike /plan-ux-review (reviews a plan)\nor /qa (finds bugs), this skill simulates real user journeys on a running app.\nUse when asked to \"ux audit\", \"workflow audit\", \"simulate user journeys\",\n\"persona test\", \"walk through as a user\", or \"test the user experience\".\nProactively suggest when the user says a feature is ready and the app has\nmultiple user roles or multi-step workflows.",
+      "voice_line": null
+    },
+    "ux-pipeline": {
+      "lead": "[UX Pipeline] End-to-end stakeholder-validated UX/UI pipeline.",
+      "routing": "Runs /office-hours →\n/discover-personas → /product-ci → /ux-workflows → /design-consultation → /mockup →\n/interactive-mockup with gap detection between every step and an iteration loop until\nall invariants pass + no stakeholder feedback remains open. Detects warm-start state\n(skips already-produced artifacts). Drift-propagates downstream when upstream tokens\nchange. Hands stakeholder a clickable mockup URL. Hard cap of 5 loops.\nUse when asked to \"ux pipeline\", \"auto ux pipeline\", \"full ux mockup\", \"stakeholder\nmockup\", \"design and mockup everything\", or \"run the ux pipeline\".\nProactively suggest when starting a new project's UI/UX or after major scope expansion.",
+      "voice_line": null
+    },
+    "ux-workflows": {
+      "lead": "[UX Pipeline] Produce docs/WORKFLOWS.md — one section per persona, each with entry points, 3-7 core end-to-end workflows (action→screen→outcome tuples), cross-persona",
+      "routing": "hand-offs,\nedge/error workflows, and an explicit out-of-scope statement. Distinct from /define-workflows\n(which produces audit-stage gap-analysis input); /ux-workflows is mockup-stage and granular\nenough to drive /mockup screen generation. Layer-feeding skill in the v3.1 UX Pipeline.\nUse when asked to \"ux workflows\", \"define user journeys\", \"workflows per persona\",\n\"what does each persona do\", or \"map out the flows\".\nProactively suggest after /discover-personas, before /mockup or /design-consultation.",
+      "voice_line": null
+    },
+    "vendor-risk": {
+      "lead": "[CISO Compliance + IR] Third-party risk inventory + scoring.",
+      "routing": "Discovers every\nSaaS vendor and sub-processor by scanning SDK imports, .env keys, IaC, and\n/cso outputs. Pulls each vendor's SOC 2 / ISO status, DPA terms, sub-processor\nlist. Classifies by data sensitivity × access scope. Flags vendors that need\nDPA renewal, sub-processor disclosure to customers (GDPR Art. 28(2)),\nBAA renewal (HIPAA §164.308(b)(1)), or service-provider contracts (CCPA §1798.140(ag)).\nUse when: \"vendor risk\", \"third-party audit\", \"sub-processor inventory\",\n\"DPA review\", \"BAA renewal\", \"vendor scoring\", \"TPRM\".",
+      "voice_line": null
+    },
+    "vendor-score": {
+      "lead": "[CTO Strategy] Deep single-vendor evaluation across 12 dimensions: security posture, SLA, pricing, API quality, DX, data portability, support, ecosystem, financial health, compliance, roadmap...",
+      "routing": "Pulls SOC 2 (if linked), reads API docs, tries\nthe SDK, scores each dimension 1-5, flags red lines (data residency, source escrow,\nMFA support, breach history). Output: `decisions/vendors/{vendor-slug}.md` plus a row\nadded to `decisions/vendors/vendor-matrix.md`. Use when: \"evaluate this vendor\",\n\"deep dive on Stripe\", \"vendor scorecard\", \"due diligence\".",
+      "voice_line": "Voice triggers (speech-to-text aliases): \"vendor scorecard\", \"evaluate vendor\", \"vendor due diligence\"."
+    },
+    "verify-loop": {
+      "lead": "[Build & Autonomy] Self-healing verification loop for gstack.",
+      "routing": "Runs /investigate-workflow logic on built features,\nauto-fixes BROKEN items, presents INCOMPLETE items to user, re-verifies up to 3\niterations, and detects regressions (fix breaks something new -> STOP).\nTwo entry points: automatic via /autobuild Phase 2.5, or standalone via /verify-loop.\nUse when asked to \"verify the build\", \"check completeness\", \"verify-loop\",\n\"self-heal\", or \"fix what's broken\".\nProactively suggest after /autobuild or after a large implementation session.",
+      "voice_line": null
+    },
+    "voice-clone": {
+      "lead": "[Speech & Voice AI] End-to-end voice cloning workflow with consent + watermark guardrails.",
+      "routing": "Picks the right tier (zero-shot XTTSv2 / Tortoise, few-shot StyleTTS2\nfine-tune, full fine-tune VITS) per requirements. Generates data-prep + training +\ninaudible-watermark + eval pipeline. Includes synthetic-voice attribution test that\nproves the output is YOUR clone, not someone else's voice. Refuses to operate\nwithout a signed CONSENT declaration.\nUse when: \"clone a voice\", \"voice cloning\", \"synthetic voice\", \"voice replica\",\n\"build a voice double\".",
+      "voice_line": "Voice triggers (speech-to-text aliases): \"clone my voice\", \"voice clone\", \"synthetic voice\", \"build a voice\"."
+    },
+    "voice-eval": {
+      "lead": "[Speech & Voice AI] Multi-metric TTS / voice-clone eval harness.",
+      "routing": "Scores synthesized\naudio on MOS (human) + MOSNet (predicted), speaker similarity (ECAPA-TDNN cosine),\nWER (Whisper back-transcribe), prosody distance (F0 + duration), and emotion-classifier\naccuracy. Stores baselines in the shared eval store (S9) for regression detection.\nProduces a per-task perceptual scorecard. Real eval beats \"does it sound good?\".\nUse when: \"evaluate TTS quality\", \"voice eval\", \"MOS score\", \"speaker similarity\",\n\"voice regression test\", \"TTS scorecard\".",
+      "voice_line": "Voice triggers (speech-to-text aliases): \"voice eval\", \"score this tts\", \"voice quality test\", \"tts regression\"."
+    },
+    "workspace-sync": {
+      "lead": "[Multi-Repo] Sync shared workspace configs (tsconfig, eslint, prettier, Renovate, GH Actions, .editorconfig, .nvmrc) across consuming repos via Renovate-style PRs. Pulls",
+      "routing": "a canonical\ntemplate, diffs against each consumer, opens scoped sync PRs, gates breaking diffs through\nAskUserQuestion.\nUse when asked to \"sync workspace configs\", \"propagate eslint\", \"shared config drift\",\n\"renovate-style PRs\", or \"fix config drift across repos\".",
+      "voice_line": null
+    }
+  }
+}

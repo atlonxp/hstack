@@ -73,6 +73,7 @@ This skill has two modes:
 
 1. **Stack inventory.** Detect what's deployed:
    ```bash
+setopt +o nomatch 2>/dev/null || true  # zsh: let unmatched globs pass literally
    ls deploy/ Dockerfile* docker-compose*.yml 2>/dev/null
    find .github/workflows -maxdepth 1 -name '*.yml' 2>/dev/null
    ls infra/ terraform/ pulumi/ 2>/dev/null

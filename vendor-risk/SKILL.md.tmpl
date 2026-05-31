@@ -76,6 +76,7 @@ Scan the repo for every third-party integration. Use Grep aggressively; we want 
 **Code-level integrations (Node/TS example — adjust per stack):**
 
 ```bash
+setopt +o nomatch 2>/dev/null || true  # zsh: let unmatched globs pass literally
 # package.json dependencies (every dep is a potential vendor)
 [ -f package.json ] && cat package.json | grep -E '"(@[a-z0-9-]+/)?[a-z0-9-]+"\s*:' | head -100
 
@@ -96,6 +97,7 @@ grep -rln "api\.\|.com/v[0-9]\|/api/" --include="*.ts" --include="*.js" --includ
 **Environment / config signals:**
 
 ```bash
+setopt +o nomatch 2>/dev/null || true  # zsh: let unmatched globs pass literally
 # .env templates (real .env is gitignored; .env.example tells the story)
 cat .env.example .env.sample 2>/dev/null
 
@@ -119,6 +121,7 @@ find . -name "Dockerfile*" 2>/dev/null | xargs grep -hE '^FROM\s+' 2>/dev/null |
 **Webhook receivers (inbound vendors):**
 
 ```bash
+setopt +o nomatch 2>/dev/null || true  # zsh: let unmatched globs pass literally
 grep -rEln "(/webhook|/hook|/callback)" --include="*.ts" --include="*.js" --include="*.py" --include="*.rb" 2>/dev/null
 ```
 
